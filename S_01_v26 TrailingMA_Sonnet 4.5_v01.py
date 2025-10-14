@@ -363,8 +363,7 @@ def simulate(params: Tuple) -> Tuple:
     position = 0  # 0 = нет позиции, 1 = long, -1 = short
     entry_price = 0.0
     entry_fee = 0.0
-    entry_bar = 0
-    prev_position = 0
+    entry_bar = -1
 
     t_stop = 0.0
     t_target = 0.0
@@ -383,7 +382,6 @@ def simulate(params: Tuple) -> Tuple:
     peak = initial_capital
     max_drawdown = 0.0
 
-    next_close = 0
     next_open = 0
 
     # Sharpe ratio tracking
@@ -400,105 +398,147 @@ def simulate(params: Tuple) -> Tuple:
     # Для детальной записи сделок (опционально)
     trade_log = []
 
+    def close_position(exit_price: float, exit_type: str, exit_bar_idx: int):
+        nonlocal cash, pos_qty, position, entry_fee, entry_price, entry_bar
+        nonlocal trades, wins, loss_streak, max_loss_streak, trail_activated_long, trail_activated_short
+        nonlocal exits_stop, exits_take, exits_trail, exits_days, trade_log, peak, max_drawdown
+        nonlocal t_stop, t_target, trail_ma_price_long, trail_ma_price_short
+
+        if position == 0 or pos_qty == 0.0:
+            return
+
+        trade_value = abs(pos_qty) * exit_price
+        fee = trade_value * commission_rate
+
+        if position == 1:
+            cash_change = pos_qty * exit_price - fee
+            pnl = pos_qty * (exit_price - entry_price) - entry_fee - fee
+            cash_delta = cash_change
+        else:
+            cash_change = -abs(pos_qty) * exit_price - fee
+            pnl = abs(pos_qty) * (entry_price - exit_price) - entry_fee - fee
+            cash_delta = cash_change
+
+        cash += cash_delta
+
+        trades += 1
+        if pnl > 0:
+            wins += 1
+            loss_streak = 0
+        else:
+            loss_streak += 1
+            max_loss_streak = max(max_loss_streak, loss_streak)
+
+        if exit_type == "stop":
+            exits_stop += 1
+        elif exit_type == "take":
+            exits_take += 1
+        elif exit_type == "trail":
+            exits_trail += 1
+        elif exit_type == "days":
+            exits_days += 1
+
+        trade_log.append({
+            'entry_bar': entry_bar,
+            'exit_bar': exit_bar_idx,
+            'entry_price': entry_price,
+            'exit_price': exit_price,
+            'position': position,
+            'pnl': pnl,
+            'exit_type': exit_type
+        })
+
+        pos_qty = 0.0
+        position = 0
+        entry_fee = 0.0
+        entry_price = 0.0
+        entry_bar = -1
+        trail_activated_long = False
+        trail_activated_short = False
+        t_stop = 0.0
+        t_target = 0.0
+        trail_ma_price_long = 0.0
+        trail_ma_price_short = 0.0
+
+        eq = cash
+        if eq > peak:
+            peak = eq
+        else:
+            drop = (eq - peak) / peak
+            if drop < max_drawdown:
+                max_drawdown = drop
+
     for i in range(o_arr.shape[0]):
+        position_prev_bar = position
         # Проверка смены месяца для Sharpe
         if i > 0 and month_arr[i] != month_arr[i-1]:
             if month_start_equity > 0:
                 monthly_returns.append((last_equity / month_start_equity - 1.0) * 100.0)
             month_start_equity = last_equity
 
-        # === ЗАКРЫТИЕ ПОЗИЦИИ на open ===
-        if next_close != 0 and position != 0:
-            px = o_arr[i]
-            exit_val = abs(pos_qty) * px
-            fee = exit_val * commission_rate
-            
-            if position == 1:
-                cash += pos_qty * px - fee
-                pnl = pos_qty * (px - entry_price) - entry_fee - fee
-            else:
-                cash -= abs(pos_qty) * px + fee
-                pnl = abs(pos_qty) * (entry_price - px) - entry_fee - fee
-            
-            trades += 1
-            if pnl > 0:
-                wins += 1
-                loss_streak = 0
-            else:
-                loss_streak += 1
-                max_loss_streak = max(max_loss_streak, loss_streak)
-            
-            # Определяем тип выхода
-            exit_type = "unknown"
-            if next_close == 1:  # был long
-                if trail_activated_long:
-                    exit_type = "trail"
-                    exits_trail += 1
-                elif px <= t_stop:
-                    exit_type = "stop"
-                    exits_stop += 1
-                elif px >= t_target:
-                    exit_type = "take"
-                    exits_take += 1
-            elif next_close == -1:  # был short
-                if trail_activated_short:
-                    exit_type = "trail"
-                    exits_trail += 1
-                elif px >= t_stop:
-                    exit_type = "stop"
-                    exits_stop += 1
-                elif px <= t_target:
-                    exit_type = "take"
-                    exits_take += 1
-            
-            trade_log.append({
-                'entry_bar': entry_bar,
-                'exit_bar': i,
-                'entry_price': entry_price,
-                'exit_price': px,
-                'position': position,
-                'pnl': pnl,
-                'exit_type': exit_type
-            })
-            
-            pos_qty = 0.0
-            position = 0
-            entry_fee = 0.0
-            entry_price = 0.0
-            next_close = 0
-            prev_position = 0
-            trail_activated_long = False
-            trail_activated_short = False
+        bar_open = o_arr[i]
+        bar_high = h_arr[i]
+        bar_low = l_arr[i]
+        bar_close = c_arr[i]
 
-            eq = cash
-            if eq > peak:
-                peak = eq
-            else:
-                drop = (eq - peak) / peak
-                if drop < max_drawdown:
-                    max_drawdown = drop
+        # === ВЫХОД НА ОТКРЫТИИ ПО СТОПУ/ТРЕЙЛУ/ТЕЙКУ ===
+        if position == 1:
+            stop_level = trail_ma_price_long if trail_activated_long else t_stop
+            target_level = None if trail_activated_long else t_target
+
+            if not np.isnan(stop_level) and bar_open <= stop_level:
+                close_position(bar_open, "trail" if trail_activated_long else "stop", i)
+            elif target_level is not None and bar_open >= target_level:
+                close_position(target_level, "take", i)
+
+        elif position == -1:
+            stop_level = trail_ma_price_short if trail_activated_short else t_stop
+            target_level = None if trail_activated_short else t_target
+
+            if not np.isnan(stop_level) and bar_open >= stop_level:
+                close_position(bar_open, "trail" if trail_activated_short else "stop", i)
+            elif target_level is not None and bar_open <= target_level:
+                close_position(target_level, "take", i)
 
         # === ОТКРЫТИЕ ПОЗИЦИИ на open ===
         if next_open != 0 and position == 0:
-            px = o_arr[i]
-            
+            px = bar_open
+
+            if i == 0:
+                next_open = 0
+                continue
+
+            atr_idx = i - 1 if i > 0 else i
+            atr_value = atr_arr[atr_idx]
+            if np.isnan(atr_value) or atr_value <= 0:
+                next_open = 0
+                continue
+
             # Расчет стопа и тейка
             if next_open == 1:  # Long
-                stop_size = atr_arr[i-1] * stop_mult_long
-                stop_price = min(sl_arr[i-lp_long:i]) - stop_size if i >= lp_long else sl_arr[i] - stop_size
+                length = max(1, lp_long)
+                lookback_end = i
+                lookback_start = max(0, lookback_end - length)
+                if lookback_end <= lookback_start:
+                    next_open = 0
+                    continue
+
+                lowest_low = np.min(sl_arr[lookback_start:lookback_end])
+                stop_size = atr_value * stop_mult_long
+                stop_price = lowest_low - stop_size
                 stop_distance = px - stop_price
+                if stop_distance <= 0:
+                    next_open = 0
+                    continue
+
                 stop_pct = (stop_distance / px) * 100.0
-                
-                # Проверка фильтра по проценту стопа
                 if stop_pct > long_stop_pct_filter:
                     next_open = 0
                     continue
-                
+
                 target_price = px + (stop_distance * rr_long)
-                
-                # Расчет размера позиции
                 qty = math.floor(((cash * 0.02) / stop_distance) / contract_size) * contract_size
-                
+
                 if qty > 0:
                     cost = qty * px
                     fee = cost * commission_rate
@@ -512,24 +552,31 @@ def simulate(params: Tuple) -> Tuple:
                         t_stop = stop_price
                         t_target = target_price
                         trail_ma_price_long = stop_price
-                        prev_position = 1
-            
+
             else:  # Short
-                stop_size = atr_arr[i-1] * stop_mult_short
-                stop_price = max(sh_arr[i-lp_short:i]) + stop_size if i >= lp_short else sh_arr[i] + stop_size
+                length = max(1, lp_short)
+                lookback_end = i
+                lookback_start = max(0, lookback_end - length)
+                if lookback_end <= lookback_start:
+                    next_open = 0
+                    continue
+
+                highest_high = np.max(sh_arr[lookback_start:lookback_end])
+                stop_size = atr_value * stop_mult_short
+                stop_price = highest_high + stop_size
                 stop_distance = stop_price - px
+                if stop_distance <= 0:
+                    next_open = 0
+                    continue
+
                 stop_pct = (stop_distance / px) * 100.0
-                
-                # Проверка фильтра по проценту стопа
                 if stop_pct > short_stop_pct_filter:
                     next_open = 0
                     continue
-                
+
                 target_price = px - (stop_distance * rr_short)
-                
-                # Расчет размера позиции
                 qty = math.floor(((cash * 0.02) / stop_distance) / contract_size) * contract_size
-                
+
                 if qty > 0:
                     proceeds = qty * px
                     fee = proceeds * commission_rate
@@ -542,8 +589,7 @@ def simulate(params: Tuple) -> Tuple:
                     t_stop = stop_price
                     t_target = target_price
                     trail_ma_price_short = stop_price
-                    prev_position = -1
-            
+
             next_open = 0
 
         # === ОБНОВЛЕНИЕ СЧЕТЧИКОВ ТРЕНДА ===
@@ -565,66 +611,97 @@ def simulate(params: Tuple) -> Tuple:
         # === ПРОВЕРКА АКТИВАЦИИ ТРЕЙЛИНГА ===
         if position == 1 and not trail_activated_long:
             profit_threshold = entry_price + ((entry_price - t_stop) * trail_rr_long)
-            if h_arr[i] >= profit_threshold:
+            if bar_high >= profit_threshold:
                 trail_activated_long = True
-        
+
         if position == -1 and not trail_activated_short:
             profit_threshold = entry_price - ((t_stop - entry_price) * trail_rr_short)
-            if l_arr[i] <= profit_threshold:
+            if bar_low <= profit_threshold:
                 trail_activated_short = True
 
         # === ОБНОВЛЕНИЕ ТРЕЙЛИНГ СТОПА ===
         if trail_activated_long and not np.isnan(trail_ma_long_offset[i]):
             if trail_ma_long_offset[i] > trail_ma_price_long:
                 trail_ma_price_long = trail_ma_long_offset[i]
-        
+
         if trail_activated_short and not np.isnan(trail_ma_short_offset[i]):
             if trail_ma_short_offset[i] < trail_ma_price_short:
                 trail_ma_price_short = trail_ma_short_offset[i]
 
         # === ПРОВЕРКА ВЫХОДА ПО СТОПУ/ТЕЙКУ/ТРЕЙЛИНГУ ===
         if position == 1:
-            if trail_activated_long:
-                if l_arr[i] <= trail_ma_price_long:
-                    next_close = 1
+            if trail_activated_long and not np.isnan(trail_ma_price_long):
+                if bar_low <= trail_ma_price_long:
+                    exit_price = trail_ma_price_long if bar_open > trail_ma_price_long else bar_open
+                    close_position(exit_price, "trail", i)
             else:
-                if l_arr[i] <= t_stop or h_arr[i] >= t_target:
-                    next_close = 1
-        
+                stop_hit = bar_low <= t_stop
+                target_hit = bar_high >= t_target
+                if stop_hit or target_hit:
+                    if stop_hit and target_hit:
+                        dist_stop = abs(bar_open - t_stop)
+                        dist_target = abs(t_target - bar_open)
+                        if dist_stop <= dist_target:
+                            exit_price = t_stop if bar_open > t_stop else bar_open
+                            exit_type = "stop"
+                        else:
+                            exit_price = t_target
+                            exit_type = "take"
+                    elif stop_hit:
+                        exit_price = t_stop if bar_open > t_stop else bar_open
+                        exit_type = "stop"
+                    else:
+                        exit_price = t_target
+                        exit_type = "take"
+                    close_position(exit_price, exit_type, i)
+
         if position == -1:
-            if trail_activated_short:
-                if h_arr[i] >= trail_ma_price_short:
-                    next_close = -1
+            if trail_activated_short and not np.isnan(trail_ma_price_short):
+                if bar_high >= trail_ma_price_short:
+                    exit_price = trail_ma_price_short if bar_open < trail_ma_price_short else bar_open
+                    close_position(exit_price, "trail", i)
             else:
-                if h_arr[i] >= t_stop or l_arr[i] <= t_target:
-                    next_close = -1
+                stop_hit = bar_high >= t_stop
+                target_hit = bar_low <= t_target
+                if stop_hit or target_hit:
+                    if stop_hit and target_hit:
+                        dist_stop = abs(bar_open - t_stop)
+                        dist_target = abs(bar_open - t_target)
+                        if dist_stop <= dist_target:
+                            exit_price = t_stop if bar_open < t_stop else bar_open
+                            exit_type = "stop"
+                        else:
+                            exit_price = t_target
+                            exit_type = "take"
+                    elif stop_hit:
+                        exit_price = t_stop if bar_open < t_stop else bar_open
+                        exit_type = "stop"
+                    else:
+                        exit_price = t_target
+                        exit_type = "take"
+                    close_position(exit_price, exit_type, i)
 
         # === ПРОВЕРКА ФИЛЬТРА ПО ДНЯМ ===
-        if position == 1:
+        if position == 1 and entry_bar >= 0:
             days_in_trade = (t_arr[i] - t_arr[entry_bar]) / 86400.0
             if days_in_trade >= long_stop_days_filter:
-                next_close = 1
-                exits_days += 1
-        
-        if position == -1:
+                close_position(bar_close, "days", i)
+
+        if position == -1 and entry_bar >= 0:
             days_in_trade = (t_arr[i] - t_arr[entry_bar]) / 86400.0
             if days_in_trade >= short_stop_days_filter:
-                next_close = -1
-                exits_days += 1
+                close_position(bar_close, "days", i)
 
         # === ГЕНЕРАЦИЯ СИГНАЛОВ ===
         sig_long = (count_long >= n_long)
         sig_short = (count_short >= n_short)
 
         # Сигнал на вход только если нет позиции и не было позиции на предыдущем баре
-        if position == 0 and prev_position == 0:
+        if position == 0 and position_prev_bar == 0:
             if sig_long:
                 next_open = 1
             elif sig_short:
                 next_open = -1
-
-        if position == 0:
-            prev_position = 0
 
         # Расчет equity на конец бара
         if position != 0:
@@ -635,39 +712,7 @@ def simulate(params: Tuple) -> Tuple:
 
     # === ФОРС-ЗАКРЫТИЕ ПОЗИЦИИ В КОНЦЕ ===
     if position != 0:
-        px = c_arr[-1]
-        exit_val = abs(pos_qty) * px
-        fee = exit_val * commission_rate
-        if position == 1:
-            cash += pos_qty * px - fee
-            pnl = pos_qty * (px - entry_price) - entry_fee - fee
-        else:
-            cash -= abs(pos_qty) * px + fee
-            pnl = abs(pos_qty) * (entry_price - px) - entry_fee - fee
-        trades += 1
-        if pnl > 0:
-            wins += 1
-        else:
-            loss_streak += 1
-            max_loss_streak = max(max_loss_streak, loss_streak)
-        
-        trade_log.append({
-            'entry_bar': entry_bar,
-            'exit_bar': len(c_arr) - 1,
-            'entry_price': entry_price,
-            'exit_price': px,
-            'position': position,
-            'pnl': pnl,
-            'exit_type': 'forced'
-        })
-        
-        eq = cash
-        if eq > peak:
-            peak = eq
-        else:
-            drop = (eq - peak) / peak
-            if drop < max_drawdown:
-                max_drawdown = drop
+        close_position(c_arr[-1], "forced", len(c_arr) - 1)
 
     final_equity = cash
     net_profit = (final_equity / initial_capital - 1.0) * 100.0
