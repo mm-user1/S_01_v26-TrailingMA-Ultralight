@@ -886,35 +886,40 @@ def create_gui():
     checkboxes = {}
     
     # Функция для парсинга диапазона
+    def _normalize_value(value: float):
+        """Преобразование значения к int при необходимости"""
+        rounded = round(value, 8)
+        if abs(rounded - round(rounded)) < 1e-8:
+            return int(round(rounded))
+        return round(rounded, 4)
+
     def parse_range(range_str):
         """Парсинг строки вида '25-500, 1' или '0--3, 0.5'"""
         try:
             parts = range_str.split(',')
             range_part = parts[0].strip()
             step = float(parts[1].strip())
-            
-            # Обработка отрицательных чисел
-            if range_part.count('-') == 3:  # '0--3'
-                start, end = range_part.split('--')
-                start = float(start)
-                end = -float(end)
-            elif range_part.count('-') == 2:  # '-1--3'
-                start = -float(range_part.split('-')[1])
-                end = -float(range_part.split('-')[-1])
+
+            import re
+            match = re.fullmatch(r"\s*([-+]?\d*\.?\d*)\s*-\s*([-+]?\d*\.?\d*)\s*", range_part)
+            if match:
+                start = float(match.group(1)) if match.group(1) else 0.0
+                end = float(match.group(2)) if match.group(2) else 0.0
             else:
-                start, end = map(float, range_part.split('-'))
-            
+                start = end = float(range_part)
+
             if start > end:
                 start, end = end, start
-            
+
             result = []
             current = start
             while current <= end + 1e-9:
-                result.append(round(current, 2))
+                result.append(_normalize_value(current))
                 current += step
             return result
-        except:
-            return [float(range_str.split(',')[0].split('-')[0])]
+        except Exception:
+            raw = float(range_str.split(',')[0].split('-')[0])
+            return [_normalize_value(raw)]
     
     # Функция подсчета комбинаций
     def count_combinations():
