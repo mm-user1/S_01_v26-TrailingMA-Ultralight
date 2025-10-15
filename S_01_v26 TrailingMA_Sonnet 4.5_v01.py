@@ -402,7 +402,7 @@ def simulate(params: Tuple) -> Tuple:
         nonlocal cash, pos_qty, position, entry_fee, entry_price, entry_bar
         nonlocal trades, wins, loss_streak, max_loss_streak, trail_activated_long, trail_activated_short
         nonlocal exits_stop, exits_take, exits_trail, exits_days, trade_log, peak, max_drawdown
-        nonlocal t_stop, t_target, trail_ma_price_long, trail_ma_price_short
+        nonlocal t_stop, t_target, trail_ma_price_long, trail_ma_price_short, last_equity
 
         if position == 0 or pos_qty == 0.0:
             return
@@ -420,6 +420,7 @@ def simulate(params: Tuple) -> Tuple:
             cash_delta = cash_change
 
         cash += cash_delta
+        last_equity = cash
 
         trades += 1
         if pnl > 0:
@@ -459,14 +460,6 @@ def simulate(params: Tuple) -> Tuple:
         t_target = 0.0
         trail_ma_price_long = 0.0
         trail_ma_price_short = 0.0
-
-        eq = cash
-        if eq > peak:
-            peak = eq
-        else:
-            drop = (eq - peak) / peak
-            if drop < max_drawdown:
-                max_drawdown = drop
 
     for i in range(o_arr.shape[0]):
         position_prev_bar = position
@@ -537,7 +530,13 @@ def simulate(params: Tuple) -> Tuple:
                     continue
 
                 target_price = px + (stop_distance * rr_long)
-                qty = math.floor(((cash * 0.02) / stop_distance) / contract_size) * contract_size
+                equity_for_sizing = max(last_equity, 0.0)
+                risk_amount = equity_for_sizing * 0.02
+                if risk_amount <= 0:
+                    next_open = 0
+                    continue
+
+                qty = math.floor(((risk_amount / stop_distance) / contract_size)) * contract_size
 
                 if qty > 0:
                     cost = qty * px
@@ -575,7 +574,13 @@ def simulate(params: Tuple) -> Tuple:
                     continue
 
                 target_price = px - (stop_distance * rr_short)
-                qty = math.floor(((cash * 0.02) / stop_distance) / contract_size) * contract_size
+                equity_for_sizing = max(last_equity, 0.0)
+                risk_amount = equity_for_sizing * 0.02
+                if risk_amount <= 0:
+                    next_open = 0
+                    continue
+
+                qty = math.floor(((risk_amount / stop_distance) / contract_size)) * contract_size
 
                 if qty > 0:
                     proceeds = qty * px
@@ -708,6 +713,14 @@ def simulate(params: Tuple) -> Tuple:
             current_equity = cash + pos_qty * c_arr[i]
         else:
             current_equity = cash
+
+        if current_equity > peak:
+            peak = current_equity
+        elif peak > 0:
+            drop = (current_equity - peak) / peak
+            if drop < max_drawdown:
+                max_drawdown = drop
+
         last_equity = current_equity
 
     # === ФОРС-ЗАКРЫТИЕ ПОЗИЦИИ В КОНЦЕ ===

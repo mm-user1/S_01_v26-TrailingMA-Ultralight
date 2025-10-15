@@ -1,0 +1,2 @@
+MA Type,MA Period,Close Count Long,Close Count Short,Stop Long X,RR Long,LP Long,Stop Short X,RR Short,LP Short,L Stop Max %,S Stop Max %,L Stop Max D,S Stop Max D,RR TrailingMALong,RR TrailingMAShort,Trail MA Type Long,Trail MA Length Long,Trail MA Offset Long,Trail MA Type Short,Trail MA Length Short,Trail MA Offset Short,Winrate%,Net Profit%,DD%,Total Trades,Max SL,Sharpe
+EMA,45,7,5,2.0,3,2,2.0,3,2,3,3,2,4,1,1,SMA,160,-1.0,SMA,160,1.0,30.22%,45.23%,-36.47%,225,9,0.51
