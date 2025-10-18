@@ -714,8 +714,8 @@ def launch_gui(df: pd.DataFrame, data_path: str) -> None:
 
     with dpg.window(
         label="S_01 TrailingMA Backtester",
-        width=660,
-        height=820,
+        width=820,
+        height=980,
         no_resize=True,
     ):
         dpg.add_text("Backtest Settings")
@@ -945,13 +945,13 @@ def launch_gui(df: pd.DataFrame, data_path: str) -> None:
             tag="results_output",
             multiline=True,
             readonly=True,
-            width=600,
-            height=200,
+            width=760,
+            height=320,
         )
 
     dpg.bind_theme(light_theme)
-
-    dpg.create_viewport(title="S_01 TrailingMA Backtester", width=720, height=900)
+    dpg.create_viewport(title="S_01 TrailingMA Backtester", width=920, height=1080)
+    dpg.set_viewport_clear_color((235, 235, 235, 255))
     dpg.setup_dearpygui()
     dpg.show_viewport()
     dpg.start_dearpygui()
