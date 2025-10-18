@@ -11,6 +11,7 @@ from backtesting import _stats
 FACTOR_T3 = 0.7
 FAST_KAMA = 2
 SLOW_KAMA = 30
+DEFAULT_FONT_SIZE = 17
 START_DATE = pd.Timestamp('2025-04-01', tz='UTC')
 END_DATE = pd.Timestamp('2025-09-01', tz='UTC')
 DEFAULT_CONTRACT_SIZE = 0.01
@@ -558,11 +559,12 @@ def launch_gui(df: pd.DataFrame, data_path: str) -> None:
     for candidate in font_candidates:
         if candidate.is_file():
             with dpg.font_registry():
-                default_font = dpg.add_font(str(candidate), 16)
+                default_font = dpg.add_font(str(candidate), DEFAULT_FONT_SIZE)
             dpg.bind_font(default_font)
             break
     else:
         print("Segoe UI font not found; using Dear PyGui default font.")
+        dpg.configure_app(global_font_scale=DEFAULT_FONT_SIZE / 16)
 
     ma_checkbox_tags = {opt: f"ma_select_{opt.lower()}" for opt in MA_TYPE_OPTIONS}
     all_tag = "ma_select_all"
@@ -618,6 +620,7 @@ def launch_gui(df: pd.DataFrame, data_path: str) -> None:
             dpg.add_theme_color(dpg.mvThemeCol_MenuBarBg, (245, 245, 245, 255))
             dpg.add_theme_color(dpg.mvThemeCol_Border, (200, 200, 200, 255))
             dpg.add_theme_color(dpg.mvThemeCol_BorderShadow, (245, 245, 245, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_ViewportBg, (245, 245, 245, 255))
 
     def gather_params() -> Optional[StrategyParams]:
         start_raw = dpg.get_value("start_date")
