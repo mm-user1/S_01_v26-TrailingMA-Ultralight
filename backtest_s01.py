@@ -1,5 +1,6 @@
+import argparse
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -11,8 +12,21 @@ FAST_KAMA = 2
 SLOW_KAMA = 30
 START_DATE = pd.Timestamp('2025-04-01', tz='UTC')
 END_DATE = pd.Timestamp('2025-09-01', tz='UTC')
-CONTRACT_SIZE = 0.01
+DEFAULT_CONTRACT_SIZE = 0.01
 COMMISSION_RATE = 0.0005
+MA_TYPE_OPTIONS = [
+    "EMA",
+    "SMA",
+    "HMA",
+    "WMA",
+    "ALMA",
+    "KAMA",
+    "TMA",
+    "T3",
+    "DEMA",
+    "VWMA",
+    "VWAP",
+]
 
 
 def ema(series: pd.Series, length: int) -> pd.Series:
@@ -174,6 +188,37 @@ class TradeRecord:
     net_pnl: float
 
 
+@dataclass
+class StrategyParams:
+    date_filter: bool = True
+    start_date: pd.Timestamp = START_DATE
+    end_date: pd.Timestamp = END_DATE
+    t_ma_type: str = "EMA"
+    ma_length3: int = 45
+    close_count_trend_long: int = 7
+    close_count_trend_short: int = 5
+    stop_multiplier_long: float = 2.0
+    rr_long: float = 3.0
+    lp_long: int = 2
+    stop_multiplier_short: float = 2.0
+    rr_short: float = 3.0
+    lp_short: int = 2
+    long_stop_pct_filter_size: float = 3.0
+    short_stop_pct_filter_size: float = 3.0
+    long_stop_days_filter_size: int = 2
+    short_stop_days_filter_size: int = 4
+    trail_rr_long: float = 1.0
+    trail_rr_short: float = 1.0
+    trail_ma_type_long: str = "SMA"
+    trail_ma_length_long: int = 160
+    trail_ma_offset_long: float = -1.0
+    trail_ma_type_short: str = "SMA"
+    trail_ma_length_short: int = 160
+    trail_ma_offset_short: float = 1.0
+    risk_per_trade: float = 2.0
+    contract_size: float = DEFAULT_CONTRACT_SIZE
+
+
 def load_data(csv_path: str) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
     df['time'] = pd.to_datetime(df['time'], unit='s', utc=True)
@@ -190,24 +235,71 @@ def compute_max_drawdown(equity_curve: pd.Series) -> float:
     return peak_dd.max() * 100
 
 
-def run_strategy(df: pd.DataFrame) -> Tuple[float, float, int]:
+def parse_date_value(value: str) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize('UTC')
+    else:
+        ts = ts.tz_convert('UTC')
+    return ts
+
+
+def run_strategy(
+    df: pd.DataFrame,
+    params: StrategyParams,
+    ma_type_override: Optional[str] = None,
+) -> Tuple[float, float, int]:
     close = df['Close']
     high = df['High']
     low = df['Low']
     volume = df['Volume']
 
-    ma3 = get_ma(close, 'EMA', 45)
+    ma_type = (ma_type_override or params.t_ma_type).upper()
+    ma3 = get_ma(
+        close,
+        ma_type,
+        params.ma_length3,
+        volume=volume,
+        high=high,
+        low=low,
+    )
     atr14 = atr(high, low, close, 14)
-    lowest_long = low.rolling(2, min_periods=1).min()
-    highest_short = high.rolling(2, min_periods=1).max()
+    lp_long = max(1, params.lp_long)
+    lp_short = max(1, params.lp_short)
+    lowest_long = low.rolling(lp_long, min_periods=1).min()
+    highest_short = high.rolling(lp_short, min_periods=1).max()
 
-    trail_ma_long = get_ma(close, 'SMA', 160)
-    trail_ma_long = trail_ma_long * (1 + (-1.0) / 100)
-    trail_ma_short = get_ma(close, 'SMA', 160)
-    trail_ma_short = trail_ma_short * (1 + (1.0) / 100)
+    trail_ma_long_base = get_ma(
+        close,
+        params.trail_ma_type_long,
+        params.trail_ma_length_long,
+        volume=volume,
+        high=high,
+        low=low,
+    )
+    if params.trail_ma_offset_long != 0:
+        trail_ma_long = trail_ma_long_base * (1 + params.trail_ma_offset_long / 100.0)
+    else:
+        trail_ma_long = trail_ma_long_base
+
+    trail_ma_short_base = get_ma(
+        close,
+        params.trail_ma_type_short,
+        params.trail_ma_length_short,
+        volume=volume,
+        high=high,
+        low=low,
+    )
+    if params.trail_ma_offset_short != 0:
+        trail_ma_short = trail_ma_short_base * (1 + params.trail_ma_offset_short / 100.0)
+    else:
+        trail_ma_short = trail_ma_short_base
 
     times = df.index
-    time_in_range = (times >= START_DATE) & (times <= END_DATE)
+    if params.date_filter:
+        time_in_range = (times >= params.start_date) & (times <= params.end_date)
+    else:
+        time_in_range = np.ones(len(times), dtype=bool)
 
     equity = 100.0
     realized_equity = equity
@@ -267,7 +359,7 @@ def run_strategy(df: pd.DataFrame) -> Tuple[float, float, int]:
         exit_price = None
         if position > 0:
             if not trail_activated_long and not math.isnan(entry_price) and not math.isnan(stop_price):
-                activation_price = entry_price + (entry_price - stop_price) * 1.0
+                activation_price = entry_price + (entry_price - stop_price) * params.trail_rr_long
                 if h >= activation_price:
                     trail_activated_long = True
                     if math.isnan(trail_price_long):
@@ -285,7 +377,7 @@ def run_strategy(df: pd.DataFrame) -> Tuple[float, float, int]:
                     exit_price = target_price
             if exit_price is None and entry_time_long is not None:
                 days_in_trade = int(math.floor((time - entry_time_long).total_seconds() / 86400))
-                if days_in_trade >= 2:
+                if days_in_trade >= params.long_stop_days_filter_size:
                     exit_price = c
             if exit_price is not None:
                 gross_pnl = (exit_price - entry_price) * position_size
@@ -312,7 +404,7 @@ def run_strategy(df: pd.DataFrame) -> Tuple[float, float, int]:
 
         elif position < 0:
             if not trail_activated_short and not math.isnan(entry_price) and not math.isnan(stop_price):
-                activation_price = entry_price - (stop_price - entry_price) * 1.0
+                activation_price = entry_price - (stop_price - entry_price) * params.trail_rr_short
                 if l <= activation_price:
                     trail_activated_short = True
                     if math.isnan(trail_price_short):
@@ -330,7 +422,7 @@ def run_strategy(df: pd.DataFrame) -> Tuple[float, float, int]:
                     exit_price = target_price
             if exit_price is None and entry_time_short is not None:
                 days_in_trade = int(math.floor((time - entry_time_short).total_seconds() / 86400))
-                if days_in_trade >= 4:
+                if days_in_trade >= params.short_stop_days_filter_size:
                     exit_price = c
             if exit_price is not None:
                 gross_pnl = (entry_price - exit_price) * position_size
@@ -355,34 +447,51 @@ def run_strategy(df: pd.DataFrame) -> Tuple[float, float, int]:
                 entry_time_short = None
                 entry_commission = 0.0
 
-        up_trend = counter_close_trend_long >= 7 and counter_trade_long == 0
-        down_trend = counter_close_trend_short >= 5 and counter_trade_short == 0
+        up_trend = (
+            counter_close_trend_long >= params.close_count_trend_long
+            and counter_trade_long == 0
+        )
+        down_trend = (
+            counter_close_trend_short >= params.close_count_trend_short
+            and counter_trade_short == 0
+        )
 
         can_open_long = (
-            up_trend and position == 0 and prev_position == 0 and time_in_range[i] and
-            not np.isnan(atr_value) and not np.isnan(lowest_value)
+            up_trend
+            and position == 0
+            and prev_position == 0
+            and time_in_range[i]
+            and not np.isnan(atr_value)
+            and not np.isnan(lowest_value)
         )
         can_open_short = (
-            down_trend and position == 0 and prev_position == 0 and time_in_range[i] and
-            not np.isnan(atr_value) and not np.isnan(highest_value)
+            down_trend
+            and position == 0
+            and prev_position == 0
+            and time_in_range[i]
+            and not np.isnan(atr_value)
+            and not np.isnan(highest_value)
         )
 
         if can_open_long:
-            stop_size = atr_value * 2.0
+            stop_size = atr_value * params.stop_multiplier_long
             long_stop_price = lowest_value - stop_size
             long_stop_distance = c - long_stop_price
-            if long_stop_distance > 0:
+            if long_stop_distance > 0 and c != 0:
                 long_stop_pct = (long_stop_distance / c) * 100
-                if long_stop_pct <= 3:
-                    risk_cash = realized_equity * (2.0 / 100)
-                    qty = risk_cash / long_stop_distance
-                    qty = math.floor((qty / CONTRACT_SIZE)) * CONTRACT_SIZE
+                if long_stop_pct <= params.long_stop_pct_filter_size:
+                    risk_cash = realized_equity * (params.risk_per_trade / 100.0)
+                    if params.contract_size <= 0:
+                        qty = 0
+                    else:
+                        qty = risk_cash / long_stop_distance
+                        qty = math.floor((qty / params.contract_size)) * params.contract_size
                     if qty > 0:
                         position = 1
                         position_size = qty
                         entry_price = c
                         stop_price = long_stop_price
-                        target_price = c + long_stop_distance * 3.0
+                        target_price = c + long_stop_distance * params.rr_long
                         trail_price_long = long_stop_price
                         trail_activated_long = False
                         entry_time_long = time
@@ -390,21 +499,24 @@ def run_strategy(df: pd.DataFrame) -> Tuple[float, float, int]:
                         realized_equity -= entry_commission
 
         if can_open_short and position == 0:
-            stop_size = atr_value * 2.0
+            stop_size = atr_value * params.stop_multiplier_short
             short_stop_price = highest_value + stop_size
             short_stop_distance = short_stop_price - c
-            if short_stop_distance > 0:
+            if short_stop_distance > 0 and c != 0:
                 short_stop_pct = (short_stop_distance / c) * 100
-                if short_stop_pct <= 3:
-                    risk_cash = realized_equity * (2.0 / 100)
-                    qty = risk_cash / short_stop_distance
-                    qty = math.floor((qty / CONTRACT_SIZE)) * CONTRACT_SIZE
+                if short_stop_pct <= params.short_stop_pct_filter_size:
+                    risk_cash = realized_equity * (params.risk_per_trade / 100.0)
+                    if params.contract_size <= 0:
+                        qty = 0
+                    else:
+                        qty = risk_cash / short_stop_distance
+                        qty = math.floor((qty / params.contract_size)) * params.contract_size
                     if qty > 0:
                         position = -1
                         position_size = qty
                         entry_price = c
                         stop_price = short_stop_price
-                        target_price = c - short_stop_distance * 3.0
+                        target_price = c - short_stop_distance * params.rr_short
                         trail_price_short = short_stop_price
                         trail_activated_short = False
                         entry_time_short = time
@@ -427,12 +539,317 @@ def run_strategy(df: pd.DataFrame) -> Tuple[float, float, int]:
     return net_profit_pct, max_drawdown_pct, total_trades
 
 
+def launch_gui(df: pd.DataFrame, data_path: str) -> None:
+    from dearpygui import dearpygui as dpg
+
+    dpg.create_context()
+    ma_checkbox_tags = {opt: f"ma_select_{opt.lower()}" for opt in MA_TYPE_OPTIONS}
+    all_tag = "ma_select_all"
+
+    def on_all_toggle(sender: int, app_data: bool) -> None:
+        state = bool(app_data)
+        for opt in MA_TYPE_OPTIONS:
+            dpg.set_value(ma_checkbox_tags[opt], state)
+
+    def on_type_toggle(sender: int, app_data: bool, user_data: str) -> None:
+        if not app_data:
+            dpg.set_value(all_tag, False)
+        else:
+            if all(dpg.get_value(tag) for tag in ma_checkbox_tags.values()):
+                dpg.set_value(all_tag, True)
+
+    def gather_params() -> Optional[StrategyParams]:
+        start_raw = dpg.get_value("start_date")
+        end_raw = dpg.get_value("end_date")
+        try:
+            start_date = parse_date_value(start_raw)
+            end_date = parse_date_value(end_raw)
+        except Exception as exc:  # noqa: BLE001 - reporting to console is acceptable here
+            print(f"Date parsing error: {exc}")
+            return None
+        try:
+            contract_size = float(dpg.get_value("contract_size"))
+        except (TypeError, ValueError) as exc:
+            print(f"Contract Size parsing error: {exc}")
+            return None
+        return StrategyParams(
+            date_filter=dpg.get_value("date_filter"),
+            start_date=start_date,
+            end_date=end_date,
+            ma_length3=dpg.get_value("ma_length3"),
+            close_count_trend_long=dpg.get_value("close_count_long"),
+            close_count_trend_short=dpg.get_value("close_count_short"),
+            stop_multiplier_long=dpg.get_value("stop_multiplier_long"),
+            rr_long=dpg.get_value("rr_long"),
+            lp_long=dpg.get_value("lp_long"),
+            stop_multiplier_short=dpg.get_value("stop_multiplier_short"),
+            rr_short=dpg.get_value("rr_short"),
+            lp_short=dpg.get_value("lp_short"),
+            long_stop_pct_filter_size=dpg.get_value("long_stop_pct_filter_size"),
+            short_stop_pct_filter_size=dpg.get_value("short_stop_pct_filter_size"),
+            long_stop_days_filter_size=dpg.get_value("long_stop_days_filter_size"),
+            short_stop_days_filter_size=dpg.get_value("short_stop_days_filter_size"),
+            trail_rr_long=dpg.get_value("trail_rr_long"),
+            trail_rr_short=dpg.get_value("trail_rr_short"),
+            trail_ma_type_long=dpg.get_value("trail_ma_type_long"),
+            trail_ma_length_long=dpg.get_value("trail_ma_length_long"),
+            trail_ma_offset_long=dpg.get_value("trail_ma_offset_long"),
+            trail_ma_type_short=dpg.get_value("trail_ma_type_short"),
+            trail_ma_length_short=dpg.get_value("trail_ma_length_short"),
+            trail_ma_offset_short=dpg.get_value("trail_ma_offset_short"),
+            risk_per_trade=dpg.get_value("risk_per_trade"),
+            contract_size=contract_size,
+        )
+
+    def on_run(sender: int, app_data: int) -> None:
+        params = gather_params()
+        if params is None:
+            return
+        if dpg.get_value(all_tag):
+            selected_types = list(MA_TYPE_OPTIONS)
+        else:
+            selected_types = [
+                opt for opt in MA_TYPE_OPTIONS if dpg.get_value(ma_checkbox_tags[opt])
+            ]
+        if not selected_types:
+            print("Select at least one moving average type to run.")
+            return
+        print("=" * 60)
+        print(
+            f"Running backtests for {len(selected_types)} moving average type(s) "
+            f"using data: {data_path}"
+        )
+        for ma_name in selected_types:
+            current_params = replace(params, t_ma_type=ma_name)
+            net_profit, max_drawdown, trades = run_strategy(
+                df, current_params, ma_type_override=ma_name
+            )
+            print(f"[{ma_name}] Net Profit %: {net_profit:.2f}")
+            print(f"[{ma_name}] Max Portfolio Drawdown %: {max_drawdown:.2f}")
+            print(f"[{ma_name}] Total Trades: {trades}")
+        print("=" * 60)
+
+    with dpg.window(
+        label="S_01 TrailingMA Backtester",
+        width=520,
+        height=720,
+        no_resize=True,
+    ):
+        dpg.add_text("Backtest Settings")
+        dpg.add_text(f"Data: {data_path}")
+        dpg.add_separator()
+
+        with dpg.group(horizontal=True):
+            dpg.add_checkbox(label="Date Filter", default_value=True, tag="date_filter")
+            dpg.add_checkbox(label="Backtester", default_value=True, tag="backtester")
+        dpg.add_input_text(label="Start Date", default_value="2025-04-01", tag="start_date")
+        dpg.add_input_text(label="End Date", default_value="2025-09-01", tag="end_date")
+
+        dpg.add_separator()
+        dpg.add_text("MA №3")
+        with dpg.group(horizontal=True):
+            dpg.add_checkbox(label="ALL", tag=all_tag, callback=on_all_toggle)
+            for opt in MA_TYPE_OPTIONS:
+                dpg.add_checkbox(
+                    label=opt,
+                    tag=ma_checkbox_tags[opt],
+                    callback=on_type_toggle,
+                    user_data=opt,
+                    default_value=(opt == "EMA"),
+                )
+        dpg.add_input_int(label="Length", default_value=45, min_value=0, tag="ma_length3")
+
+        dpg.add_separator()
+        dpg.add_text("Trend BB")
+        dpg.add_input_int(
+            label="Close Count Long",
+            default_value=7,
+            min_value=1,
+            tag="close_count_long",
+        )
+        dpg.add_input_int(
+            label="Close Count Short",
+            default_value=5,
+            min_value=1,
+            tag="close_count_short",
+        )
+
+        dpg.add_separator()
+        dpg.add_text("Stops and Filters")
+        with dpg.group(horizontal=True):
+            dpg.add_input_float(
+                label="Stop Long X",
+                default_value=2.0,
+                step=0.1,
+                tag="stop_multiplier_long",
+            )
+            dpg.add_input_float(label="RR", default_value=3.0, step=0.1, tag="rr_long")
+            dpg.add_input_int(label="LP", default_value=2, min_value=1, tag="lp_long")
+        with dpg.group(horizontal=True):
+            dpg.add_input_float(
+                label="Stop Short X",
+                default_value=2.0,
+                step=0.1,
+                tag="stop_multiplier_short",
+            )
+            dpg.add_input_float(label="RR", default_value=3.0, step=0.1, tag="rr_short")
+            dpg.add_input_int(label="LP", default_value=2, min_value=1, tag="lp_short")
+        with dpg.group(horizontal=True):
+            dpg.add_input_int(
+                label="L Stop Max %",
+                default_value=3,
+                min_value=1,
+                tag="long_stop_pct_filter_size",
+            )
+            dpg.add_input_int(
+                label="S Stop Max %",
+                default_value=3,
+                min_value=1,
+                tag="short_stop_pct_filter_size",
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_input_int(
+                label="L Stop Max D",
+                default_value=2,
+                min_value=1,
+                tag="long_stop_days_filter_size",
+            )
+            dpg.add_input_int(
+                label="S Stop Max D",
+                default_value=4,
+                min_value=1,
+                tag="short_stop_days_filter_size",
+            )
+
+        dpg.add_separator()
+        dpg.add_text("Trailing Stops")
+        with dpg.group(horizontal=True):
+            dpg.add_input_float(
+                label="Trail RR Long",
+                default_value=1.0,
+                step=0.1,
+                tag="trail_rr_long",
+            )
+            dpg.add_input_float(
+                label="Trail RR Short",
+                default_value=1.0,
+                step=0.1,
+                tag="trail_rr_short",
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_combo(
+                label="Trail MA Long",
+                items=MA_TYPE_OPTIONS,
+                default_value="SMA",
+                tag="trail_ma_type_long",
+            )
+            dpg.add_input_int(
+                label="Length",
+                default_value=160,
+                step=5,
+                min_value=0,
+                tag="trail_ma_length_long",
+            )
+            dpg.add_input_float(
+                label="Offset",
+                default_value=-1.0,
+                step=0.5,
+                tag="trail_ma_offset_long",
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_combo(
+                label="Trail MA Short",
+                items=MA_TYPE_OPTIONS,
+                default_value="SMA",
+                tag="trail_ma_type_short",
+            )
+            dpg.add_input_int(
+                label="Length",
+                default_value=160,
+                step=5,
+                min_value=0,
+                tag="trail_ma_length_short",
+            )
+            dpg.add_input_float(
+                label="Offset",
+                default_value=1.0,
+                step=0.5,
+                tag="trail_ma_offset_short",
+            )
+
+        dpg.add_separator()
+        dpg.add_text("Risk Per Trade")
+        with dpg.group(horizontal=True):
+            dpg.add_input_float(
+                label="Risk Per Trade",
+                default_value=2.0,
+                step=0.5,
+                tag="risk_per_trade",
+            )
+            dpg.add_combo(
+                label="Contract Size",
+                items=[
+                    "0.0001",
+                    "0.001",
+                    "0.01",
+                    "0.1",
+                    "1",
+                    "10",
+                    "100",
+                    "1000",
+                    "10000",
+                    "100000",
+                    "1000000",
+                ],
+                default_value="0.01",
+                tag="contract_size",
+            )
+
+        dpg.add_separator()
+        dpg.add_spacer(height=10)
+        with dpg.group(horizontal=True):
+            dpg.add_spacer(width=360)
+            dpg.add_button(label="Run", width=120, callback=on_run)
+
+    dpg.create_viewport(title="S_01 TrailingMA Backtester", width=560, height=760)
+    dpg.setup_dearpygui()
+    dpg.show_viewport()
+    dpg.start_dearpygui()
+    dpg.destroy_context()
+
+
 def main() -> None:
-    df = load_data("OKX_LINKUSDT.P, 15 2025.02.01-2025.09.09.csv")
-    net_profit, max_drawdown, trades = run_strategy(df)
-    print(f"Net Profit %: {net_profit:.2f}")
-    print(f"Max Portfolio Drawdown %: {max_drawdown:.2f}")
-    print(f"Total Trades: {trades}")
+    parser = argparse.ArgumentParser(description="S_01 TrailingMA Ultralight backtester")
+    parser.add_argument(
+        "--data",
+        default="OKX_LINKUSDT.P, 15 2025.02.01-2025.09.09.csv",
+        help="Path to CSV data file",
+    )
+    parser.add_argument(
+        "--ma-type",
+        default="EMA",
+        choices=MA_TYPE_OPTIONS,
+        help="Trend moving average type to use when running without GUI",
+    )
+    parser.add_argument(
+        "--no-gui",
+        action="store_true",
+        help="Run a single backtest with current parameters without launching the GUI",
+    )
+    args = parser.parse_args()
+
+    df = load_data(args.data)
+
+    if args.no_gui:
+        params = StrategyParams(t_ma_type=args.ma_type)
+        net_profit, max_drawdown, trades = run_strategy(
+            df, params, ma_type_override=args.ma_type
+        )
+        print(f"Net Profit %: {net_profit:.2f}")
+        print(f"Max Portfolio Drawdown %: {max_drawdown:.2f}")
+        print(f"Total Trades: {trades}")
+    else:
+        launch_gui(df, args.data)
 
 
 if __name__ == "__main__":
