@@ -1,6 +1,7 @@
 import argparse
 import math
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -543,6 +544,26 @@ def launch_gui(df: pd.DataFrame, data_path: str) -> None:
     from dearpygui import dearpygui as dpg
 
     dpg.create_context()
+
+    font_candidates = [
+        Path("segoeui.ttf"),
+        Path.cwd() / "fonts" / "segoeui.ttf",
+        Path("C:/Windows/Fonts/segoeui.ttf"),
+        Path("~/Library/Fonts/Segoe UI.ttf").expanduser(),
+        Path("/usr/share/fonts/truetype/segoeui/segoeui.ttf"),
+        Path("/usr/share/fonts/truetype/msttcorefonts/SegoeUI.ttf"),
+        Path("/usr/share/fonts/truetype/msttcorefonts/segoeui.ttf"),
+    ]
+
+    for candidate in font_candidates:
+        if candidate.is_file():
+            with dpg.font_registry():
+                default_font = dpg.add_font(str(candidate), 16)
+            dpg.bind_font(default_font)
+            break
+    else:
+        print("Segoe UI font not found; using Dear PyGui default font.")
+
     ma_checkbox_tags = {opt: f"ma_select_{opt.lower()}" for opt in MA_TYPE_OPTIONS}
     all_tag = "ma_select_all"
 
@@ -581,6 +602,9 @@ def launch_gui(df: pd.DataFrame, data_path: str) -> None:
         with dpg.theme_component(dpg.mvAll):
             dpg.add_theme_color(dpg.mvThemeCol_Text, (0, 0, 0, 255))
             dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (245, 245, 245, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_TitleBg, (245, 245, 245, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_TitleBgActive, (245, 245, 245, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_TitleBgCollapsed, (245, 245, 245, 255))
             dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (230, 230, 230, 255))
             dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (210, 210, 210, 255))
             dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (190, 190, 190, 255))
@@ -590,6 +614,10 @@ def launch_gui(df: pd.DataFrame, data_path: str) -> None:
             dpg.add_theme_color(dpg.mvThemeCol_Header, (220, 220, 220, 255))
             dpg.add_theme_color(dpg.mvThemeCol_HeaderHovered, (200, 200, 200, 255))
             dpg.add_theme_color(dpg.mvThemeCol_HeaderActive, (180, 180, 180, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, (245, 245, 245, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_MenubarBg, (245, 245, 245, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_Border, (200, 200, 200, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_BorderShadow, (245, 245, 245, 255))
 
     def gather_params() -> Optional[StrategyParams]:
         start_raw = dpg.get_value("start_date")
@@ -951,7 +979,7 @@ def launch_gui(df: pd.DataFrame, data_path: str) -> None:
 
     dpg.bind_theme(light_theme)
     dpg.create_viewport(title="S_01 TrailingMA Backtester", width=920, height=1080)
-    dpg.set_viewport_clear_color((235, 235, 235, 255))
+    dpg.set_viewport_clear_color((245, 245, 245, 255))
     dpg.setup_dearpygui()
     dpg.show_viewport()
     dpg.start_dearpygui()
