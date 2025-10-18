@@ -600,27 +600,40 @@ def launch_gui(df: pd.DataFrame, data_path: str) -> None:
         trail_short_checkbox_tags, trail_short_all_tag
     )
 
+    def add_theme_colors() -> None:
+        theme_colors = [
+            ("mvThemeCol_Text", (0, 0, 0, 255)),
+            ("mvThemeCol_WindowBg", (245, 245, 245, 255)),
+            ("mvThemeCol_TitleBg", (245, 245, 245, 255)),
+            ("mvThemeCol_TitleBgActive", (245, 245, 245, 255)),
+            ("mvThemeCol_TitleBgCollapsed", (245, 245, 245, 255)),
+            ("mvThemeCol_FrameBg", (230, 230, 230, 255)),
+            ("mvThemeCol_FrameBgHovered", (210, 210, 210, 255)),
+            ("mvThemeCol_FrameBgActive", (190, 190, 190, 255)),
+            ("mvThemeCol_Button", (225, 225, 225, 255)),
+            ("mvThemeCol_ButtonHovered", (200, 200, 200, 255)),
+            ("mvThemeCol_ButtonActive", (180, 180, 180, 255)),
+            ("mvThemeCol_Header", (220, 220, 220, 255)),
+            ("mvThemeCol_HeaderHovered", (200, 200, 200, 255)),
+            ("mvThemeCol_HeaderActive", (180, 180, 180, 255)),
+            ("mvThemeCol_ChildBg", (245, 245, 245, 255)),
+            ("mvThemeCol_MenuBarBg", (245, 245, 245, 255)),
+            ("mvThemeCol_Border", (200, 200, 200, 255)),
+            ("mvThemeCol_BorderShadow", (245, 245, 245, 255)),
+            ("mvThemeCol_ViewportBg", (245, 245, 245, 255)),
+        ]
+        for attr_name, color in theme_colors:
+            theme_constant = getattr(dpg, attr_name, None)
+            if theme_constant is not None:
+                dpg.add_theme_color(theme_constant, color)
+            else:
+                print(
+                    f"Dear PyGui constant '{attr_name}' is unavailable in this version; skipping color override."
+                )
+
     with dpg.theme() as light_theme:
         with dpg.theme_component(dpg.mvAll):
-            dpg.add_theme_color(dpg.mvThemeCol_Text, (0, 0, 0, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (245, 245, 245, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_TitleBg, (245, 245, 245, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_TitleBgActive, (245, 245, 245, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_TitleBgCollapsed, (245, 245, 245, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (230, 230, 230, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (210, 210, 210, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (190, 190, 190, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_Button, (225, 225, 225, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (200, 200, 200, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (180, 180, 180, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_Header, (220, 220, 220, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_HeaderHovered, (200, 200, 200, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_HeaderActive, (180, 180, 180, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, (245, 245, 245, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_MenuBarBg, (245, 245, 245, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_Border, (200, 200, 200, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_BorderShadow, (245, 245, 245, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ViewportBg, (245, 245, 245, 255))
+            add_theme_colors()
 
     def gather_params() -> Optional[StrategyParams]:
         start_raw = dpg.get_value("start_date")
