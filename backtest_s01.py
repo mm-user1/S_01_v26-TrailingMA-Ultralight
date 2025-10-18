@@ -615,7 +615,7 @@ def launch_gui(df: pd.DataFrame, data_path: str) -> None:
             dpg.add_theme_color(dpg.mvThemeCol_HeaderHovered, (200, 200, 200, 255))
             dpg.add_theme_color(dpg.mvThemeCol_HeaderActive, (180, 180, 180, 255))
             dpg.add_theme_color(dpg.mvThemeCol_ChildBg, (245, 245, 245, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_MenubarBg, (245, 245, 245, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_MenuBarBg, (245, 245, 245, 255))
             dpg.add_theme_color(dpg.mvThemeCol_Border, (200, 200, 200, 255))
             dpg.add_theme_color(dpg.mvThemeCol_BorderShadow, (245, 245, 245, 255))
 
