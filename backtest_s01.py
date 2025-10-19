@@ -581,12 +581,14 @@ def create_gui():
             
             dpg.add_spacing(count=2)
             with dpg.group(horizontal=True):
-                dpg.add_text("Start Date", width=120)
+                dpg.add_text("Start Date")
+                dpg.add_spacer(width=10)
                 dpg.add_input_text(default_value="2025-04-01", width=150, tag="start_date")
                 dpg.add_input_text(default_value="08:00", width=80, tag="start_time")
-            
+
             with dpg.group(horizontal=True):
-                dpg.add_text("End Date", width=120)
+                dpg.add_text("End Date")
+                dpg.add_spacer(width=10)
                 dpg.add_input_text(default_value="2025-09-01", width=150, tag="end_date")
                 dpg.add_input_text(default_value="08:00", width=80, tag="end_time")
             dpg.add_spacing(count=3)
@@ -616,13 +618,16 @@ def create_gui():
             dpg.add_spacing(count=2)
             
             with dpg.group(horizontal=True):
-                dpg.add_text("Length:", width=120)
+                dpg.add_text("Length:")
+                dpg.add_spacer(width=10)
                 dpg.add_input_int(width=100, default_value=45, tag="t_ma_length")
-            
+
             with dpg.group(horizontal=True):
-                dpg.add_text("Close Count Long:", width=120)
+                dpg.add_text("Close Count Long:")
+                dpg.add_spacer(width=10)
                 dpg.add_input_int(width=100, default_value=7, tag="close_count_long")
                 dpg.add_text("Close Count Short:")
+                dpg.add_spacer(width=10)
                 dpg.add_input_int(width=100, default_value=5, tag="close_count_short")
             dpg.add_spacing(count=3)
         
@@ -732,9 +737,11 @@ def create_gui():
         # Risk Settings
         with dpg.group():
             with dpg.group(horizontal=True):
-                dpg.add_text("Risk Per Trade:", width=120)
+                dpg.add_text("Risk Per Trade:")
+                dpg.add_spacer(width=10)
                 dpg.add_input_float(width=100, default_value=2.0, step=0.01, tag="risk_per_trade")
                 dpg.add_text("Contract Size:")
+                dpg.add_spacer(width=10)
                 dpg.add_input_float(width=100, default_value=0.01, step=0.01, tag="contract_size")
             dpg.add_spacing(count=3)
         
