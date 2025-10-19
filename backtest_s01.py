@@ -1,4 +1,3 @@
-import argparse
 import math
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -12,21 +11,8 @@ FAST_KAMA = 2
 SLOW_KAMA = 30
 START_DATE = pd.Timestamp('2025-04-01', tz='UTC')
 END_DATE = pd.Timestamp('2025-09-01', tz='UTC')
-DEFAULT_CONTRACT_SIZE = 0.01
+CONTRACT_SIZE = 0.01
 COMMISSION_RATE = 0.0005
-MA_TYPE_OPTIONS = [
-    "EMA",
-    "SMA",
-    "HMA",
-    "WMA",
-    "ALMA",
-    "KAMA",
-    "TMA",
-    "T3",
-    "DEMA",
-    "VWMA",
-    "VWAP",
-]
 
 
 def ema(series: pd.Series, length: int) -> pd.Series:
@@ -188,37 +174,6 @@ class TradeRecord:
     net_pnl: float
 
 
-@dataclass
-class StrategyParams:
-    date_filter: bool = True
-    start_date: pd.Timestamp = START_DATE
-    end_date: pd.Timestamp = END_DATE
-    t_ma_type: str = "EMA"
-    ma_length3: int = 45
-    close_count_trend_long: int = 7
-    close_count_trend_short: int = 5
-    stop_multiplier_long: float = 2.0
-    rr_long: float = 3.0
-    lp_long: int = 2
-    stop_multiplier_short: float = 2.0
-    rr_short: float = 3.0
-    lp_short: int = 2
-    long_stop_pct_filter_size: float = 3.0
-    short_stop_pct_filter_size: float = 3.0
-    long_stop_days_filter_size: int = 2
-    short_stop_days_filter_size: int = 4
-    trail_rr_long: float = 1.0
-    trail_rr_short: float = 1.0
-    trail_ma_type_long: str = "SMA"
-    trail_ma_length_long: int = 160
-    trail_ma_offset_long: float = -1.0
-    trail_ma_type_short: str = "SMA"
-    trail_ma_length_short: int = 160
-    trail_ma_offset_short: float = 1.0
-    risk_per_trade: float = 2.0
-    contract_size: float = DEFAULT_CONTRACT_SIZE
-
-
 def load_data(csv_path: str) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
     df['time'] = pd.to_datetime(df['time'], unit='s', utc=True)
@@ -235,71 +190,24 @@ def compute_max_drawdown(equity_curve: pd.Series) -> float:
     return peak_dd.max() * 100
 
 
-def parse_date_value(value: str) -> pd.Timestamp:
-    ts = pd.Timestamp(value)
-    if ts.tzinfo is None:
-        ts = ts.tz_localize('UTC')
-    else:
-        ts = ts.tz_convert('UTC')
-    return ts
-
-
-def run_strategy(
-    df: pd.DataFrame,
-    params: StrategyParams,
-    ma_type_override: Optional[str] = None,
-) -> Tuple[float, float, int]:
+def run_strategy(df: pd.DataFrame) -> Tuple[float, float, int]:
     close = df['Close']
     high = df['High']
     low = df['Low']
     volume = df['Volume']
 
-    ma_type = (ma_type_override or params.t_ma_type).upper()
-    ma3 = get_ma(
-        close,
-        ma_type,
-        params.ma_length3,
-        volume=volume,
-        high=high,
-        low=low,
-    )
+    ma3 = get_ma(close, 'EMA', 45)
     atr14 = atr(high, low, close, 14)
-    lp_long = max(1, params.lp_long)
-    lp_short = max(1, params.lp_short)
-    lowest_long = low.rolling(lp_long, min_periods=1).min()
-    highest_short = high.rolling(lp_short, min_periods=1).max()
+    lowest_long = low.rolling(2, min_periods=1).min()
+    highest_short = high.rolling(2, min_periods=1).max()
 
-    trail_ma_long_base = get_ma(
-        close,
-        params.trail_ma_type_long,
-        params.trail_ma_length_long,
-        volume=volume,
-        high=high,
-        low=low,
-    )
-    if params.trail_ma_offset_long != 0:
-        trail_ma_long = trail_ma_long_base * (1 + params.trail_ma_offset_long / 100.0)
-    else:
-        trail_ma_long = trail_ma_long_base
-
-    trail_ma_short_base = get_ma(
-        close,
-        params.trail_ma_type_short,
-        params.trail_ma_length_short,
-        volume=volume,
-        high=high,
-        low=low,
-    )
-    if params.trail_ma_offset_short != 0:
-        trail_ma_short = trail_ma_short_base * (1 + params.trail_ma_offset_short / 100.0)
-    else:
-        trail_ma_short = trail_ma_short_base
+    trail_ma_long = get_ma(close, 'SMA', 160)
+    trail_ma_long = trail_ma_long * (1 + (-1.0) / 100)
+    trail_ma_short = get_ma(close, 'SMA', 160)
+    trail_ma_short = trail_ma_short * (1 + (1.0) / 100)
 
     times = df.index
-    if params.date_filter:
-        time_in_range = (times >= params.start_date) & (times <= params.end_date)
-    else:
-        time_in_range = np.ones(len(times), dtype=bool)
+    time_in_range = (times >= START_DATE) & (times <= END_DATE)
 
     equity = 100.0
     realized_equity = equity
@@ -359,7 +267,7 @@ def run_strategy(
         exit_price = None
         if position > 0:
             if not trail_activated_long and not math.isnan(entry_price) and not math.isnan(stop_price):
-                activation_price = entry_price + (entry_price - stop_price) * params.trail_rr_long
+                activation_price = entry_price + (entry_price - stop_price) * 1.0
                 if h >= activation_price:
                     trail_activated_long = True
                     if math.isnan(trail_price_long):
@@ -377,7 +285,7 @@ def run_strategy(
                     exit_price = target_price
             if exit_price is None and entry_time_long is not None:
                 days_in_trade = int(math.floor((time - entry_time_long).total_seconds() / 86400))
-                if days_in_trade >= params.long_stop_days_filter_size:
+                if days_in_trade >= 2:
                     exit_price = c
             if exit_price is not None:
                 gross_pnl = (exit_price - entry_price) * position_size
@@ -404,7 +312,7 @@ def run_strategy(
 
         elif position < 0:
             if not trail_activated_short and not math.isnan(entry_price) and not math.isnan(stop_price):
-                activation_price = entry_price - (stop_price - entry_price) * params.trail_rr_short
+                activation_price = entry_price - (stop_price - entry_price) * 1.0
                 if l <= activation_price:
                     trail_activated_short = True
                     if math.isnan(trail_price_short):
@@ -422,7 +330,7 @@ def run_strategy(
                     exit_price = target_price
             if exit_price is None and entry_time_short is not None:
                 days_in_trade = int(math.floor((time - entry_time_short).total_seconds() / 86400))
-                if days_in_trade >= params.short_stop_days_filter_size:
+                if days_in_trade >= 4:
                     exit_price = c
             if exit_price is not None:
                 gross_pnl = (entry_price - exit_price) * position_size
@@ -447,51 +355,34 @@ def run_strategy(
                 entry_time_short = None
                 entry_commission = 0.0
 
-        up_trend = (
-            counter_close_trend_long >= params.close_count_trend_long
-            and counter_trade_long == 0
-        )
-        down_trend = (
-            counter_close_trend_short >= params.close_count_trend_short
-            and counter_trade_short == 0
-        )
+        up_trend = counter_close_trend_long >= 7 and counter_trade_long == 0
+        down_trend = counter_close_trend_short >= 5 and counter_trade_short == 0
 
         can_open_long = (
-            up_trend
-            and position == 0
-            and prev_position == 0
-            and time_in_range[i]
-            and not np.isnan(atr_value)
-            and not np.isnan(lowest_value)
+            up_trend and position == 0 and prev_position == 0 and time_in_range[i] and
+            not np.isnan(atr_value) and not np.isnan(lowest_value)
         )
         can_open_short = (
-            down_trend
-            and position == 0
-            and prev_position == 0
-            and time_in_range[i]
-            and not np.isnan(atr_value)
-            and not np.isnan(highest_value)
+            down_trend and position == 0 and prev_position == 0 and time_in_range[i] and
+            not np.isnan(atr_value) and not np.isnan(highest_value)
         )
 
         if can_open_long:
-            stop_size = atr_value * params.stop_multiplier_long
+            stop_size = atr_value * 2.0
             long_stop_price = lowest_value - stop_size
             long_stop_distance = c - long_stop_price
-            if long_stop_distance > 0 and c != 0:
+            if long_stop_distance > 0:
                 long_stop_pct = (long_stop_distance / c) * 100
-                if long_stop_pct <= params.long_stop_pct_filter_size:
-                    risk_cash = realized_equity * (params.risk_per_trade / 100.0)
-                    if params.contract_size <= 0:
-                        qty = 0
-                    else:
-                        qty = risk_cash / long_stop_distance
-                        qty = math.floor((qty / params.contract_size)) * params.contract_size
+                if long_stop_pct <= 3:
+                    risk_cash = realized_equity * (2.0 / 100)
+                    qty = risk_cash / long_stop_distance
+                    qty = math.floor((qty / CONTRACT_SIZE)) * CONTRACT_SIZE
                     if qty > 0:
                         position = 1
                         position_size = qty
                         entry_price = c
                         stop_price = long_stop_price
-                        target_price = c + long_stop_distance * params.rr_long
+                        target_price = c + long_stop_distance * 3.0
                         trail_price_long = long_stop_price
                         trail_activated_long = False
                         entry_time_long = time
@@ -499,24 +390,21 @@ def run_strategy(
                         realized_equity -= entry_commission
 
         if can_open_short and position == 0:
-            stop_size = atr_value * params.stop_multiplier_short
+            stop_size = atr_value * 2.0
             short_stop_price = highest_value + stop_size
             short_stop_distance = short_stop_price - c
-            if short_stop_distance > 0 and c != 0:
+            if short_stop_distance > 0:
                 short_stop_pct = (short_stop_distance / c) * 100
-                if short_stop_pct <= params.short_stop_pct_filter_size:
-                    risk_cash = realized_equity * (params.risk_per_trade / 100.0)
-                    if params.contract_size <= 0:
-                        qty = 0
-                    else:
-                        qty = risk_cash / short_stop_distance
-                        qty = math.floor((qty / params.contract_size)) * params.contract_size
+                if short_stop_pct <= 3:
+                    risk_cash = realized_equity * (2.0 / 100)
+                    qty = risk_cash / short_stop_distance
+                    qty = math.floor((qty / CONTRACT_SIZE)) * CONTRACT_SIZE
                     if qty > 0:
                         position = -1
                         position_size = qty
                         entry_price = c
                         stop_price = short_stop_price
-                        target_price = c - short_stop_distance * params.rr_short
+                        target_price = c - short_stop_distance * 3.0
                         trail_price_short = short_stop_price
                         trail_activated_short = False
                         entry_time_short = time
@@ -539,508 +427,12 @@ def run_strategy(
     return net_profit_pct, max_drawdown_pct, total_trades
 
 
-def launch_gui(df: pd.DataFrame, data_path: str) -> None:
-    from dearpygui import dearpygui as dpg
-
-    dpg.create_context()
-
-    with dpg.theme() as light_theme:
-        with dpg.theme_component(dpg.mvAll):
-            dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (255, 255, 255, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, (248, 248, 248, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_Border, (208, 208, 208, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_Text, (51, 51, 51, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (255, 255, 255, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (240, 240, 240, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (255, 255, 255, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_Header, (245, 245, 245, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_HeaderHovered, (238, 238, 238, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_HeaderActive, (230, 230, 230, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 120, 212, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (16, 110, 190, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (0, 90, 158, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_Tab, (245, 245, 245, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_TabHovered, (232, 232, 232, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_TabActive, (255, 255, 255, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_TabUnfocused, (245, 245, 245, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_TabUnfocusedActive, (245, 245, 245, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (0, 120, 212, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarBg, (240, 240, 240, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrab, (192, 192, 192, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabHovered, (160, 160, 160, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabActive, (128, 128, 128, 255))
-            dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 1)
-            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 3)
-            dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 4)
-
-    with dpg.theme() as secondary_button_theme:
-        with dpg.theme_component(dpg.mvButton):
-            dpg.add_theme_color(dpg.mvThemeCol_Button, (225, 225, 225, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (208, 208, 208, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (192, 192, 192, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_Text, (51, 51, 51, 255))
-
-    with dpg.theme() as section_header_theme:
-        with dpg.theme_component(dpg.mvText):
-            dpg.add_theme_color(dpg.mvThemeCol_Text, (85, 85, 85, 255))
-
-    date_filter_tag = "input_date_filter"
-    start_date_tag = "input_start_date"
-    start_time_tag = "input_start_time"
-    end_date_tag = "input_end_date"
-    end_time_tag = "input_end_time"
-    ma_type_tag = "input_t_ma_type"
-    ma_length_tag = "input_ma_length"
-    close_long_tag = "input_close_count_long"
-    close_short_tag = "input_close_count_short"
-    stop_long_tag = "input_stop_multiplier_long"
-    rr_long_tag = "input_rr_long"
-    lp_long_tag = "input_lp_long"
-    stop_short_tag = "input_stop_multiplier_short"
-    rr_short_tag = "input_rr_short"
-    lp_short_tag = "input_lp_short"
-    long_stop_pct_tag = "input_long_stop_pct"
-    short_stop_pct_tag = "input_short_stop_pct"
-    long_stop_days_tag = "input_long_stop_days"
-    short_stop_days_tag = "input_short_stop_days"
-    trail_rr_long_tag = "input_trail_rr_long"
-    trail_rr_short_tag = "input_trail_rr_short"
-    trail_ma_long_type_tag = "input_trail_ma_long_type"
-    trail_ma_long_length_tag = "input_trail_ma_long_length"
-    trail_ma_long_offset_tag = "input_trail_ma_long_offset"
-    trail_ma_short_type_tag = "input_trail_ma_short_type"
-    trail_ma_short_length_tag = "input_trail_ma_short_length"
-    trail_ma_short_offset_tag = "input_trail_ma_short_offset"
-    risk_per_trade_tag = "input_risk_per_trade"
-    contract_size_tag = "input_contract_size"
-    results_text_tag = "results_text"
-
-    default_start_date = START_DATE.tz_convert("UTC") if START_DATE.tzinfo else START_DATE
-    default_end_date = END_DATE.tz_convert("UTC") if END_DATE.tzinfo else END_DATE
-
-    def combine_date_and_time(date_tag: str, time_tag: str) -> pd.Timestamp:
-        date_value = dpg.get_value(date_tag)
-        time_value = dpg.get_value(time_tag)
-        if not isinstance(date_value, str) or not isinstance(time_value, str):
-            raise ValueError("Date and time inputs must be strings")
-        return parse_date_value(f"{date_value.strip()} {time_value.strip()}")
-
-    def gather_params() -> Optional[StrategyParams]:
-        try:
-            start_date = combine_date_and_time(start_date_tag, start_time_tag)
-            end_date = combine_date_and_time(end_date_tag, end_time_tag)
-        except Exception as exc:  # noqa: BLE001 - console feedback is acceptable here
-            message = f"Date parsing error: {exc}"
-            print(message)
-            dpg.set_value(results_text_tag, message)
-            return None
-
-        try:
-            contract_size = float(dpg.get_value(contract_size_tag))
-        except (TypeError, ValueError) as exc:
-            message = f"Contract Size parsing error: {exc}"
-            print(message)
-            dpg.set_value(results_text_tag, message)
-            return None
-
-        return StrategyParams(
-            date_filter=bool(dpg.get_value(date_filter_tag)),
-            start_date=start_date,
-            end_date=end_date,
-            t_ma_type=str(dpg.get_value(ma_type_tag)),
-            ma_length3=int(dpg.get_value(ma_length_tag)),
-            close_count_trend_long=int(dpg.get_value(close_long_tag)),
-            close_count_trend_short=int(dpg.get_value(close_short_tag)),
-            stop_multiplier_long=float(dpg.get_value(stop_long_tag)),
-            rr_long=float(dpg.get_value(rr_long_tag)),
-            lp_long=int(dpg.get_value(lp_long_tag)),
-            stop_multiplier_short=float(dpg.get_value(stop_short_tag)),
-            rr_short=float(dpg.get_value(rr_short_tag)),
-            lp_short=int(dpg.get_value(lp_short_tag)),
-            long_stop_pct_filter_size=float(dpg.get_value(long_stop_pct_tag)),
-            short_stop_pct_filter_size=float(dpg.get_value(short_stop_pct_tag)),
-            long_stop_days_filter_size=int(dpg.get_value(long_stop_days_tag)),
-            short_stop_days_filter_size=int(dpg.get_value(short_stop_days_tag)),
-            trail_rr_long=float(dpg.get_value(trail_rr_long_tag)),
-            trail_rr_short=float(dpg.get_value(trail_rr_short_tag)),
-            trail_ma_type_long=str(dpg.get_value(trail_ma_long_type_tag)),
-            trail_ma_length_long=int(dpg.get_value(trail_ma_long_length_tag)),
-            trail_ma_offset_long=float(dpg.get_value(trail_ma_long_offset_tag)),
-            trail_ma_type_short=str(dpg.get_value(trail_ma_short_type_tag)),
-            trail_ma_length_short=int(dpg.get_value(trail_ma_short_length_tag)),
-            trail_ma_offset_short=float(dpg.get_value(trail_ma_short_offset_tag)),
-            risk_per_trade=float(dpg.get_value(risk_per_trade_tag)),
-            contract_size=contract_size,
-        )
-
-    def run_backtest() -> None:
-        dpg.set_value(
-            results_text_tag,
-            "Backtesting in progress...\n\nPlease wait...",
-        )
-        params = gather_params()
-        if params is None:
-            return
-
-        net_profit, max_drawdown, trades = run_strategy(
-            df, params, ma_type_override=params.t_ma_type
-        )
-
-        result_lines = [
-            "=" * 60,
-            f"Data: {data_path}",
-            f"Trend MA №3: {params.t_ma_type} (Length {params.ma_length3})",
-            (
-                f"Trail Long: {params.trail_ma_type_long} (Len {params.trail_ma_length_long}, "
-                f"Offset {params.trail_ma_offset_long:.2f})"
-            ),
-            (
-                f"Trail Short: {params.trail_ma_type_short} (Len {params.trail_ma_length_short}, "
-                f"Offset {params.trail_ma_offset_short:.2f})"
-            ),
-            f"Net Profit %: {net_profit:.2f}",
-            f"Max Portfolio Drawdown %: {max_drawdown:.2f}",
-            f"Total Trades: {trades}",
-            "=" * 60,
-        ]
-
-        results_text = "\n".join(result_lines)
-        print(results_text)
-        dpg.set_value(results_text_tag, results_text)
-
-    def reset_defaults() -> None:
-        dpg.set_value(date_filter_tag, True)
-        dpg.set_value(start_date_tag, default_start_date.strftime("%Y-%m-%d"))
-        dpg.set_value(start_time_tag, default_start_date.strftime("%H:%M"))
-        dpg.set_value(end_date_tag, default_end_date.strftime("%Y-%m-%d"))
-        dpg.set_value(end_time_tag, default_end_date.strftime("%H:%M"))
-        dpg.set_value(ma_type_tag, "EMA")
-        dpg.set_value(ma_length_tag, 45)
-        dpg.set_value(close_long_tag, 7)
-        dpg.set_value(close_short_tag, 5)
-        dpg.set_value(stop_long_tag, 2.0)
-        dpg.set_value(rr_long_tag, 3.0)
-        dpg.set_value(lp_long_tag, 2)
-        dpg.set_value(stop_short_tag, 2.0)
-        dpg.set_value(rr_short_tag, 3.0)
-        dpg.set_value(lp_short_tag, 2)
-        dpg.set_value(long_stop_pct_tag, 3.0)
-        dpg.set_value(short_stop_pct_tag, 3.0)
-        dpg.set_value(long_stop_days_tag, 2)
-        dpg.set_value(short_stop_days_tag, 4)
-        dpg.set_value(trail_rr_long_tag, 1.0)
-        dpg.set_value(trail_rr_short_tag, 1.0)
-        dpg.set_value(trail_ma_long_type_tag, "SMA")
-        dpg.set_value(trail_ma_long_length_tag, 160)
-        dpg.set_value(trail_ma_long_offset_tag, -1.0)
-        dpg.set_value(trail_ma_short_type_tag, "SMA")
-        dpg.set_value(trail_ma_short_length_tag, 160)
-        dpg.set_value(trail_ma_short_offset_tag, 1.0)
-        dpg.set_value(risk_per_trade_tag, 2.0)
-        dpg.set_value(contract_size_tag, DEFAULT_CONTRACT_SIZE)
-        dpg.set_value(
-            results_text_tag,
-            "Press 'Run' to launch the backtest...",
-        )
-
-    def cancel_window() -> None:
-        dpg.configure_item("main_window", show=False)
-        dpg.stop_dearpygui()
-
-    with dpg.window(
-        label="S_01 TrailingMA Backtester",
-        tag="main_window",
-        width=850,
-        height=750,
-        pos=(100, 100),
-        no_close=True,
-    ):
-        with dpg.tab_bar():
-            with dpg.tab(label="Inputs"):
-                dpg.add_spacing(count=2)
-
-                with dpg.group(horizontal=True):
-                    dpg.add_checkbox(
-                        label="Date Filter",
-                        default_value=True,
-                        tag=date_filter_tag,
-                    )
-                    dpg.add_spacing(count=5)
-                    dpg.add_checkbox(label="Backtester", default_value=True, enabled=False)
-
-                dpg.add_spacing(count=3)
-
-                with dpg.group(horizontal=True):
-                    label = dpg.add_text("Start Date")
-                    dpg.bind_item_theme(label, section_header_theme)
-                    dpg.add_input_text(
-                        default_value=default_start_date.strftime("%Y-%m-%d"),
-                        width=120,
-                        tag=start_date_tag,
-                    )
-                    dpg.add_button(label="📅", width=35, enabled=False)
-                    dpg.add_input_text(
-                        default_value=default_start_date.strftime("%H:%M"),
-                        width=70,
-                        tag=start_time_tag,
-                    )
-
-                with dpg.group(horizontal=True):
-                    label = dpg.add_text("End Date  ")
-                    dpg.bind_item_theme(label, section_header_theme)
-                    dpg.add_input_text(
-                        default_value=default_end_date.strftime("%Y-%m-%d"),
-                        width=120,
-                        tag=end_date_tag,
-                    )
-                    dpg.add_button(label="📅", width=35, enabled=False)
-                    dpg.add_input_text(
-                        default_value=default_end_date.strftime("%H:%M"),
-                        width=70,
-                        tag=end_time_tag,
-                    )
-
-                dpg.add_separator()
-                dpg.add_spacing(count=2)
-
-                with dpg.group(horizontal=True):
-                    label = dpg.add_text("T MA Type")
-                    dpg.bind_item_theme(label, section_header_theme)
-                    dpg.add_combo(
-                        items=MA_TYPE_OPTIONS,
-                        default_value="EMA",
-                        width=110,
-                        tag=ma_type_tag,
-                    )
-                    dpg.add_spacing(count=5)
-                    dpg.add_text("Length")
-                    dpg.add_input_int(
-                        default_value=45,
-                        width=80,
-                        min_value=1,
-                        tag=ma_length_tag,
-                    )
-
-                dpg.add_spacing(count=2)
-
-                with dpg.group(horizontal=True):
-                    dpg.add_text("Close Count Long")
-                    dpg.add_input_int(default_value=7, width=80, tag=close_long_tag, min_value=1)
-                    dpg.add_spacing(count=5)
-                    dpg.add_text("Close Count Short")
-                    dpg.add_input_int(default_value=5, width=80, tag=close_short_tag, min_value=1)
-
-                dpg.add_separator()
-                dpg.add_spacing(count=2)
-
-                with dpg.collapsing_header(label="STOPS AND FILTERS", default_open=True):
-                    dpg.add_spacing(count=2)
-
-                    with dpg.child_window(height=160, border=True):
-                        dpg.add_spacing(count=2)
-
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Stop Long X ")
-                            dpg.add_input_float(default_value=2.0, width=70, tag=stop_long_tag, step=0.1)
-                            dpg.add_spacing(count=3)
-                            dpg.add_text("RR")
-                            dpg.add_input_float(default_value=3.0, width=70, tag=rr_long_tag, step=0.1)
-                            dpg.add_spacing(count=3)
-                            dpg.add_text("LP")
-                            dpg.add_input_int(default_value=2, width=70, tag=lp_long_tag, min_value=1)
-
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Stop Short X")
-                            dpg.add_input_float(default_value=2.0, width=70, tag=stop_short_tag, step=0.1)
-                            dpg.add_spacing(count=3)
-                            dpg.add_text("RR")
-                            dpg.add_input_float(default_value=3.0, width=70, tag=rr_short_tag, step=0.1)
-                            dpg.add_spacing(count=3)
-                            dpg.add_text("LP")
-                            dpg.add_input_int(default_value=2, width=70, tag=lp_short_tag, min_value=1)
-
-                        dpg.add_spacing(count=2)
-
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("L Stop Max %")
-                            dpg.add_input_float(default_value=3.0, width=70, tag=long_stop_pct_tag, step=0.1)
-                            dpg.add_spacing(count=3)
-                            dpg.add_text("S Stop Max %")
-                            dpg.add_input_float(default_value=3.0, width=70, tag=short_stop_pct_tag, step=0.1)
-
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("L Stop Max D")
-                            dpg.add_input_int(default_value=2, width=70, tag=long_stop_days_tag, min_value=1)
-                            dpg.add_spacing(count=3)
-                            dpg.add_text("S Stop Max D")
-                            dpg.add_input_int(default_value=4, width=70, tag=short_stop_days_tag, min_value=1)
-
-                dpg.add_spacing(count=2)
-
-                with dpg.collapsing_header(label="TRAILING STOPS", default_open=True):
-                    dpg.add_spacing(count=2)
-
-                    with dpg.child_window(height=140, border=True):
-                        dpg.add_spacing(count=2)
-
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Trail RR Long ")
-                            dpg.add_input_float(default_value=1.0, width=70, tag=trail_rr_long_tag, step=0.1)
-                            dpg.add_spacing(count=3)
-                            dpg.add_text("Trail RR Short")
-                            dpg.add_input_float(default_value=1.0, width=70, tag=trail_rr_short_tag, step=0.1)
-
-                        dpg.add_spacing(count=2)
-
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Trail MA Long ")
-                            dpg.add_combo(
-                                items=MA_TYPE_OPTIONS,
-                                default_value="SMA",
-                                width=100,
-                                tag=trail_ma_long_type_tag,
-                            )
-                            dpg.add_text("Length")
-                            dpg.add_input_int(
-                                default_value=160,
-                                width=70,
-                                tag=trail_ma_long_length_tag,
-                                min_value=0,
-                            )
-                            dpg.add_text("Offset")
-                            dpg.add_input_float(
-                                default_value=-1.0,
-                                width=70,
-                                tag=trail_ma_long_offset_tag,
-                                step=0.1,
-                            )
-
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Trail MA Short")
-                            dpg.add_combo(
-                                items=MA_TYPE_OPTIONS,
-                                default_value="SMA",
-                                width=100,
-                                tag=trail_ma_short_type_tag,
-                            )
-                            dpg.add_text("Length")
-                            dpg.add_input_int(
-                                default_value=160,
-                                width=70,
-                                tag=trail_ma_short_length_tag,
-                                min_value=0,
-                            )
-                            dpg.add_text("Offset")
-                            dpg.add_input_float(
-                                default_value=1.0,
-                                width=70,
-                                tag=trail_ma_short_offset_tag,
-                                step=0.1,
-                            )
-
-                dpg.add_separator()
-                dpg.add_spacing(count=2)
-
-                with dpg.group(horizontal=True):
-                    dpg.add_text("Risk Per Trade")
-                    dpg.add_input_float(
-                        default_value=2.0,
-                        width=80,
-                        format="%.2f",
-                        tag=risk_per_trade_tag,
-                    )
-                    dpg.add_spacing(count=5)
-                    dpg.add_text("Contract Size")
-                    dpg.add_input_float(
-                        default_value=DEFAULT_CONTRACT_SIZE,
-                        width=80,
-                        format="%.4f",
-                        tag=contract_size_tag,
-                    )
-
-                dpg.add_separator()
-                dpg.add_spacing(count=2)
-
-                with dpg.child_window(height=180, border=True, tag="results_window"):
-                    dpg.add_spacing(count=2)
-                    dpg.add_text(
-                        "Нажмите 'Run' для запуска бэктеста...",
-                        tag=results_text_tag,
-                        color=(136, 136, 136),
-                    )
-
-                dpg.add_spacing(count=3)
-
-                with dpg.group(horizontal=True):
-                    defaults_btn = dpg.add_button(
-                        label="Defaults",
-                        width=100,
-                        callback=reset_defaults,
-                    )
-                    dpg.bind_item_theme(defaults_btn, secondary_button_theme)
-                    dpg.add_spacer(width=450)
-                    cancel_btn = dpg.add_button(
-                        label="Cancel",
-                        width=100,
-                        callback=cancel_window,
-                    )
-                    dpg.bind_item_theme(cancel_btn, secondary_button_theme)
-                    dpg.add_spacing(count=2)
-                    dpg.add_button(label="Run", width=100, callback=run_backtest)
-
-            with dpg.tab(label="Properties"):
-                dpg.add_spacing(count=5)
-                dpg.add_text("Properties tab - coming soon...", color=(136, 136, 136))
-
-            with dpg.tab(label="Style"):
-                dpg.add_spacing(count=5)
-                dpg.add_text("Style tab - coming soon...", color=(136, 136, 136))
-
-            with dpg.tab(label="Visibility"):
-                dpg.add_spacing(count=5)
-                dpg.add_text("Visibility tab - coming soon...", color=(136, 136, 136))
-
-    reset_defaults()
-    dpg.bind_theme(light_theme)
-    dpg.create_viewport(title="TrailingMA Backtester", width=900, height=800)
-    dpg.setup_dearpygui()
-    dpg.show_viewport()
-    dpg.set_primary_window("main_window", True)
-    dpg.start_dearpygui()
-    dpg.destroy_context()
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="S_01 TrailingMA Ultralight backtester")
-    parser.add_argument(
-        "--data",
-        default="OKX_LINKUSDT.P, 15 2025.02.01-2025.09.09.csv",
-        help="Path to CSV data file",
-    )
-    parser.add_argument(
-        "--ma-type",
-        default="EMA",
-        choices=MA_TYPE_OPTIONS,
-        help="Trend moving average type to use when running without GUI",
-    )
-    parser.add_argument(
-        "--no-gui",
-        action="store_true",
-        help="Run a single backtest with current parameters without launching the GUI",
-    )
-    args = parser.parse_args()
-
-    df = load_data(args.data)
-
-    if args.no_gui:
-        params = StrategyParams(t_ma_type=args.ma_type)
-        net_profit, max_drawdown, trades = run_strategy(
-            df, params, ma_type_override=args.ma_type
-        )
-        print(f"Net Profit %: {net_profit:.2f}")
-        print(f"Max Portfolio Drawdown %: {max_drawdown:.2f}")
-        print(f"Total Trades: {trades}")
-    else:
-        launch_gui(df, args.data)
+    df = load_data("OKX_LINKUSDT.P, 15 2025.02.01-2025.09.09.csv")
+    net_profit, max_drawdown, trades = run_strategy(df)
+    print(f"Net Profit %: {net_profit:.2f}")
+    print(f"Max Portfolio Drawdown %: {max_drawdown:.2f}")
+    print(f"Total Trades: {trades}")
 
 
 if __name__ == "__main__":
