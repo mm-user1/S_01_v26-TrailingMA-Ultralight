@@ -533,8 +533,8 @@ class BacktesterGUI:
         self.root = tk.Tk()
         self.root.title("TrailingMA Backtester")
         self.root.configure(bg=self.VIEWPORT_BG)
-        self.root.geometry("860x820")
-        self.root.minsize(820, 720)
+        self.root.geometry("860x1000")
+        self.root.minsize(820, 880)
 
         self.params = default_parameters()
         self.data = load_data("OKX_LINKUSDT.P, 15 2025.02.01-2025.09.09.csv")
@@ -605,7 +605,7 @@ class BacktesterGUI:
         )
 
         container = tk.Frame(self.content, bg=self.WINDOW_BG)
-        container.pack(fill="both", expand=True, padx=20, pady=20)
+        container.pack(fill="both", expand=True, padx=20, pady=16)
 
         self._build_date_section(container)
         self._build_ma_section(container)
@@ -641,7 +641,7 @@ class BacktesterGUI:
 
     def _build_section(self, parent: tk.Widget, title: str) -> tk.Frame:
         section = tk.Frame(parent, bg=self.WINDOW_BG)
-        section.pack(fill="x", pady=(0, 20))
+        section.pack(fill="x", pady=(0, 16))
         label = tk.Label(
             section,
             text=title.upper(),
@@ -649,16 +649,16 @@ class BacktesterGUI:
             fg=self.TEXT_SECONDARY,
             font=("Segoe UI", 12, "bold"),
         )
-        label.pack(fill="x", pady=(0, 12))
+        label.pack(fill="x", pady=(0, 8))
         underline = tk.Frame(section, bg=self.BORDER_SECONDARY, height=1)
-        underline.pack(fill="x", pady=(0, 12))
+        underline.pack(fill="x", pady=(0, 10))
         return section
 
     def _build_date_section(self, parent: tk.Widget) -> None:
         section = self._build_section(parent, "Date Filter")
 
         checkbox_row = tk.Frame(section, bg=self.WINDOW_BG)
-        checkbox_row.pack(fill="x", pady=(0, 12))
+        checkbox_row.pack(fill="x", pady=(0, 10))
 
         self._add_checkbox(checkbox_row, "Date Filter", self.date_filter_var)
         self._add_checkbox(checkbox_row, "Backtester", self.backtester_var)
@@ -668,7 +668,7 @@ class BacktesterGUI:
 
     def _build_date_inputs(self, section: tk.Frame, label_text: str, date_var: tk.StringVar, time_var: tk.StringVar) -> None:
         group = tk.Frame(section, bg=self.WINDOW_BG)
-        group.pack(fill="x", pady=(0, 12))
+        group.pack(fill="x", pady=(0, 10))
         label = tk.Label(
             group,
             text=label_text,
@@ -682,7 +682,7 @@ class BacktesterGUI:
 
         date_entry = self._create_entry(group, width=14)
         date_entry.configure(textvariable=date_var)
-        date_entry.pack(side="left", padx=(10, 6))
+        date_entry.pack(side="left", padx=(8, 6))
 
         calendar_button = tk.Button(
             group,
@@ -692,7 +692,7 @@ class BacktesterGUI:
             activebackground="#bbbbbb",
             activeforeground=self.TEXT_PRIMARY,
             bd=0,
-            padx=10,
+            padx=8,
             pady=4,
             font=("Segoe UI", 12),
         )
@@ -700,7 +700,7 @@ class BacktesterGUI:
 
         time_entry = self._create_entry(group, width=8)
         time_entry.configure(textvariable=time_var)
-        time_entry.pack(side="left", padx=(10, 0))
+        time_entry.pack(side="left", padx=(8, 0))
 
     def _build_ma_section(self, parent: tk.Widget) -> None:
         section = self._build_section(parent, "MA Settings")
@@ -715,12 +715,12 @@ class BacktesterGUI:
         label.pack(anchor="w", pady=(0, 8))
 
         ma_container = tk.Frame(section, bg=self.WINDOW_BG)
-        ma_container.pack(fill="x", pady=(0, 12))
+        ma_container.pack(fill="x", pady=(0, 10))
 
         self._add_checkbox(ma_container, "ALL", self.all_ma_var, command=self._toggle_all_ma)
 
         grid = tk.Frame(section, bg=self.WINDOW_BG)
-        grid.pack(fill="x", pady=(4, 12))
+        grid.pack(fill="x", pady=(4, 10))
 
         for idx, ma_type in enumerate(MA_TYPES):
             var = tk.BooleanVar(value=(ma_type == self.params.ma_type))
@@ -741,7 +741,7 @@ class BacktesterGUI:
             )
             row = idx // 4
             col = idx % 4
-            checkbox.grid(row=row, column=col, padx=12, pady=4, sticky="w")
+            checkbox.grid(row=row, column=col, padx=12, pady=3, sticky="w")
 
         self._create_labeled_entry(section, "Length", "ma_length", str(self.params.ma_length))
         self._create_labeled_entry(section, "Close Count Long", "close_count_long", str(self.params.close_count_long))
@@ -749,36 +749,39 @@ class BacktesterGUI:
 
     def _build_stops_section(self, parent: tk.Widget) -> None:
         container = self._build_collapsible(parent, "Stops and Filters")
-        self._create_param_group(
-            container,
+        grid = tk.Frame(container, bg=self.WINDOW_BG)
+        grid.pack(fill="x")
+
+        group_configs = [
             (
                 ("Stop Long X", "stop_long_atr_multiplier", str(self.params.stop_long_atr_multiplier)),
                 ("RR", "stop_long_rr", str(self.params.stop_long_rr)),
                 ("LP", "stop_long_lookback", str(self.params.stop_long_lookback)),
             ),
-        )
-        self._create_param_group(
-            container,
             (
                 ("Stop Short X", "stop_short_atr_multiplier", str(self.params.stop_short_atr_multiplier)),
                 ("RR", "stop_short_rr", str(self.params.stop_short_rr)),
                 ("LP", "stop_short_lookback", str(self.params.stop_short_lookback)),
             ),
-        )
-        self._create_param_group(
-            container,
             (
                 ("L Stop Max %", "long_stop_max_pct", str(self.params.long_stop_max_pct)),
                 ("S Stop Max %", "short_stop_max_pct", str(self.params.short_stop_max_pct)),
             ),
-        )
-        self._create_param_group(
-            container,
             (
                 ("L Stop Max D", "long_stop_max_days", str(self.params.long_stop_max_days)),
                 ("S Stop Max D", "short_stop_max_days", str(self.params.short_stop_max_days)),
             ),
-        )
+        ]
+
+        for idx, params in enumerate(group_configs):
+            frame = self._create_param_group(grid, params, use_pack=False)
+            row = idx // 2
+            column = idx % 2
+            padx = (0, 12) if column == 0 else (12, 0)
+            frame.grid(row=row, column=column, padx=padx, pady=5, sticky="nsew")
+
+        grid.columnconfigure(0, weight=1)
+        grid.columnconfigure(1, weight=1)
 
     def _build_trailing_section(self, parent: tk.Widget) -> None:
         container = self._build_collapsible(parent, "Trailing Stops")
@@ -789,35 +792,45 @@ class BacktesterGUI:
                 ("Trail RR Long", "trail_rr_long", str(self.params.trail_rr_long)),
                 ("Trail RR Short", "trail_rr_short", str(self.params.trail_rr_short)),
             ),
-        )
+        ).pack_configure(pady=3)
+
+        selectors = tk.Frame(container, bg=self.WINDOW_BG)
+        selectors.pack(fill="x", pady=(4, 0))
+
+        long_column = tk.Frame(selectors, bg=self.WINDOW_BG)
+        long_column.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        short_column = tk.Frame(selectors, bg=self.WINDOW_BG)
+        short_column.pack(side="left", fill="both", expand=True, padx=(8, 0))
 
         self._build_trailing_selector(
-            container,
+            long_column,
             title="Trail MA Long",
             vars_map=self.trail_ma_long_vars,
             default=self.params.trail_ma_long_type,
         )
-        self._create_param_group(
-            container,
+        long_group = self._create_param_group(
+            long_column,
             (
                 ("Length", "trail_ma_long_length", str(self.params.trail_ma_long_length)),
                 ("Offset", "trail_ma_long_offset", str(self.params.trail_ma_long_offset)),
             ),
         )
+        long_group.pack_configure(pady=3)
 
         self._build_trailing_selector(
-            container,
+            short_column,
             title="Trail MA Short",
             vars_map=self.trail_ma_short_vars,
             default=self.params.trail_ma_short_type,
         )
-        self._create_param_group(
-            container,
+        short_group = self._create_param_group(
+            short_column,
             (
                 ("Length", "trail_ma_short_length", str(self.params.trail_ma_short_length)),
                 ("Offset", "trail_ma_short_offset", str(self.params.trail_ma_short_offset)),
             ),
         )
+        short_group.pack_configure(pady=3)
 
     def _build_trailing_selector(
         self,
@@ -833,10 +846,10 @@ class BacktesterGUI:
             fg=self.TEXT_PRIMARY,
             font=("Segoe UI", 14, "normal"),
         )
-        label.pack(anchor="w", pady=(8, 6))
+        label.pack(anchor="w", pady=(6, 4))
 
         grid = tk.Frame(parent, bg=self.WINDOW_BG)
-        grid.pack(fill="x", pady=(0, 12))
+        grid.pack(fill="x", pady=(0, 8))
         for idx, ma_type in enumerate(MA_TYPES):
             var = tk.BooleanVar(value=(ma_type == default))
             vars_map[ma_type] = var
@@ -856,7 +869,7 @@ class BacktesterGUI:
             )
             row = idx // 4
             col = idx % 4
-            checkbox.grid(row=row, column=col, padx=12, pady=4, sticky="w")
+            checkbox.grid(row=row, column=col, padx=12, pady=3, sticky="w")
 
     def _exclusive_select(self, mapping: Dict[str, tk.BooleanVar], selected: str) -> None:
         for ma_type, var in mapping.items():
@@ -879,7 +892,7 @@ class BacktesterGUI:
             bg=self.VIEWPORT_BG,
             fg="#777777",
             font=("Segoe UI", 14, "italic"),
-            height=10,
+            height=7,
             width=60,
             relief="solid",
             bd=1,
@@ -893,13 +906,13 @@ class BacktesterGUI:
 
     def _build_action_bar(self, parent: tk.Widget) -> None:
         separator = tk.Frame(parent, bg=self.BORDER_SECONDARY, height=1)
-        separator.pack(fill="x", pady=(20, 0))
+        separator.pack(fill="x", pady=(16, 0))
         bar = tk.Frame(parent, bg=self.WINDOW_BG)
         bar.pack(fill="x")
         left = tk.Frame(bar, bg=self.WINDOW_BG)
-        left.pack(side="left", padx=10, pady=15)
+        left.pack(side="left", padx=10, pady=12)
         right = tk.Frame(bar, bg=self.WINDOW_BG)
-        right.pack(side="right", padx=10, pady=15)
+        right.pack(side="right", padx=10, pady=12)
 
         self._add_button(left, "Defaults", self._reset_defaults, secondary=True)
         self._add_button(right, "Cancel", self.root.destroy, secondary=True)
@@ -963,7 +976,7 @@ class BacktesterGUI:
         width: int = 10,
     ) -> None:
         group = tk.Frame(parent, bg=self.WINDOW_BG)
-        group.pack(fill="x", pady=(0, 12))
+        group.pack(fill="x", pady=(0, 10))
         label = tk.Label(
             group,
             text=label_text,
@@ -976,24 +989,27 @@ class BacktesterGUI:
         label.pack(side="left")
         entry = self._create_entry(group, width)
         entry.insert(0, default)
-        entry.pack(side="left", padx=(10, 0))
+        entry.pack(side="left", padx=(8, 0))
         self.entries[key] = entry
 
     def _create_param_group(
         self,
         parent: tk.Widget,
         params: Sequence[Tuple[str, str, str]],
-    ) -> None:
+        *,
+        use_pack: bool = True,
+    ) -> tk.Frame:
         frame = tk.Frame(
             parent,
             bg=self.VIEWPORT_BG,
             highlightbackground=self.BORDER_TERTIARY,
             highlightthickness=1,
             bd=0,
-            padx=12,
-            pady=8,
+            padx=10,
+            pady=6,
         )
-        frame.pack(fill="x", pady=6)
+        if use_pack:
+            frame.pack(fill="x", pady=6)
 
         for label_text, key, default in params:
             label = tk.Label(
@@ -1003,15 +1019,17 @@ class BacktesterGUI:
                 fg=self.TEXT_PRIMARY,
                 font=("Segoe UI", 13, "normal"),
             )
-            label.pack(side="left", padx=(0, 8))
+            label.pack(side="left", padx=(0, 6))
             entry = self._create_entry(frame, width=8)
             entry.insert(0, default)
-            entry.pack(side="left", padx=(0, 12))
+            entry.pack(side="left", padx=(0, 10))
             self.entries[key] = entry
+
+        return frame
 
     def _build_collapsible(self, parent: tk.Widget, title: str) -> tk.Frame:
         section = tk.Frame(parent, bg=self.WINDOW_BG)
-        section.pack(fill="x", pady=(0, 20))
+        section.pack(fill="x", pady=(0, 16))
 
         header = tk.Frame(section, bg=self.WINDOW_BG)
         header.pack(fill="x")
@@ -1029,7 +1047,7 @@ class BacktesterGUI:
         def toggle() -> None:
             state = toggle_var.get()
             if state:
-                content.pack(fill="x", pady=(12, 0))
+                content.pack(fill="x", pady=(10, 0))
                 button.configure(text="–")
             else:
                 content.forget()
@@ -1050,7 +1068,7 @@ class BacktesterGUI:
         button.pack(side="right")
 
         content = tk.Frame(section, bg=self.WINDOW_BG)
-        content.pack(fill="x", pady=(12, 0))
+        content.pack(fill="x", pady=(10, 0))
         section.toggle_var = toggle_var  # type: ignore[attr-defined]
         section.toggle_action = toggle  # type: ignore[attr-defined]
         section.toggle_button = button  # type: ignore[attr-defined]
