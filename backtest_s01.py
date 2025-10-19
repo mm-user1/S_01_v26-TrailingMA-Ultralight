@@ -525,6 +525,28 @@ class BacktesterGUI:
     BORDER_PRIMARY = "#999999"
     BORDER_SECONDARY = "#bbbbbb"
     BORDER_TERTIARY = "#cccccc"
+    SCALE_FACTOR = 0.92
+
+    def _scale(self, value: float) -> int:
+        if value == 0:
+            return 0
+        return max(1, int(round(value * self.SCALE_FACTOR)))
+
+    def _font(self, size: int, *, weight: str = "normal", slant: Optional[str] = None) -> Tuple:
+        scaled_size = max(1, int(round(size * self.SCALE_FACTOR)))
+        styles: List[str] = []
+        if weight != "normal":
+            styles.append(weight)
+        if slant:
+            styles.append(slant)
+        if styles:
+            return ("Segoe UI", scaled_size, " ".join(styles))
+        return ("Segoe UI", scaled_size)
+
+    def _pad(self, value):
+        if isinstance(value, tuple):
+            return tuple(self._scale(v) for v in value)
+        return self._scale(value)
 
     def __init__(self) -> None:
         if tk is None:
@@ -533,8 +555,8 @@ class BacktesterGUI:
         self.root = tk.Tk()
         self.root.title("TrailingMA Backtester")
         self.root.configure(bg=self.VIEWPORT_BG)
-        self.root.geometry("860x1000")
-        self.root.minsize(820, 880)
+        self.root.tk.call("tk", "scaling", self.SCALE_FACTOR)
+        self.root.minsize(self._scale(820), self._scale(880))
 
         self.params = default_parameters()
         self.data = load_data("OKX_LINKUSDT.P, 15 2025.02.01-2025.09.09.csv")
@@ -554,6 +576,10 @@ class BacktesterGUI:
         self.results_placeholder = "Нажмите 'Run' для запуска бэктеста..."
 
         self._build_window()
+        self.root.update_idletasks()
+        required_width = self.root.winfo_reqwidth()
+        required_height = self.root.winfo_reqheight()
+        self.root.geometry(f"{required_width}x{required_height}")
 
     def _build_window(self) -> None:
         window = tk.Frame(
@@ -566,19 +592,19 @@ class BacktesterGUI:
         )
         window.pack(fill="both", expand=True, padx=0, pady=0)
 
-        title_bar = tk.Frame(window, bg=self.TITLE_BG, height=38)
+        title_bar = tk.Frame(window, bg=self.TITLE_BG, height=self._scale(38))
         title_bar.pack(fill="x")
         title_label = tk.Label(
             title_bar,
             text="TrailingMA Backtester",
             bg=self.TITLE_BG,
             fg=self.TITLE_FG,
-            font=("Segoe UI", 15, "normal"),
+            font=self._font(15),
         )
-        title_label.pack(side="left", padx=(12, 0), pady=6)
+        title_label.pack(side="left", padx=self._pad((12, 0)), pady=self._scale(6))
 
         controls = tk.Frame(title_bar, bg=self.TITLE_BG)
-        controls.pack(side="right", padx=12, pady=6)
+        controls.pack(side="right", padx=self._pad(12), pady=self._scale(6))
         self._add_title_button(controls, "–", lambda: self.root.iconify())
         self._add_title_button(controls, "□", self._maximize_window)
         self._add_title_button(controls, "✕", self.root.destroy)
@@ -605,7 +631,7 @@ class BacktesterGUI:
         )
 
         container = tk.Frame(self.content, bg=self.WINDOW_BG)
-        container.pack(fill="both", expand=True, padx=20, pady=16)
+        container.pack(fill="both", expand=True, padx=self._pad(20), pady=self._pad(16))
 
         self._build_date_section(container)
         self._build_ma_section(container)
@@ -625,10 +651,10 @@ class BacktesterGUI:
             activebackground="#3a3a3a",
             activeforeground=self.TITLE_FG,
             bd=0,
-            font=("Segoe UI", 12, "normal"),
-            padx=8,
+            font=self._font(12),
+            padx=self._scale(8),
         )
-        button.pack(side="left", padx=4)
+        button.pack(side="left", padx=self._scale(4))
 
     def _maximize_window(self) -> None:
         try:
@@ -641,24 +667,24 @@ class BacktesterGUI:
 
     def _build_section(self, parent: tk.Widget, title: str) -> tk.Frame:
         section = tk.Frame(parent, bg=self.WINDOW_BG)
-        section.pack(fill="x", pady=(0, 16))
+        section.pack(fill="x", pady=self._pad((0, 16)))
         label = tk.Label(
             section,
             text=title.upper(),
             bg=self.WINDOW_BG,
             fg=self.TEXT_SECONDARY,
-            font=("Segoe UI", 12, "bold"),
+            font=self._font(12, weight="bold"),
         )
-        label.pack(fill="x", pady=(0, 8))
+        label.pack(fill="x", pady=self._pad((0, 8)))
         underline = tk.Frame(section, bg=self.BORDER_SECONDARY, height=1)
-        underline.pack(fill="x", pady=(0, 10))
+        underline.pack(fill="x", pady=self._pad((0, 10)))
         return section
 
     def _build_date_section(self, parent: tk.Widget) -> None:
         section = self._build_section(parent, "Date Filter")
 
         checkbox_row = tk.Frame(section, bg=self.WINDOW_BG)
-        checkbox_row.pack(fill="x", pady=(0, 10))
+        checkbox_row.pack(fill="x", pady=self._pad((0, 10)))
 
         self._add_checkbox(checkbox_row, "Date Filter", self.date_filter_var)
         self._add_checkbox(checkbox_row, "Backtester", self.backtester_var)
@@ -668,13 +694,13 @@ class BacktesterGUI:
 
     def _build_date_inputs(self, section: tk.Frame, label_text: str, date_var: tk.StringVar, time_var: tk.StringVar) -> None:
         group = tk.Frame(section, bg=self.WINDOW_BG)
-        group.pack(fill="x", pady=(0, 10))
+        group.pack(fill="x", pady=self._pad((0, 10)))
         label = tk.Label(
             group,
             text=label_text,
             bg=self.WINDOW_BG,
             fg=self.TEXT_PRIMARY,
-            font=("Segoe UI", 14, "normal"),
+            font=self._font(14),
             width=14,
             anchor="w",
         )
@@ -682,7 +708,7 @@ class BacktesterGUI:
 
         date_entry = self._create_entry(group, width=14)
         date_entry.configure(textvariable=date_var)
-        date_entry.pack(side="left", padx=(8, 6))
+        date_entry.pack(side="left", padx=self._pad((8, 6)))
 
         calendar_button = tk.Button(
             group,
@@ -692,15 +718,15 @@ class BacktesterGUI:
             activebackground="#bbbbbb",
             activeforeground=self.TEXT_PRIMARY,
             bd=0,
-            padx=8,
-            pady=4,
-            font=("Segoe UI", 12),
+            padx=self._scale(8),
+            pady=self._scale(4),
+            font=self._font(12),
         )
         calendar_button.pack(side="left")
 
         time_entry = self._create_entry(group, width=8)
         time_entry.configure(textvariable=time_var)
-        time_entry.pack(side="left", padx=(8, 0))
+        time_entry.pack(side="left", padx=self._pad((8, 0)))
 
     def _build_ma_section(self, parent: tk.Widget) -> None:
         section = self._build_section(parent, "MA Settings")
@@ -710,17 +736,17 @@ class BacktesterGUI:
             text="T MA Type",
             bg=self.WINDOW_BG,
             fg=self.TEXT_PRIMARY,
-            font=("Segoe UI", 14, "normal"),
+            font=self._font(14),
         )
-        label.pack(anchor="w", pady=(0, 8))
+        label.pack(anchor="w", pady=self._pad((0, 8)))
 
         ma_container = tk.Frame(section, bg=self.WINDOW_BG)
-        ma_container.pack(fill="x", pady=(0, 10))
+        ma_container.pack(fill="x", pady=self._pad((0, 10)))
 
         self._add_checkbox(ma_container, "ALL", self.all_ma_var, command=self._toggle_all_ma)
 
         grid = tk.Frame(section, bg=self.WINDOW_BG)
-        grid.pack(fill="x", pady=(4, 10))
+        grid.pack(fill="x", pady=self._pad((4, 10)))
 
         for idx, ma_type in enumerate(MA_TYPES):
             var = tk.BooleanVar(value=(ma_type == self.params.ma_type))
@@ -736,12 +762,12 @@ class BacktesterGUI:
                 activebackground=self.WINDOW_BG,
                 activeforeground=self.TEXT_PRIMARY,
                 highlightthickness=0,
-                font=("Segoe UI", 13, "normal"),
-                padx=6,
+                font=self._font(13),
+                padx=self._scale(6),
             )
             row = idx // 4
             col = idx % 4
-            checkbox.grid(row=row, column=col, padx=12, pady=3, sticky="w")
+            checkbox.grid(row=row, column=col, padx=self._scale(12), pady=self._scale(3), sticky="w")
 
         self._create_labeled_entry(section, "Length", "ma_length", str(self.params.ma_length))
         self._create_labeled_entry(section, "Close Count Long", "close_count_long", str(self.params.close_count_long))
@@ -777,8 +803,14 @@ class BacktesterGUI:
             frame = self._create_param_group(grid, params, use_pack=False)
             row = idx // 2
             column = idx % 2
-            padx = (0, 12) if column == 0 else (12, 0)
-            frame.grid(row=row, column=column, padx=padx, pady=5, sticky="nsew")
+            pad_tuple = (0, 12) if column == 0 else (12, 0)
+            frame.grid(
+                row=row,
+                column=column,
+                padx=self._pad(pad_tuple),
+                pady=self._scale(5),
+                sticky="nsew",
+            )
 
         grid.columnconfigure(0, weight=1)
         grid.columnconfigure(1, weight=1)
@@ -792,15 +824,15 @@ class BacktesterGUI:
                 ("Trail RR Long", "trail_rr_long", str(self.params.trail_rr_long)),
                 ("Trail RR Short", "trail_rr_short", str(self.params.trail_rr_short)),
             ),
-        ).pack_configure(pady=3)
+        ).pack_configure(pady=self._scale(3))
 
         selectors = tk.Frame(container, bg=self.WINDOW_BG)
-        selectors.pack(fill="x", pady=(4, 0))
+        selectors.pack(fill="x", pady=self._pad((4, 0)))
 
         long_column = tk.Frame(selectors, bg=self.WINDOW_BG)
-        long_column.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        long_column.pack(side="left", fill="both", expand=True, padx=self._pad((0, 8)))
         short_column = tk.Frame(selectors, bg=self.WINDOW_BG)
-        short_column.pack(side="left", fill="both", expand=True, padx=(8, 0))
+        short_column.pack(side="left", fill="both", expand=True, padx=self._pad((8, 0)))
 
         self._build_trailing_selector(
             long_column,
@@ -815,7 +847,7 @@ class BacktesterGUI:
                 ("Offset", "trail_ma_long_offset", str(self.params.trail_ma_long_offset)),
             ),
         )
-        long_group.pack_configure(pady=3)
+        long_group.pack_configure(pady=self._scale(3))
 
         self._build_trailing_selector(
             short_column,
@@ -830,7 +862,7 @@ class BacktesterGUI:
                 ("Offset", "trail_ma_short_offset", str(self.params.trail_ma_short_offset)),
             ),
         )
-        short_group.pack_configure(pady=3)
+        short_group.pack_configure(pady=self._scale(3))
 
     def _build_trailing_selector(
         self,
@@ -844,12 +876,12 @@ class BacktesterGUI:
             text=title,
             bg=self.WINDOW_BG,
             fg=self.TEXT_PRIMARY,
-            font=("Segoe UI", 14, "normal"),
+            font=self._font(14),
         )
-        label.pack(anchor="w", pady=(6, 4))
+        label.pack(anchor="w", pady=self._pad((6, 4)))
 
         grid = tk.Frame(parent, bg=self.WINDOW_BG)
-        grid.pack(fill="x", pady=(0, 8))
+        grid.pack(fill="x", pady=self._pad((0, 8)))
         for idx, ma_type in enumerate(MA_TYPES):
             var = tk.BooleanVar(value=(ma_type == default))
             vars_map[ma_type] = var
@@ -864,12 +896,12 @@ class BacktesterGUI:
                 activebackground=self.WINDOW_BG,
                 activeforeground=self.TEXT_PRIMARY,
                 highlightthickness=0,
-                font=("Segoe UI", 13, "normal"),
-                padx=6,
+                font=self._font(13),
+                padx=self._scale(6),
             )
             row = idx // 4
             col = idx % 4
-            checkbox.grid(row=row, column=col, padx=12, pady=3, sticky="w")
+            checkbox.grid(row=row, column=col, padx=self._scale(12), pady=self._scale(3), sticky="w")
 
     def _exclusive_select(self, mapping: Dict[str, tk.BooleanVar], selected: str) -> None:
         for ma_type, var in mapping.items():
@@ -891,7 +923,7 @@ class BacktesterGUI:
             results_frame,
             bg=self.VIEWPORT_BG,
             fg="#777777",
-            font=("Segoe UI", 14, "italic"),
+            font=self._font(14, slant="italic"),
             height=7,
             width=60,
             relief="solid",
@@ -902,17 +934,17 @@ class BacktesterGUI:
         )
         self.results_text.insert("1.0", self.results_placeholder)
         self.results_text.configure(state="disabled")
-        self.results_text.pack(fill="both", expand=True, pady=(0, 0))
+        self.results_text.pack(fill="both", expand=True, pady=self._pad((0, 0)))
 
     def _build_action_bar(self, parent: tk.Widget) -> None:
         separator = tk.Frame(parent, bg=self.BORDER_SECONDARY, height=1)
-        separator.pack(fill="x", pady=(16, 0))
+        separator.pack(fill="x", pady=self._pad((16, 0)))
         bar = tk.Frame(parent, bg=self.WINDOW_BG)
         bar.pack(fill="x")
         left = tk.Frame(bar, bg=self.WINDOW_BG)
-        left.pack(side="left", padx=10, pady=12)
+        left.pack(side="left", padx=self._pad(10), pady=self._pad(12))
         right = tk.Frame(bar, bg=self.WINDOW_BG)
-        right.pack(side="right", padx=10, pady=12)
+        right.pack(side="right", padx=self._pad(10), pady=self._pad(12))
 
         self._add_button(left, "Defaults", self._reset_defaults, secondary=True)
         self._add_button(right, "Cancel", self.root.destroy, secondary=True)
@@ -931,11 +963,11 @@ class BacktesterGUI:
             activebackground=hover,
             activeforeground=fg,
             bd=0,
-            padx=16,
-            pady=8,
-            font=("Segoe UI", 14, "normal"),
+            padx=self._scale(16),
+            pady=self._scale(8),
+            font=self._font(14),
         )
-        button.pack(side="left", padx=6)
+        button.pack(side="left", padx=self._scale(6))
 
     def _add_checkbox(self, parent: tk.Widget, text: str, variable: tk.BooleanVar, command=None) -> None:
         checkbox = tk.Checkbutton(
@@ -948,11 +980,11 @@ class BacktesterGUI:
             selectcolor=self.WINDOW_BG,
             activebackground=self.WINDOW_BG,
             activeforeground=self.TEXT_PRIMARY,
-            font=("Segoe UI", 14, "normal"),
+            font=self._font(14),
             highlightthickness=0,
-            padx=6,
+            padx=self._scale(6),
         )
-        checkbox.pack(side="left", padx=(0, 20))
+        checkbox.pack(side="left", padx=self._pad((0, 20)))
 
     def _create_entry(self, parent: tk.Widget, width: int = 10) -> tk.Entry:
         entry = tk.Entry(
@@ -962,7 +994,7 @@ class BacktesterGUI:
             relief="solid",
             bd=1,
             highlightthickness=0,
-            font=("Segoe UI", 14, "normal"),
+            font=self._font(14),
             width=width,
         )
         return entry
@@ -976,20 +1008,20 @@ class BacktesterGUI:
         width: int = 10,
     ) -> None:
         group = tk.Frame(parent, bg=self.WINDOW_BG)
-        group.pack(fill="x", pady=(0, 10))
+        group.pack(fill="x", pady=self._pad((0, 10)))
         label = tk.Label(
             group,
             text=label_text,
             bg=self.WINDOW_BG,
             fg=self.TEXT_PRIMARY,
-            font=("Segoe UI", 14, "normal"),
+            font=self._font(14),
             width=18,
             anchor="w",
         )
         label.pack(side="left")
         entry = self._create_entry(group, width)
         entry.insert(0, default)
-        entry.pack(side="left", padx=(8, 0))
+        entry.pack(side="left", padx=self._pad((8, 0)))
         self.entries[key] = entry
 
     def _create_param_group(
@@ -1005,11 +1037,11 @@ class BacktesterGUI:
             highlightbackground=self.BORDER_TERTIARY,
             highlightthickness=1,
             bd=0,
-            padx=10,
-            pady=6,
+            padx=self._scale(10),
+            pady=self._scale(6),
         )
         if use_pack:
-            frame.pack(fill="x", pady=6)
+            frame.pack(fill="x", pady=self._scale(6))
 
         for label_text, key, default in params:
             label = tk.Label(
@@ -1017,19 +1049,19 @@ class BacktesterGUI:
                 text=label_text,
                 bg=self.VIEWPORT_BG,
                 fg=self.TEXT_PRIMARY,
-                font=("Segoe UI", 13, "normal"),
+                font=self._font(13),
             )
-            label.pack(side="left", padx=(0, 6))
+            label.pack(side="left", padx=self._pad((0, 6)))
             entry = self._create_entry(frame, width=8)
             entry.insert(0, default)
-            entry.pack(side="left", padx=(0, 10))
+            entry.pack(side="left", padx=self._pad((0, 10)))
             self.entries[key] = entry
 
         return frame
 
     def _build_collapsible(self, parent: tk.Widget, title: str) -> tk.Frame:
         section = tk.Frame(parent, bg=self.WINDOW_BG)
-        section.pack(fill="x", pady=(0, 16))
+        section.pack(fill="x", pady=self._pad((0, 16)))
 
         header = tk.Frame(section, bg=self.WINDOW_BG)
         header.pack(fill="x")
@@ -1038,7 +1070,7 @@ class BacktesterGUI:
             text=title.upper(),
             bg=self.WINDOW_BG,
             fg=self.TEXT_SECONDARY,
-            font=("Segoe UI", 12, "bold"),
+            font=self._font(12, weight="bold"),
         )
         label.pack(side="left")
 
@@ -1047,7 +1079,7 @@ class BacktesterGUI:
         def toggle() -> None:
             state = toggle_var.get()
             if state:
-                content.pack(fill="x", pady=(10, 0))
+                content.pack(fill="x", pady=self._pad((10, 0)))
                 button.configure(text="–")
             else:
                 content.forget()
@@ -1063,12 +1095,12 @@ class BacktesterGUI:
             activeforeground=self.TEXT_PRIMARY,
             bd=0,
             width=3,
-            font=("Segoe UI", 12, "bold"),
+            font=self._font(12, weight="bold"),
         )
         button.pack(side="right")
 
         content = tk.Frame(section, bg=self.WINDOW_BG)
-        content.pack(fill="x", pady=(10, 0))
+        content.pack(fill="x", pady=self._pad((10, 0)))
         section.toggle_var = toggle_var  # type: ignore[attr-defined]
         section.toggle_action = toggle  # type: ignore[attr-defined]
         section.toggle_button = button  # type: ignore[attr-defined]
@@ -1144,9 +1176,9 @@ class BacktesterGUI:
         self.results_text.delete("1.0", tk.END)
         self.results_text.insert("1.0", text)
         if placeholder:
-            self.results_text.configure(fg="#777777", font=("Segoe UI", 14, "italic"))
+            self.results_text.configure(fg="#777777", font=self._font(14, slant="italic"))
         else:
-            self.results_text.configure(fg=self.TEXT_PRIMARY, font=("Segoe UI", 14, "normal"))
+            self.results_text.configure(fg=self.TEXT_PRIMARY, font=self._font(14))
         self.results_text.configure(state="disabled")
 
     def _on_run(self) -> None:
