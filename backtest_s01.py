@@ -467,13 +467,21 @@ def add_section_title(text: str) -> None:
     dpg.add_spacing(count=2)
 
 
+def add_label(text: str, width: int = 120) -> None:
+    """Render a label followed by spacer to emulate a fixed width."""
+    dpg.add_text(text)
+    approx_remaining = max(width - len(text) * 7, 0)
+    if approx_remaining:
+        dpg.add_spacer(width=approx_remaining)
+
+
 def add_datetime_input(label: str,
                        default_date: str,
                        default_time: str,
                        date_tag: str,
                        time_tag: str) -> None:
     with dpg.group(horizontal=True):
-        dpg.add_text(f"{label}:", width=120)
+        add_label(f"{label}:")
         dpg.add_input_text(width=150, default_value=default_date, tag=date_tag)
         dpg.add_spacer(width=10)
         dpg.add_input_text(width=80, default_value=default_time, tag=time_tag)
@@ -679,7 +687,7 @@ def build_gui(df: pd.DataFrame) -> None:
             dpg.add_spacing(count=2)
 
             with dpg.group(horizontal=True):
-                dpg.add_text("Length:", width=120)
+                add_label("Length:")
                 dpg.add_input_int(width=100,
                                   default_value=DEFAULT_MA_LENGTH,
                                   tag="ma_length",
@@ -687,35 +695,35 @@ def build_gui(df: pd.DataFrame) -> None:
                                   min_clamped=True)
 
             with dpg.group(horizontal=True):
-                dpg.add_text("Close Count Long:", width=120)
+                add_label("Close Count Long:")
                 dpg.add_input_int(width=100, default_value=7, enabled=False)
-                dpg.add_text("Close Count Short:")
+                add_label("Close Count Short:")
                 dpg.add_input_int(width=100, default_value=5, enabled=False)
             dpg.add_spacing(count=3)
 
         with dpg.collapsing_header(label="STOPS AND FILTERS", default_open=True):
             with dpg.group(horizontal=True):
-                dpg.add_text("ATR Period:", width=120)
+                add_label("ATR Period:")
                 dpg.add_input_int(width=100, default_value=14, enabled=False)
-                dpg.add_text("Stop RR:")
+                add_label("Stop RR:")
                 dpg.add_input_float(width=100, default_value=2.0, enabled=False)
 
         with dpg.collapsing_header(label="TRAILING STOPS", default_open=True):
             with dpg.group(horizontal=True):
-                dpg.add_text("Trail RR:", width=120)
+                add_label("Trail RR:")
                 dpg.add_input_float(width=100, default_value=1.0, enabled=False)
-                dpg.add_text("Trail Offset:")
+                add_label("Trail Offset:")
                 dpg.add_input_float(width=100, default_value=1.0, enabled=False)
 
         with dpg.group():
             dpg.add_spacing(count=2)
             with dpg.group(horizontal=True):
-                dpg.add_text("Risk Per Trade:", width=120)
+                add_label("Risk Per Trade:")
                 dpg.add_input_float(width=100,
                                     default_value=DEFAULT_RISK_PER_TRADE,
                                     step=0.01,
                                     tag="risk_per_trade")
-                dpg.add_text("Contract Size:")
+                add_label("Contract Size:")
                 dpg.add_input_float(width=100,
                                     default_value=DEFAULT_CONTRACT_SIZE,
                                     step=0.01,
