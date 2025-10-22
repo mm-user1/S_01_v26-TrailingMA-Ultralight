@@ -1,0 +1,1404 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>S_01 TrailingMA — Backtester и Optimizer</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      background: #e8e8e8;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      color: #2a2a2a;
+    }
+
+    .pane {
+      background: #f5f5f5;
+      border: 1px solid #bbbbbb;
+      border-radius: 6px;
+      margin: 12px;
+    }
+
+    .pane header {
+      background: #4a4a4a;
+      color: #ffffff;
+      font-size: 14px;
+      padding: 8px 10px;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      padding: 12px;
+    }
+
+    @media (max-width: 980px) {
+      .split {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .frame {
+      background: #e8e8e8;
+      border: 1px solid #bbbbbb;
+      border-radius: 6px;
+      padding: 20px;
+    }
+
+    .window {
+      background: #f5f5f5;
+      border: 1px solid #999999;
+      border-radius: 4px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+      width: 100%;
+    }
+
+    .backtester-window {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    .optimizer-window {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .title-bar {
+      background: #4a4a4a;
+      color: #ffffff;
+      padding: 8px 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-radius: 4px 4px 0 0;
+    }
+
+    .title-bar h2 {
+      font-size: 15px;
+      font-weight: 500;
+    }
+
+    .window-controls {
+      display: flex;
+      gap: 8px;
+    }
+
+    .window-controls button {
+      background: none;
+      border: none;
+      color: #ffffff;
+      cursor: pointer;
+      padding: 4px 8px;
+      font-size: 16px;
+    }
+
+    .window .content {
+      padding: 20px;
+    }
+
+    .optimizer-window .content {
+      display: flex;
+      gap: 20px;
+    }
+
+    .left-panel {
+      flex: 0 0 48%;
+    }
+
+    .right-panel {
+      flex: 0 0 48%;
+      border-left: 2px solid #bbbbbb;
+      padding-left: 20px;
+    }
+
+    .section {
+      margin-bottom: 20px;
+    }
+
+    .section-title {
+      color: #3a3a3a;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #bbbbbb;
+    }
+
+    .form-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .form-group.vertical {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 6px;
+    }
+
+    .form-group.with-ma {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+    }
+
+    label {
+      color: #2a2a2a;
+      font-size: 14px;
+      min-width: 120px;
+    }
+
+    .opt-label {
+      min-width: 150px;
+      font-size: 13px;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select {
+      background: #ffffff;
+      border: 1px solid #999999;
+      color: #2a2a2a;
+      padding: 6px 10px;
+      border-radius: 3px;
+      font-size: 14px;
+      width: 100px;
+    }
+
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    select:focus {
+      outline: none;
+      border-color: #5a5a5a;
+      box-shadow: 0 0 0 2px rgba(90, 90, 90, 0.2);
+    }
+
+    input[type="file"] {
+      font-size: 13px;
+    }
+
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+    }
+
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .date-input {
+      width: 150px;
+    }
+
+    .small-input {
+      width: 80px !important;
+    }
+
+    .tiny-input {
+      width: 60px !important;
+    }
+
+    .calendar-btn {
+      padding: 6px 10px;
+      background: #dddddd;
+      border: 1px solid #999999;
+      color: #2a2a2a;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .calendar-btn:hover {
+      background: #cccccc;
+    }
+
+    .inline-group {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .param-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #e8e8e8;
+      border-radius: 3px;
+      margin-bottom: 8px;
+      border: 1px solid #cccccc;
+    }
+
+    .param-group label {
+      min-width: auto;
+      font-size: 13px;
+    }
+
+    .param-group input {
+      width: 70px;
+    }
+
+    .collapsible {
+      background: #e8e8e8;
+      border-radius: 3px;
+      margin-bottom: 10px;
+      border: 1px solid #bbbbbb;
+    }
+
+    .collapsible-header {
+      padding: 10px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .collapsible-header:hover {
+      background: #dddddd;
+    }
+
+    .collapsible-icon {
+      font-size: 10px;
+      color: #5a5a5a;
+      transition: transform 0.2s ease;
+    }
+
+    .collapsible.open .collapsible-icon {
+      transform: rotate(180deg);
+    }
+
+    .collapsible-content {
+      padding: 10px;
+      border-top: 1px solid #bbbbbb;
+      background: #f5f5f5;
+      display: none;
+    }
+
+    .collapsible.open .collapsible-content {
+      display: block;
+    }
+
+    .ma-selector {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      background: #ffffff;
+      border: 1px solid #999999;
+      padding: 8px;
+      border-radius: 3px;
+    }
+
+    .ma-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .ma-option {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 80px;
+    }
+
+    .ma-option input[type="checkbox"] {
+      width: 14px;
+      height: 14px;
+    }
+
+    .ma-option label {
+      font-size: 13px;
+      min-width: auto;
+      cursor: pointer;
+    }
+
+    .results-area {
+      background: #e8e8e8;
+      border: 1px solid #999999;
+      border-radius: 3px;
+      min-height: 200px;
+      padding: 15px;
+      color: #777777;
+      font-style: italic;
+      font-size: 14px;
+      white-space: pre-wrap;
+    }
+
+    .results-area.ready {
+      color: #2a2a2a;
+      font-style: normal;
+    }
+
+    .results-area.loading {
+      color: #777777;
+    }
+
+    .button-group {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 20px;
+      padding-top: 15px;
+      border-top: 1px solid #bbbbbb;
+    }
+
+    button {
+      background: #4a4a4a;
+      color: #ffffff;
+      border: none;
+      padding: 8px 20px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.2s ease;
+    }
+
+    button:hover {
+      background: #3a3a3a;
+    }
+
+    button.secondary {
+      background: #cccccc;
+      color: #2a2a2a;
+    }
+
+    button.secondary:hover {
+      background: #bbbbbb;
+    }
+
+    .error {
+      color: #b33434;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+
+    .opt-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      padding: 6px 8px;
+      background: #ffffff;
+      border-radius: 3px;
+      border: 1px solid #cccccc;
+    }
+
+    .opt-row input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+    }
+
+    .opt-controls {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      margin-left: auto;
+    }
+
+    .opt-controls label {
+      font-size: 11px;
+      min-width: auto;
+      color: #5a5a5a;
+    }
+
+    .opt-controls input {
+      width: 55px;
+      padding: 4px 6px;
+      font-size: 12px;
+    }
+
+    .opt-section {
+      background: #e8e8e8;
+      padding: 12px;
+      border-radius: 3px;
+      margin-bottom: 15px;
+      border: 1px solid #bbbbbb;
+    }
+
+    .opt-section-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: #5a5a5a;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      letter-spacing: 0.5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="pane">
+    <header>S_01 TrailingMA — Backtester (слева) + Optimizer (справа, без Date Filter)</header>
+    <div class="split">
+      <div class="frame">
+        <div class="window backtester-window">
+          <div class="title-bar">
+            <h2>S_01 TrailingMA Backtester</h2>
+            <div class="window-controls">
+              <button type="button">−</button>
+              <button type="button">□</button>
+              <button type="button">×</button>
+            </div>
+          </div>
+          <div class="content">
+            <form id="backtestForm">
+              <div class="section">
+                <div class="form-group">
+                  <div class="checkbox-group">
+                    <input type="checkbox" id="dateFilter" />
+                    <label for="dateFilter">Date Filter</label>
+                  </div>
+                  <div class="checkbox-group">
+                    <input type="checkbox" id="backtester" />
+                    <label for="backtester">Backtester</label>
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label for="startDate">Start Date</label>
+                  <input type="text" id="startDate" class="date-input" autocomplete="off" />
+                  <button type="button" class="calendar-btn" tabindex="-1">📅</button>
+                  <input type="text" id="startTime" class="small-input" autocomplete="off" />
+                </div>
+
+                <div class="form-group">
+                  <label for="endDate">End Date</label>
+                  <input type="text" id="endDate" class="date-input" autocomplete="off" />
+                  <button type="button" class="calendar-btn" tabindex="-1">📅</button>
+                  <input type="text" id="endTime" class="small-input" autocomplete="off" />
+                </div>
+
+                <div class="form-group vertical">
+                  <label for="csvFile">CSV файл (OHLCV)</label>
+                  <input type="file" id="csvFile" accept=".csv" />
+                </div>
+              </div>
+
+              <div class="section">
+                <div class="form-group with-ma">
+                  <label>T MA Type</label>
+                  <div class="ma-selector" data-group="trend">
+                    <div class="ma-row">
+                      <div class="ma-option">
+                        <input type="checkbox" id="trend-all" data-group="trend" data-type="ALL" />
+                        <label for="trend-all">ALL</label>
+                      </div>
+                      <div class="ma-option">
+                        <input type="checkbox" id="trend-ema" data-group="trend" data-type="EMA" />
+                        <label for="trend-ema">EMA</label>
+                      </div>
+                      <div class="ma-option">
+                        <input type="checkbox" id="trend-sma" data-group="trend" data-type="SMA" />
+                        <label for="trend-sma">SMA</label>
+                      </div>
+                      <div class="ma-option">
+                        <input type="checkbox" id="trend-hma" data-group="trend" data-type="HMA" />
+                        <label for="trend-hma">HMA</label>
+                      </div>
+                      <div class="ma-option">
+                        <input type="checkbox" id="trend-wma" data-group="trend" data-type="WMA" />
+                        <label for="trend-wma">WMA</label>
+                      </div>
+                      <div class="ma-option">
+                        <input type="checkbox" id="trend-alma" data-group="trend" data-type="ALMA" />
+                        <label for="trend-alma">ALMA</label>
+                      </div>
+                    </div>
+                    <div class="ma-row">
+                      <div class="ma-option">
+                        <input type="checkbox" id="trend-kama" data-group="trend" data-type="KAMA" />
+                        <label for="trend-kama">KAMA</label>
+                      </div>
+                      <div class="ma-option">
+                        <input type="checkbox" id="trend-tma" data-group="trend" data-type="TMA" />
+                        <label for="trend-tma">TMA</label>
+                      </div>
+                      <div class="ma-option">
+                        <input type="checkbox" id="trend-t3" data-group="trend" data-type="T3" />
+                        <label for="trend-t3">T3</label>
+                      </div>
+                      <div class="ma-option">
+                        <input type="checkbox" id="trend-dema" data-group="trend" data-type="DEMA" />
+                        <label for="trend-dema">DEMA</label>
+                      </div>
+                      <div class="ma-option">
+                        <input type="checkbox" id="trend-vwma" data-group="trend" data-type="VWMA" />
+                        <label for="trend-vwma">VWMA</label>
+                      </div>
+                      <div class="ma-option">
+                        <input type="checkbox" id="trend-vwap" data-group="trend" data-type="VWAP" />
+                        <label for="trend-vwap">VWAP</label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label for="maLength">Length</label>
+                  <input type="number" id="maLength" min="0" />
+                </div>
+
+                <div class="form-group">
+                  <label for="closeCountLong">Close Count Long</label>
+                  <input type="number" id="closeCountLong" min="0" />
+                  <label for="closeCountShort">Close Count Short</label>
+                  <input type="number" id="closeCountShort" min="0" />
+                </div>
+              </div>
+
+              <div class="collapsible open">
+                <div class="collapsible-header">
+                  <span class="collapsible-icon">▼</span>
+                  <span class="section-title" style="margin: 0; border: none;">STOPS AND FILTERS</span>
+                </div>
+                <div class="collapsible-content">
+                  <div class="param-group">
+                    <label for="stopLongX">Stop Long X</label>
+                    <input type="number" id="stopLongX" step="0.1" min="0" />
+                    <label for="stopLongRR">RR</label>
+                    <input type="number" id="stopLongRR" step="0.1" min="0" />
+                    <label for="stopLongLP">LP</label>
+                    <input type="number" id="stopLongLP" min="1" />
+                  </div>
+
+                  <div class="param-group">
+                    <label for="stopShortX">Stop Short X</label>
+                    <input type="number" id="stopShortX" step="0.1" min="0" />
+                    <label for="stopShortRR">RR</label>
+                    <input type="number" id="stopShortRR" step="0.1" min="0" />
+                    <label for="stopShortLP">LP</label>
+                    <input type="number" id="stopShortLP" min="1" />
+                  </div>
+
+                  <div class="param-group">
+                    <label for="stopLongMaxPct">L Stop Max %</label>
+                    <input type="number" id="stopLongMaxPct" step="0.1" min="0" />
+                    <label for="stopShortMaxPct">S Stop Max %</label>
+                    <input type="number" id="stopShortMaxPct" step="0.1" min="0" />
+                  </div>
+
+                  <div class="param-group">
+                    <label for="stopLongMaxDays">L Stop Max D</label>
+                    <input type="number" id="stopLongMaxDays" min="0" />
+                    <label for="stopShortMaxDays">S Stop Max D</label>
+                    <input type="number" id="stopShortMaxDays" min="0" />
+                  </div>
+                </div>
+              </div>
+
+              <div class="collapsible open">
+                <div class="collapsible-header">
+                  <span class="collapsible-icon">▼</span>
+                  <span class="section-title" style="margin: 0; border: none;">TRAILING STOPS</span>
+                </div>
+                <div class="collapsible-content">
+                  <div class="param-group">
+                    <label for="trailRRLong">Trail RR Long</label>
+                    <input type="number" id="trailRRLong" step="0.1" min="0" />
+                    <label for="trailRRShort">Trail RR Short</label>
+                    <input type="number" id="trailRRShort" step="0.1" min="0" />
+                  </div>
+
+                  <div class="param-group" style="flex-direction: column; align-items: flex-start;">
+                    <label>Trail MA Long</label>
+                    <div class="ma-selector" data-group="trailLong">
+                      <div class="ma-row">
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailLong-all" data-group="trailLong" data-type="ALL" />
+                          <label for="trailLong-all">ALL</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailLong-ema" data-group="trailLong" data-type="EMA" />
+                          <label for="trailLong-ema">EMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailLong-sma" data-group="trailLong" data-type="SMA" />
+                          <label for="trailLong-sma">SMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailLong-hma" data-group="trailLong" data-type="HMA" />
+                          <label for="trailLong-hma">HMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailLong-wma" data-group="trailLong" data-type="WMA" />
+                          <label for="trailLong-wma">WMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailLong-alma" data-group="trailLong" data-type="ALMA" />
+                          <label for="trailLong-alma">ALMA</label>
+                        </div>
+                      </div>
+                      <div class="ma-row">
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailLong-kama" data-group="trailLong" data-type="KAMA" />
+                          <label for="trailLong-kama">KAMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailLong-tma" data-group="trailLong" data-type="TMA" />
+                          <label for="trailLong-tma">TMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailLong-t3" data-group="trailLong" data-type="T3" />
+                          <label for="trailLong-t3">T3</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailLong-dema" data-group="trailLong" data-type="DEMA" />
+                          <label for="trailLong-dema">DEMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailLong-vwma" data-group="trailLong" data-type="VWMA" />
+                          <label for="trailLong-vwma">VWMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailLong-vwap" data-group="trailLong" data-type="VWAP" />
+                          <label for="trailLong-vwap">VWAP</label>
+                        </div>
+                      </div>
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center;">
+                      <label for="trailLongLength">Length</label>
+                      <input type="number" id="trailLongLength" min="0" />
+                      <label for="trailLongOffset">Offset</label>
+                      <input type="number" id="trailLongOffset" step="0.1" />
+                    </div>
+                  </div>
+
+                  <div class="param-group" style="flex-direction: column; align-items: flex-start;">
+                    <label>Trail MA Short</label>
+                    <div class="ma-selector" data-group="trailShort">
+                      <div class="ma-row">
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailShort-all" data-group="trailShort" data-type="ALL" />
+                          <label for="trailShort-all">ALL</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailShort-ema" data-group="trailShort" data-type="EMA" />
+                          <label for="trailShort-ema">EMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailShort-sma" data-group="trailShort" data-type="SMA" />
+                          <label for="trailShort-sma">SMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailShort-hma" data-group="trailShort" data-type="HMA" />
+                          <label for="trailShort-hma">HMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailShort-wma" data-group="trailShort" data-type="WMA" />
+                          <label for="trailShort-wma">WMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailShort-alma" data-group="trailShort" data-type="ALMA" />
+                          <label for="trailShort-alma">ALMA</label>
+                        </div>
+                      </div>
+                      <div class="ma-row">
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailShort-kama" data-group="trailShort" data-type="KAMA" />
+                          <label for="trailShort-kama">KAMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailShort-tma" data-group="trailShort" data-type="TMA" />
+                          <label for="trailShort-tma">TMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailShort-t3" data-group="trailShort" data-type="T3" />
+                          <label for="trailShort-t3">T3</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailShort-dema" data-group="trailShort" data-type="DEMA" />
+                          <label for="trailShort-dema">DEMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailShort-vwma" data-group="trailShort" data-type="VWMA" />
+                          <label for="trailShort-vwma">VWMA</label>
+                        </div>
+                        <div class="ma-option">
+                          <input type="checkbox" id="trailShort-vwap" data-group="trailShort" data-type="VWAP" />
+                          <label for="trailShort-vwap">VWAP</label>
+                        </div>
+                      </div>
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center;">
+                      <label for="trailShortLength">Length</label>
+                      <input type="number" id="trailShortLength" min="0" />
+                      <label for="trailShortOffset">Offset</label>
+                      <input type="number" id="trailShortOffset" step="0.1" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="section">
+                <div class="form-group">
+                  <label for="riskPerTrade">Risk Per Trade</label>
+                  <input type="number" id="riskPerTrade" step="0.01" min="0" />
+                  <label for="contractSize">Contract Size</label>
+                  <input type="number" id="contractSize" step="0.01" min="0" />
+                </div>
+              </div>
+
+              <div class="section">
+                <div class="section-title">Results</div>
+                <div id="results" class="results-area">Нажмите «Run» для запуска бэктеста…</div>
+                <div id="error" class="error" role="alert" style="display:none;"></div>
+              </div>
+
+              <div class="button-group">
+                <button type="button" class="secondary" id="defaultsBtn">Defaults</button>
+                <div style="display: flex; gap: 10px;">
+                  <button type="button" class="secondary" id="cancelBtn">Cancel</button>
+                  <button type="submit" id="runBtn">Run</button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="window optimizer-window">
+          <div class="title-bar">
+            <h2>S_01 TrailingMA Backtester with Parameter Optimizer</h2>
+            <div class="window-controls">
+              <button type="button">−</button>
+              <button type="button">□</button>
+              <button type="button">×</button>
+            </div>
+          </div>
+          <div class="content">
+            <div class="left-panel">
+              <form id="optimizerForm">
+                <div class="section">
+                  <div class="opt-section">
+                    <div class="opt-section-title">T MA</div>
+                    <div class="opt-row">
+                      <input id="opt-maLength" type="checkbox" checked />
+                      <label class="opt-label" for="opt-maLength">T MA Length</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-maLength-from" min="0" type="number" value="25" step="1" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-maLength-to" min="0" type="number" value="500" step="1" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-maLength-step" min="1" type="number" value="1" step="1" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="opt-section">
+                    <div class="opt-section-title">Close Count</div>
+                    <div class="opt-row">
+                      <input id="opt-closeCountLong" type="checkbox" checked />
+                      <label class="opt-label" for="opt-closeCountLong">Close Count Long</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-closeCountLong-from" min="0" type="number" value="2" step="1" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-closeCountLong-to" min="0" type="number" value="10" step="1" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-closeCountLong-step" min="1" type="number" value="1" step="1" />
+                      </div>
+                    </div>
+                    <div class="opt-row">
+                      <input id="opt-closeCountShort" type="checkbox" checked />
+                      <label class="opt-label" for="opt-closeCountShort">Close Count Short</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-closeCountShort-from" min="0" type="number" value="2" step="1" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-closeCountShort-to" min="0" type="number" value="10" step="1" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-closeCountShort-step" min="1" type="number" value="1" step="1" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="opt-section">
+                    <div class="opt-section-title">Stop Long</div>
+                    <div class="opt-row">
+                      <input id="opt-stopLongX" type="checkbox" checked />
+                      <label class="opt-label" for="opt-stopLongX">Stop Long X</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-stopLongX-from" step="0.1" type="number" value="1.0" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-stopLongX-to" step="0.1" type="number" value="3.0" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-stopLongX-step" step="0.1" type="number" value="0.1" />
+                      </div>
+                    </div>
+                    <div class="opt-row">
+                      <input id="opt-stopLongRR" type="checkbox" checked />
+                      <label class="opt-label" for="opt-stopLongRR">Stop Long RR</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-stopLongRR-from" step="0.1" type="number" value="2.0" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-stopLongRR-to" step="0.1" type="number" value="4.0" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-stopLongRR-step" step="0.1" type="number" value="0.2" />
+                      </div>
+                    </div>
+                    <div class="opt-row">
+                      <input id="opt-stopLongLP" type="checkbox" checked />
+                      <label class="opt-label" for="opt-stopLongLP">Stop Long LP</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-stopLongLP-from" min="0" type="number" value="2" step="1" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-stopLongLP-to" min="0" type="number" value="6" step="1" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-stopLongLP-step" min="1" type="number" value="1" step="1" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="opt-section">
+                    <div class="opt-section-title">Stop Short</div>
+                    <div class="opt-row">
+                      <input id="opt-stopShortX" type="checkbox" checked />
+                      <label class="opt-label" for="opt-stopShortX">Stop Short X</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-stopShortX-from" step="0.1" type="number" value="1.0" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-stopShortX-to" step="0.1" type="number" value="3.0" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-stopShortX-step" step="0.1" type="number" value="0.1" />
+                      </div>
+                    </div>
+                    <div class="opt-row">
+                      <input id="opt-stopShortRR" type="checkbox" checked />
+                      <label class="opt-label" for="opt-stopShortRR">Stop Short RR</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-stopShortRR-from" step="0.1" type="number" value="2.0" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-stopShortRR-to" step="0.1" type="number" value="4.0" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-stopShortRR-step" step="0.1" type="number" value="0.2" />
+                      </div>
+                    </div>
+                    <div class="opt-row">
+                      <input id="opt-stopShortLP" type="checkbox" checked />
+                      <label class="opt-label" for="opt-stopShortLP">Stop Short LP</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-stopShortLP-from" min="0" type="number" value="2" step="1" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-stopShortLP-to" min="0" type="number" value="6" step="1" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-stopShortLP-step" min="1" type="number" value="1" step="1" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="opt-section">
+                    <div class="opt-section-title">Stop Max %</div>
+                    <div class="opt-row">
+                      <input id="opt-stopLongMaxPct" type="checkbox" checked />
+                      <label class="opt-label" for="opt-stopLongMaxPct">L Stop Max %</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-stopLongMaxPct-from" step="0.1" type="number" value="3.0" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-stopLongMaxPct-to" step="0.1" type="number" value="10.0" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-stopLongMaxPct-step" step="0.1" type="number" value="1.0" />
+                      </div>
+                    </div>
+                    <div class="opt-row">
+                      <input id="opt-stopShortMaxPct" type="checkbox" checked />
+                      <label class="opt-label" for="opt-stopShortMaxPct">S Stop Max %</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-stopShortMaxPct-from" step="0.1" type="number" value="3.0" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-stopShortMaxPct-to" step="0.1" type="number" value="10.0" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-stopShortMaxPct-step" step="0.1" type="number" value="1.0" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="opt-section">
+                    <div class="opt-section-title">Stop Max Days</div>
+                    <div class="opt-row">
+                      <input id="opt-stopLongMaxDays" type="checkbox" checked />
+                      <label class="opt-label" for="opt-stopLongMaxDays">L Stop Max D</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-stopLongMaxDays-from" min="0" type="number" value="2" step="1" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-stopLongMaxDays-to" min="0" type="number" value="7" step="1" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-stopLongMaxDays-step" min="1" type="number" value="1" step="1" />
+                      </div>
+                    </div>
+                    <div class="opt-row">
+                      <input id="opt-stopShortMaxDays" type="checkbox" checked />
+                      <label class="opt-label" for="opt-stopShortMaxDays">S Stop Max D</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-stopShortMaxDays-from" min="0" type="number" value="2" step="1" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-stopShortMaxDays-to" min="0" type="number" value="7" step="1" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-stopShortMaxDays-step" min="1" type="number" value="1" step="1" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="opt-section">
+                    <div class="opt-section-title">Trailing RR</div>
+                    <div class="opt-row">
+                      <input id="opt-trailRRLong" type="checkbox" checked />
+                      <label class="opt-label" for="opt-trailRRLong">Trail RR Long</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-trailRRLong-from" step="0.1" type="number" value="0.5" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-trailRRLong-to" step="0.1" type="number" value="2.0" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-trailRRLong-step" step="0.1" type="number" value="0.2" />
+                      </div>
+                    </div>
+                    <div class="opt-row">
+                      <input id="opt-trailRRShort" type="checkbox" checked />
+                      <label class="opt-label" for="opt-trailRRShort">Trail RR Short</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-trailRRShort-from" step="0.1" type="number" value="0.5" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-trailRRShort-to" step="0.1" type="number" value="2.0" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-trailRRShort-step" step="0.1" type="number" value="0.2" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="opt-section">
+                    <div class="opt-section-title">Trail MA Long</div>
+                    <div class="opt-row">
+                      <input id="opt-trailLongLength" type="checkbox" checked />
+                      <label class="opt-label" for="opt-trailLongLength">Length</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-trailLongLength-from" min="0" type="number" value="25" step="5" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-trailLongLength-to" min="0" type="number" value="200" step="5" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-trailLongLength-step" min="1" type="number" value="5" step="5" />
+                      </div>
+                    </div>
+                    <div class="opt-row">
+                      <input id="opt-trailLongOffset" type="checkbox" checked />
+                      <label class="opt-label" for="opt-trailLongOffset">Offset</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-trailLongOffset-from" step="0.1" type="number" value="0.0" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-trailLongOffset-to" step="0.1" type="number" value="-3.0" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-trailLongOffset-step" step="0.1" type="number" value="0.5" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="opt-section">
+                    <div class="opt-section-title">Trail MA Short</div>
+                    <div class="opt-row">
+                      <input id="opt-trailShortLength" type="checkbox" checked />
+                      <label class="opt-label" for="opt-trailShortLength">Length</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-trailShortLength-from" min="0" type="number" value="25" step="5" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-trailShortLength-to" min="0" type="number" value="200" step="5" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-trailShortLength-step" min="1" type="number" value="5" step="5" />
+                      </div>
+                    </div>
+                    <div class="opt-row">
+                      <input id="opt-trailShortOffset" type="checkbox" checked />
+                      <label class="opt-label" for="opt-trailShortOffset">Offset</label>
+                      <div class="opt-controls">
+                        <label>From:</label>
+                        <input class="tiny-input" id="opt-trailShortOffset-from" step="0.1" type="number" value="0.0" />
+                        <label>To:</label>
+                        <input class="tiny-input" id="opt-trailShortOffset-to" step="0.1" type="number" value="3.0" />
+                        <label>Step:</label>
+                        <input class="tiny-input" id="opt-trailShortOffset-step" step="0.1" type="number" value="0.5" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style="margin-top: 20px; padding: 12px; background: #fffacd; border: 1px solid #daa520; border-radius: 3px;">
+                  <div style="font-size: 12px; font-weight: 600; margin-bottom: 6px;">ℹ️ Optimization Info</div>
+                  <div style="font-size: 11px; color: #5a5a5a; line-height: 1.5;">
+                    • Check parameters to include in optimization<br />
+                    • MA types selected in left panel will be combined<br />
+                    • Total combinations will be calculated on Run<br />
+                    • Results will be saved to CSV file
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const MA_TYPES = [
+        'EMA',
+        'SMA',
+        'HMA',
+        'WMA',
+        'ALMA',
+        'KAMA',
+        'TMA',
+        'T3',
+        'DEMA',
+        'VWMA',
+        'VWAP'
+      ];
+
+      const collapsibles = document.querySelectorAll('.collapsible');
+      collapsibles.forEach((collapsible) => {
+        const header = collapsible.querySelector('.collapsible-header');
+        header.addEventListener('click', () => {
+          collapsible.classList.toggle('open');
+        });
+      });
+
+      const defaults = {
+        dateFilter: true,
+        backtester: true,
+        startDate: '2025-04-01',
+        startTime: '00:00',
+        endDate: '2025-09-01',
+        endTime: '00:00',
+        trendMATypes: [...MA_TYPES],
+        maLength: 25,
+        closeCountLong: 2,
+        closeCountShort: 2,
+        stopLongX: 1.0,
+        stopLongRR: 2.0,
+        stopLongLP: 2,
+        stopShortX: 1.0,
+        stopShortRR: 2.0,
+        stopShortLP: 2,
+        stopLongMaxPct: 3.0,
+        stopShortMaxPct: 3.0,
+        stopLongMaxDays: 2,
+        stopShortMaxDays: 2,
+        trailRRLong: 0.5,
+        trailRRShort: 0.5,
+        trailLongTypes: ['SMA'],
+        trailLongLength: 25,
+        trailLongOffset: 0,
+        trailShortTypes: ['SMA'],
+        trailShortLength: 25,
+        trailShortOffset: 0,
+        riskPerTrade: 2,
+        contractSize: 0.01
+      };
+
+      function setCheckboxGroup(group, selectedTypes) {
+        const allCheckbox = document.querySelector(`input[data-group="${group}"][data-type="ALL"]`);
+        const checkboxes = Array.from(
+          document.querySelectorAll(`input[data-group="${group}"]:not([data-type="ALL"])`)
+        );
+        const normalized = new Set(selectedTypes);
+        const shouldSelectAll = MA_TYPES.every((type) => normalized.has(type));
+        allCheckbox.checked = shouldSelectAll;
+        checkboxes.forEach((checkbox) => {
+          checkbox.checked = shouldSelectAll || normalized.has(checkbox.dataset.type);
+        });
+      }
+
+      function collectSelectedTypes(group) {
+        const allCheckbox = document.querySelector(`input[data-group="${group}"][data-type="ALL"]`);
+        const checkboxes = Array.from(
+          document.querySelectorAll(`input[data-group="${group}"]:not([data-type="ALL"])`)
+        );
+        if (allCheckbox.checked) {
+          return [...MA_TYPES];
+        }
+        const chosen = checkboxes
+          .filter((checkbox) => checkbox.checked)
+          .map((checkbox) => checkbox.dataset.type);
+        return chosen;
+      }
+
+      function syncAllToggle(group) {
+        const allCheckbox = document.querySelector(`input[data-group="${group}"][data-type="ALL"]`);
+        const checkboxes = Array.from(
+          document.querySelectorAll(`input[data-group="${group}"]:not([data-type="ALL"])`)
+        );
+        const allChecked = checkboxes.every((checkbox) => checkbox.checked);
+        allCheckbox.checked = allChecked;
+      }
+
+      function bindMASelectors() {
+        ['trend', 'trailLong', 'trailShort'].forEach((group) => {
+          const allCheckbox = document.querySelector(`input[data-group="${group}"][data-type="ALL"]`);
+          const checkboxes = Array.from(
+            document.querySelectorAll(`input[data-group="${group}"]:not([data-type="ALL"])`)
+          );
+
+          allCheckbox.addEventListener('change', () => {
+            checkboxes.forEach((checkbox) => {
+              checkbox.checked = allCheckbox.checked;
+            });
+          });
+
+          checkboxes.forEach((checkbox) => {
+            checkbox.addEventListener('change', () => {
+              syncAllToggle(group);
+            });
+          });
+        });
+      }
+
+      function applyDefaults() {
+        document.getElementById('dateFilter').checked = defaults.dateFilter;
+        document.getElementById('backtester').checked = defaults.backtester;
+        document.getElementById('startDate').value = defaults.startDate;
+        document.getElementById('startTime').value = defaults.startTime;
+        document.getElementById('endDate').value = defaults.endDate;
+        document.getElementById('endTime').value = defaults.endTime;
+        document.getElementById('maLength').value = defaults.maLength;
+        document.getElementById('closeCountLong').value = defaults.closeCountLong;
+        document.getElementById('closeCountShort').value = defaults.closeCountShort;
+        document.getElementById('stopLongX').value = defaults.stopLongX;
+        document.getElementById('stopLongRR').value = defaults.stopLongRR;
+        document.getElementById('stopLongLP').value = defaults.stopLongLP;
+        document.getElementById('stopShortX').value = defaults.stopShortX;
+        document.getElementById('stopShortRR').value = defaults.stopShortRR;
+        document.getElementById('stopShortLP').value = defaults.stopShortLP;
+        document.getElementById('stopLongMaxPct').value = defaults.stopLongMaxPct;
+        document.getElementById('stopShortMaxPct').value = defaults.stopShortMaxPct;
+        document.getElementById('stopLongMaxDays').value = defaults.stopLongMaxDays;
+        document.getElementById('stopShortMaxDays').value = defaults.stopShortMaxDays;
+        document.getElementById('trailRRLong').value = defaults.trailRRLong;
+        document.getElementById('trailRRShort').value = defaults.trailRRShort;
+        document.getElementById('trailLongLength').value = defaults.trailLongLength;
+        document.getElementById('trailLongOffset').value = defaults.trailLongOffset;
+        document.getElementById('trailShortLength').value = defaults.trailShortLength;
+        document.getElementById('trailShortOffset').value = defaults.trailShortOffset;
+        document.getElementById('riskPerTrade').value = defaults.riskPerTrade;
+        document.getElementById('contractSize').value = defaults.contractSize;
+        setCheckboxGroup('trend', defaults.trendMATypes);
+        setCheckboxGroup('trailLong', defaults.trailLongTypes);
+        setCheckboxGroup('trailShort', defaults.trailShortTypes);
+        const resultsEl = document.getElementById('results');
+        resultsEl.textContent = 'Нажмите «Run» для запуска бэктеста…';
+        resultsEl.classList.remove('ready', 'loading');
+        document.getElementById('error').style.display = 'none';
+      }
+
+      function composeDateTime(datePart, timePart) {
+        const date = (datePart || '').trim();
+        const time = (timePart || '').trim();
+        if (!date) {
+          return '';
+        }
+        const normalizedTime = time || '00:00';
+        return `${date}T${normalizedTime}`;
+      }
+
+      function gatherFormState() {
+        const start = composeDateTime(
+          document.getElementById('startDate').value,
+          document.getElementById('startTime').value
+        );
+        const end = composeDateTime(
+          document.getElementById('endDate').value,
+          document.getElementById('endTime').value
+        );
+
+        const trendTypes = collectSelectedTypes('trend');
+        const trailLongTypes = collectSelectedTypes('trailLong');
+        const trailShortTypes = collectSelectedTypes('trailShort');
+
+        return {
+          start,
+          end,
+          trendTypes,
+          trailLongTypes,
+          trailShortTypes,
+          payload: {
+            dateFilter: document.getElementById('dateFilter').checked,
+            backtester: document.getElementById('backtester').checked,
+            start,
+            end,
+            maLength: Number(document.getElementById('maLength').value),
+            closeCountLong: Number(document.getElementById('closeCountLong').value),
+            closeCountShort: Number(document.getElementById('closeCountShort').value),
+            stopLongX: Number(document.getElementById('stopLongX').value),
+            stopLongRR: Number(document.getElementById('stopLongRR').value),
+            stopLongLP: Number(document.getElementById('stopLongLP').value),
+            stopShortX: Number(document.getElementById('stopShortX').value),
+            stopShortRR: Number(document.getElementById('stopShortRR').value),
+            stopShortLP: Number(document.getElementById('stopShortLP').value),
+            stopLongMaxPct: Number(document.getElementById('stopLongMaxPct').value),
+            stopShortMaxPct: Number(document.getElementById('stopShortMaxPct').value),
+            stopLongMaxDays: Number(document.getElementById('stopLongMaxDays').value),
+            stopShortMaxDays: Number(document.getElementById('stopShortMaxDays').value),
+            trailRRLong: Number(document.getElementById('trailRRLong').value),
+            trailRRShort: Number(document.getElementById('trailRRShort').value),
+            trailLongLength: Number(document.getElementById('trailLongLength').value),
+            trailLongOffset: Number(document.getElementById('trailLongOffset').value),
+            trailShortLength: Number(document.getElementById('trailShortLength').value),
+            trailShortOffset: Number(document.getElementById('trailShortOffset').value),
+            riskPerTrade: Number(document.getElementById('riskPerTrade').value),
+            contractSize: Number(document.getElementById('contractSize').value)
+          }
+        };
+      }
+
+      function formatMetric(value, digits = 2) {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          return value.toFixed(digits);
+        }
+        return value ?? '—';
+      }
+
+      function formatResultBlock(index, total, payload, data) {
+        const metrics = data.metrics || {};
+        return [
+          `#${index}/${total}`,
+          `Trend MA: ${payload.maType}`,
+          `Trail MA Long: ${payload.trailLongType}`,
+          `Trail MA Short: ${payload.trailShortType}`,
+          `Net Profit %: ${formatMetric(metrics.net_profit_pct)}`,
+          `Max Drawdown %: ${formatMetric(metrics.max_drawdown_pct)}`,
+          `Total Trades: ${metrics.total_trades ?? '—'}`
+        ].join('\n');
+      }
+
+      async function submitForm(event) {
+        event.preventDefault();
+        const resultsEl = document.getElementById('results');
+        const errorEl = document.getElementById('error');
+        const fileInput = document.getElementById('csvFile');
+
+        errorEl.style.display = 'none';
+        resultsEl.classList.remove('ready');
+
+        if (!fileInput.files.length) {
+          errorEl.textContent = 'Пожалуйста, выберите CSV файл с данными.';
+          errorEl.style.display = 'block';
+          return;
+        }
+
+        const state = gatherFormState();
+        if (!state.start || !state.end) {
+          errorEl.textContent = 'Пожалуйста, заполните даты начала и окончания.';
+          errorEl.style.display = 'block';
+          return;
+        }
+
+        if (!state.trendTypes.length || !state.trailLongTypes.length || !state.trailShortTypes.length) {
+          errorEl.textContent = 'Пожалуйста, выберите хотя бы один MA в каждой группе.';
+          errorEl.style.display = 'block';
+          return;
+        }
+
+        const combinations = [];
+        state.trendTypes.forEach((trendType) => {
+          state.trailLongTypes.forEach((trailLongType) => {
+            state.trailShortTypes.forEach((trailShortType) => {
+              combinations.push({ trendType, trailLongType, trailShortType });
+            });
+          });
+        });
+
+        if (!combinations.length) {
+          errorEl.textContent = 'Нет комбинаций для запуска.';
+          errorEl.style.display = 'block';
+          return;
+        }
+
+        resultsEl.textContent = 'Выполняется расчёт…';
+        resultsEl.classList.add('loading');
+
+        const aggregatedResults = [];
+
+        for (let index = 0; index < combinations.length; index += 1) {
+          const combo = combinations[index];
+          const payload = {
+            ...state.payload,
+            maType: combo.trendType,
+            trailLongType: combo.trailLongType,
+            trailShortType: combo.trailShortType
+          };
+
+          const formData = new FormData();
+          formData.append('file', fileInput.files[0]);
+          formData.append('payload', JSON.stringify(payload));
+
+          resultsEl.textContent = `Выполняется расчёт… (${index + 1}/${combinations.length})`;
+
+          try {
+            const response = await fetch('/api/backtest', {
+              method: 'POST',
+              body: formData
+            });
+
+            if (!response.ok) {
+              const message = await response.text();
+              throw new Error(message || 'Ошибка выполнения бэктеста');
+            }
+
+            const data = await response.json();
+            aggregatedResults.push(formatResultBlock(index + 1, combinations.length, payload, data));
+          } catch (err) {
+            resultsEl.textContent = 'Произошла ошибка.';
+            resultsEl.classList.remove('loading');
+            errorEl.textContent = err.message;
+            errorEl.style.display = 'block';
+            return;
+          }
+        }
+
+        resultsEl.textContent = aggregatedResults.join('\n\n');
+        resultsEl.classList.remove('loading');
+        resultsEl.classList.add('ready');
+      }
+
+      document.getElementById('defaultsBtn').addEventListener('click', () => {
+        applyDefaults();
+      });
+
+      document.getElementById('cancelBtn').addEventListener('click', () => {
+        document.getElementById('backtestForm').reset();
+        applyDefaults();
+      });
+
+      document.getElementById('backtestForm').addEventListener('submit', submitForm);
+
+      bindMASelectors();
+      applyDefaults();
+    });
+  </script>
+</body>
+</html>
