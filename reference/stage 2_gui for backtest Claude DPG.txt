@@ -1,0 +1,262 @@
+import dearpygui.dearpygui as dpg
+
+dpg.create_context()
+
+# Настройка светлой темы
+with dpg.theme() as light_theme:
+    with dpg.theme_component(dpg.mvAll):
+        # Основные цвета
+        dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (255, 255, 255))
+        dpg.add_theme_color(dpg.mvThemeCol_ChildBg, (248, 248, 248))
+        dpg.add_theme_color(dpg.mvThemeCol_Border, (208, 208, 208))
+        dpg.add_theme_color(dpg.mvThemeCol_Text, (51, 51, 51))
+        
+        # Поля ввода
+        dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (255, 255, 255))
+        dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (240, 240, 240))
+        dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (255, 255, 255))
+        
+        # Заголовки
+        dpg.add_theme_color(dpg.mvThemeCol_Header, (245, 245, 245))
+        dpg.add_theme_color(dpg.mvThemeCol_HeaderHovered, (238, 238, 238))
+        dpg.add_theme_color(dpg.mvThemeCol_HeaderActive, (230, 230, 230))
+        
+        # Кнопки
+        dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 120, 212))
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (16, 110, 190))
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (0, 90, 158))
+        
+        # Вкладки
+        dpg.add_theme_color(dpg.mvThemeCol_Tab, (245, 245, 245))
+        dpg.add_theme_color(dpg.mvThemeCol_TabHovered, (232, 232, 232))
+        dpg.add_theme_color(dpg.mvThemeCol_TabActive, (255, 255, 255))
+        dpg.add_theme_color(dpg.mvThemeCol_TabUnfocused, (245, 245, 245))
+        dpg.add_theme_color(dpg.mvThemeCol_TabUnfocusedActive, (245, 245, 245))
+        
+        # Чекбоксы
+        dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (0, 120, 212))
+        
+        # Скроллбар
+        dpg.add_theme_color(dpg.mvThemeCol_ScrollbarBg, (240, 240, 240))
+        dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrab, (192, 192, 192))
+        dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabHovered, (160, 160, 160))
+        dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabActive, (128, 128, 128))
+        
+        # Рамки
+        dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 1)
+        dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 3)
+        dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 4)
+
+# Тема для вторичных кнопок
+with dpg.theme() as secondary_button_theme:
+    with dpg.theme_component(dpg.mvButton):
+        dpg.add_theme_color(dpg.mvThemeCol_Button, (225, 225, 225))
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (208, 208, 208))
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (192, 192, 192))
+        dpg.add_theme_color(dpg.mvThemeCol_Text, (51, 51, 51))
+
+# Тема для заголовков секций
+with dpg.theme() as section_header_theme:
+    with dpg.theme_component(dpg.mvText):
+        dpg.add_theme_color(dpg.mvThemeCol_Text, (85, 85, 85))
+
+# Функции обработчиков
+def run_backtest():
+    print("Running backtest...")
+    dpg.set_value("results_text", "Backtesting in progress...\n\nPlease wait...")
+
+def reset_defaults():
+    print("Reset to defaults")
+
+def cancel_window():
+    dpg.configure_item("main_window", show=False)
+
+# Создание главного окна
+with dpg.window(label="S_01 TrailingMA Backtester", tag="main_window", 
+                width=850, height=750, pos=(100, 100), no_close=True):
+    
+    with dpg.tab_bar():
+        # Вкладка Inputs
+        with dpg.tab(label="Inputs"):
+            dpg.add_spacing(count=2)
+            
+            # Date Filter Section
+            with dpg.group(horizontal=True):
+                dpg.add_checkbox(label="Date Filter", default_value=True)
+                dpg.add_spacing(count=5)
+                dpg.add_checkbox(label="Backtester", default_value=True)
+            
+            dpg.add_spacing(count=3)
+            
+            with dpg.group(horizontal=True):
+                dpg.add_text("Start Date")
+                dpg.add_input_text(default_value="2025-04-01", width=120)
+                dpg.add_button(label="📅", width=35)
+                dpg.add_input_text(default_value="08:00", width=70)
+            
+            with dpg.group(horizontal=True):
+                dpg.add_text("End Date  ")
+                dpg.add_input_text(default_value="2025-09-01", width=120)
+                dpg.add_button(label="📅", width=35)
+                dpg.add_input_text(default_value="08:00", width=70)
+            
+            dpg.add_separator()
+            dpg.add_spacing(count=2)
+            
+            # MA Settings
+            with dpg.group(horizontal=True):
+                dpg.add_text("T MA Type")
+                dpg.add_combo(items=["EMA", "SMA", "HMA", "WMA", "ALMA", "KAMA", "TMA", "T3", "DEMA", "VWMA", "VWAP"], 
+                             default_value="EMA", width=100)
+                dpg.add_spacing(count=5)
+                dpg.add_text("Length")
+                dpg.add_input_int(default_value=45, width=80)
+            
+            dpg.add_spacing(count=2)
+            
+            with dpg.group(horizontal=True):
+                dpg.add_text("Close Count Long")
+                dpg.add_input_int(default_value=7, width=80)
+                dpg.add_spacing(count=5)
+                dpg.add_text("Close Count Short")
+                dpg.add_input_int(default_value=5, width=80)
+            
+            dpg.add_separator()
+            dpg.add_spacing(count=2)
+            
+            # Stops and Filters Section
+            with dpg.collapsing_header(label="STOPS AND FILTERS", default_open=True):
+                dpg.add_spacing(count=2)
+                
+                with dpg.child_window(height=160, border=True):
+                    dpg.add_spacing(count=2)
+                    
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("Stop Long X ")
+                        dpg.add_input_int(default_value=2, width=70)
+                        dpg.add_spacing(count=3)
+                        dpg.add_text("RR")
+                        dpg.add_input_int(default_value=3, width=70)
+                        dpg.add_spacing(count=3)
+                        dpg.add_text("LP")
+                        dpg.add_input_int(default_value=2, width=70)
+                    
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("Stop Short X")
+                        dpg.add_input_int(default_value=2, width=70)
+                        dpg.add_spacing(count=3)
+                        dpg.add_text("RR")
+                        dpg.add_input_int(default_value=3, width=70)
+                        dpg.add_spacing(count=3)
+                        dpg.add_text("LP")
+                        dpg.add_input_int(default_value=2, width=70)
+                    
+                    dpg.add_spacing(count=2)
+                    
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("L Stop Max %")
+                        dpg.add_input_int(default_value=3, width=70)
+                        dpg.add_spacing(count=3)
+                        dpg.add_text("S Stop Max %")
+                        dpg.add_input_int(default_value=3, width=70)
+                    
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("L Stop Max D")
+                        dpg.add_input_int(default_value=2, width=70)
+                        dpg.add_spacing(count=3)
+                        dpg.add_text("S Stop Max D")
+                        dpg.add_input_int(default_value=4, width=70)
+            
+            dpg.add_spacing(count=2)
+            
+            # Trailing Stops Section
+            with dpg.collapsing_header(label="TRAILING STOPS", default_open=True):
+                dpg.add_spacing(count=2)
+                
+                with dpg.child_window(height=140, border=True):
+                    dpg.add_spacing(count=2)
+                    
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("Trail RR Long ")
+                        dpg.add_input_int(default_value=1, width=70)
+                        dpg.add_spacing(count=3)
+                        dpg.add_text("Trail RR Short")
+                        dpg.add_input_int(default_value=1, width=70)
+                    
+                    dpg.add_spacing(count=2)
+                    
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("Trail MA Long ")
+                        dpg.add_combo(items=["SMA", "EMA"], default_value="SMA", width=80)
+                        dpg.add_text("Length")
+                        dpg.add_input_int(default_value=160, width=70)
+                        dpg.add_text("Offset")
+                        dpg.add_input_int(default_value=-1, width=70)
+                    
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("Trail MA Short")
+                        dpg.add_combo(items=["SMA", "EMA"], default_value="SMA", width=80)
+                        dpg.add_text("Length")
+                        dpg.add_input_int(default_value=160, width=70)
+                        dpg.add_text("Offset")
+                        dpg.add_input_int(default_value=1, width=70)
+            
+            dpg.add_separator()
+            dpg.add_spacing(count=2)
+            
+            # Risk Settings
+            with dpg.group(horizontal=True):
+                dpg.add_text("Risk Per Trade")
+                dpg.add_input_float(default_value=2.0, width=80, format="%.2f")
+                dpg.add_spacing(count=5)
+                dpg.add_text("Contract Size")
+                dpg.add_input_float(default_value=0.01, width=80, format="%.2f")
+            
+            dpg.add_separator()
+            dpg.add_spacing(count=2)
+            
+            # Results Section
+            with dpg.child_window(height=180, border=True, tag="results_window"):
+                results_text = dpg.add_text("Нажмите 'Run' для запуска бэктеста...", 
+                                          tag="results_text", color=(136, 136, 136))
+            
+            dpg.add_spacing(count=3)
+            
+            # Action Buttons
+            with dpg.group(horizontal=True):
+                defaults_btn = dpg.add_button(label="Defaults", width=100, callback=reset_defaults)
+                dpg.bind_item_theme(defaults_btn, secondary_button_theme)
+                
+                dpg.add_spacer(width=450)
+                
+                cancel_btn = dpg.add_button(label="Cancel", width=100, callback=cancel_window)
+                dpg.bind_item_theme(cancel_btn, secondary_button_theme)
+                
+                dpg.add_spacing(count=2)
+                dpg.add_button(label="Run", width=100, callback=run_backtest)
+        
+        # Вкладка Properties
+        with dpg.tab(label="Properties"):
+            dpg.add_spacing(count=5)
+            dpg.add_text("Properties tab - coming soon...", color=(136, 136, 136))
+        
+        # Вкладка Style
+        with dpg.tab(label="Style"):
+            dpg.add_spacing(count=5)
+            dpg.add_text("Style tab - coming soon...", color=(136, 136, 136))
+        
+        # Вкладка Visibility
+        with dpg.tab(label="Visibility"):
+            dpg.add_spacing(count=5)
+            dpg.add_text("Visibility tab - coming soon...", color=(136, 136, 136))
+
+# Применение светлой темы
+dpg.bind_theme(light_theme)
+
+# Настройка и запуск
+dpg.create_viewport(title="TrailingMA Backtester", width=900, height=800)
+dpg.setup_dearpygui()
+dpg.show_viewport()
+dpg.set_primary_window("main_window", True)
+dpg.start_dearpygui()
+dpg.destroy_context()
