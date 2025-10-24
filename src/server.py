@@ -4,14 +4,14 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from backtest_core import StrategyParams, load_data, run_strategy
+from backtest_engine import StrategyParams, load_data, run_strategy
 
 app = Flask(__name__)
 
 
 @app.route("/")
 def index() -> object:
-    return send_from_directory(Path(app.root_path), "monochrome_backtester (1).html")
+    return send_from_directory(Path(app.root_path), "index.html")
 
 
 @app.post("/api/backtest")
