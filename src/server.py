@@ -4,7 +4,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from backtest_engine import StrategyParams, load_data, run_strategy
+from .backtest_engine import StrategyParams, load_data, run_strategy
 
 app = Flask(__name__)
 
