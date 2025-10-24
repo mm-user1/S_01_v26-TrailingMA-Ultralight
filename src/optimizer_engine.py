@@ -366,9 +366,6 @@ def _simulate_combination(params_dict: Dict[str, Any]) -> OptimizationResult:
         elif position < 0:
             counter_trade_long = 0
             counter_trade_short = 1
-        else:
-            counter_trade_long = 0
-            counter_trade_short = 0
 
         exit_price: Optional[float] = None
         current_time = _time_index[i]
