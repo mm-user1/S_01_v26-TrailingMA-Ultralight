@@ -1,5 +1,6 @@
 import io
 import json
+import re
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
@@ -138,6 +139,77 @@ def _build_optimization_config(csv_file, payload: dict, worker_processes=None) -
     )
 
 
+_DATE_PREFIX_RE = re.compile(r"\b\d{4}[.\-/]\d{2}[.\-/]\d{2}\b")
+_DATE_VALUE_RE = re.compile(r"(\d{4})[.\-/]?(\d{2})[.\-/]?(\d{2})")
+
+
+def _format_date_component(value: object) -> str:
+    if value in (None, ""):
+        return "0000.00.00"
+    value_str = str(value).strip()
+    if not value_str:
+        return "0000.00.00"
+    match = _DATE_VALUE_RE.search(value_str)
+    if match:
+        year, month, day = match.groups()
+        return f"{year}.{month}.{day}"
+    normalized = value_str.rstrip("Zz")
+    normalized = normalized.replace(" ", "T", 1)
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return "0000.00.00"
+    return parsed.strftime("%Y.%m.%d")
+
+
+def _unique_preserve_order(items):
+    seen = set()
+    result = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def _format_ma_segment(config: OptimizationConfig) -> str:
+    ma_types = _unique_preserve_order([ma.upper() for ma in config.ma_types_trend])
+    if not ma_types:
+        return ""
+    if len(ma_types) == 11:
+        return "_ALL"
+    is_ma_length_optimized = bool(config.enabled_params.get("maLength"))
+    if len(ma_types) == 1 and not is_ma_length_optimized:
+        ma_length_value = config.fixed_params.get("maLength")
+        if ma_length_value is not None:
+            try:
+                ma_length_int = int(round(float(ma_length_value)))
+                ma_length_str = str(ma_length_int)
+            except (TypeError, ValueError):  # pragma: no cover - defensive
+                ma_length_str = str(ma_length_value)
+            return f"_{ma_types[0]} {ma_length_str}"
+        return f"_{ma_types[0]}"
+    return "_" + "+".join(ma_types)
+
+
+def generate_output_filename(csv_filename: str, config: OptimizationConfig) -> str:
+    original_name = Path(csv_filename or "").name
+    stem = Path(original_name).stem if original_name else ""
+    prefix = stem
+    if stem:
+        match = _DATE_PREFIX_RE.search(stem)
+        if match:
+            prefix = stem[: match.start()].rstrip()
+    prefix = prefix.strip() or "optimization"
+
+    start_formatted = _format_date_component(config.fixed_params.get("start"))
+    end_formatted = _format_date_component(config.fixed_params.get("end"))
+    date_segment = f"{start_formatted}-{end_formatted}"
+    ma_segment = _format_ma_segment(config)
+
+    return f"{prefix} {date_segment}{ma_segment}.csv"
+
+
 @app.post("/api/optimize")
 def run_optimization_endpoint() -> object:
     if "file" not in request.files:
@@ -190,7 +262,7 @@ def run_optimization_endpoint() -> object:
 
     csv_content = export_to_csv(results)
     buffer = io.BytesIO(csv_content.encode("utf-8"))
-    filename = f"optimization_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    filename = generate_output_filename(csv_file.filename, optimization_config)
     buffer.seek(0)
     return send_file(
         buffer,

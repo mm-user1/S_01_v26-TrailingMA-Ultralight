@@ -1790,7 +1790,23 @@
           const url = window.URL.createObjectURL(blob);
           const link = document.createElement('a');
           link.href = url;
-          link.download = `optimization_${Date.now()}.csv`;
+
+          const disposition = response.headers.get('Content-Disposition');
+          let downloadName = `optimization_${Date.now()}.csv`;
+          if (disposition) {
+            const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+            const asciiMatch = disposition.match(/filename="?([^";]+)"?/i);
+            if (utf8Match && utf8Match[1]) {
+              try {
+                downloadName = decodeURIComponent(utf8Match[1]);
+              } catch (err) {
+                downloadName = utf8Match[1];
+              }
+            } else if (asciiMatch && asciiMatch[1]) {
+              downloadName = asciiMatch[1];
+            }
+          }
+          link.download = downloadName;
           document.body.appendChild(link);
           link.click();
           link.remove();
