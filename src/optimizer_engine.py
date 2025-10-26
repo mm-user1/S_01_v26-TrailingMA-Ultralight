@@ -635,8 +635,8 @@ CSV_COLUMN_SPECS: List[Tuple[str, Optional[str], str, Optional[str]]] = [
     ("Trail MA Short Length", "trailShortLength", "trail_ma_short_length", None),
     ("Trail MA Short Offset", "trailShortOffset", "trail_ma_short_offset", None),
     ("Net Profit%", None, "net_profit_pct", "percent"),
-    ("Max Drawdown%", None, "max_drawdown_pct", "percent"),
-    ("Total Trades", None, "total_trades", None),
+    ("Max DD%", None, "max_drawdown_pct", "percent"),
+    ("Trades", None, "total_trades", None),
 ]
 
 
