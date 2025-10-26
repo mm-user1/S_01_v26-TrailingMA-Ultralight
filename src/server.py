@@ -10,6 +10,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 from backtest_engine import StrategyParams, load_data, run_strategy
 from optimizer_engine import (
     OptimizationConfig,
+    PARAMETER_MAP,
     export_to_csv,
     run_optimization,
 )
@@ -260,7 +261,18 @@ def run_optimization_endpoint() -> object:
         app.logger.exception("Optimization run failed")
         return ("Optimization execution failed.", HTTPStatus.INTERNAL_SERVER_ERROR)
 
-    csv_content = export_to_csv(results)
+    fixed_parameters = {}
+    for name, enabled in optimization_config.enabled_params.items():
+        if not bool(enabled):
+            value = optimization_config.fixed_params.get(name)
+            if value is None:
+                param_info = PARAMETER_MAP.get(name)
+                if param_info and results:
+                    attr_name = param_info[0]
+                    value = getattr(results[0], attr_name, None)
+            fixed_parameters[name] = value
+
+    csv_content = export_to_csv(results, fixed_parameters)
     buffer = io.BytesIO(csv_content.encode("utf-8"))
     filename = generate_output_filename(csv_file.filename, optimization_config)
     buffer.seek(0)

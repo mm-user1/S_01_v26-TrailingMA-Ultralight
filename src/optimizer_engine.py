@@ -610,33 +610,77 @@ def run_optimization(
     return results
 
 
-def export_to_csv(results: List[OptimizationResult]) -> str:
-    """Export results to CSV format string."""
+CSV_COLUMN_SPECS: List[Tuple[str, Optional[str], str, Optional[str]]] = [
+    ("MA Type", None, "ma_type", None),
+    ("MA Length", "maLength", "ma_length", None),
+    ("Close Count Long", "closeCountLong", "close_count_long", None),
+    ("Close Count Short", "closeCountShort", "close_count_short", None),
+    ("Stop Long X", "stopLongX", "stop_long_atr", None),
+    ("Stop Long RR", "stopLongRR", "stop_long_rr", None),
+    ("Stop Long LP", "stopLongLP", "stop_long_lp", None),
+    ("Stop Short X", "stopShortX", "stop_short_atr", None),
+    ("Stop Short RR", "stopShortRR", "stop_short_rr", None),
+    ("Stop Short LP", "stopShortLP", "stop_short_lp", None),
+    ("Stop Long Max %", "stopLongMaxPct", "stop_long_max_pct", None),
+    ("Stop Short Max %", "stopShortMaxPct", "stop_short_max_pct", None),
+    ("Stop Long Max Days", "stopLongMaxDays", "stop_long_max_days", None),
+    ("Stop Short Max Days", "stopShortMaxDays", "stop_short_max_days", None),
+    ("Trail RR Long", "trailRRLong", "trail_rr_long", None),
+    ("Trail RR Short", "trailRRShort", "trail_rr_short", None),
+    ("Trail MA Long Type", None, "trail_ma_long_type", None),
+    ("Trail MA Long Length", "trailLongLength", "trail_ma_long_length", None),
+    ("Trail MA Long Offset", "trailLongOffset", "trail_ma_long_offset", None),
+    ("Trail MA Short Type", None, "trail_ma_short_type", None),
+    ("Trail MA Short Length", "trailShortLength", "trail_ma_short_length", None),
+    ("Trail MA Short Offset", "trailShortOffset", "trail_ma_short_offset", None),
+    ("Net Profit%", None, "net_profit_pct", "percent"),
+    ("Max Drawdown%", None, "max_drawdown_pct", "percent"),
+    ("Total Trades", None, "total_trades", None),
+]
+
+
+def _format_csv_value(value: Any, formatter: Optional[str]) -> str:
+    if formatter == "percent":
+        return f"{float(value):.2f}%"
+    return str(value)
+
+
+def _format_fixed_param_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def export_to_csv(
+    results: List[OptimizationResult], fixed_params: Dict[str, Any]
+) -> str:
+    """Export results to CSV format string with fixed parameter metadata."""
 
     import io
 
     output = io.StringIO()
-    output.write(
-        "MA Type,MA Length,Close Count Long,Close Count Short,"
-        "Stop Long X,Stop Long RR,Stop Long LP,"
-        "Stop Short X,Stop Short RR,Stop Short LP,"
-        "Stop Long Max %,Stop Short Max %,"
-        "Stop Long Max Days,Stop Short Max Days,"
-        "Trail RR Long,Trail RR Short,"
-        "Trail MA Long Type,Trail MA Long Length,Trail MA Long Offset,"
-        "Trail MA Short Type,Trail MA Short Length,Trail MA Short Offset,"
-        "Net Profit%,Max Drawdown%,Total Trades\n"
-    )
+
+    fixed_items = [
+        f"{name}={_format_fixed_param_value(fixed_params[name])}"
+        for name in fixed_params
+    ]
+    output.write("Fixed Parameters:")
+    if fixed_items:
+        output.write("," + ",".join(fixed_items))
+    output.write("\n")
+
+    filtered_columns = [
+        spec for spec in CSV_COLUMN_SPECS if spec[1] is None or spec[1] not in fixed_params
+    ]
+
+    header_line = ",".join(column[0] for column in filtered_columns)
+    output.write(header_line + "\n")
+
     for item in results:
-        output.write(
-            f"{item.ma_type},{item.ma_length},{item.close_count_long},{item.close_count_short},"
-            f"{item.stop_long_atr},{item.stop_long_rr},{item.stop_long_lp},"
-            f"{item.stop_short_atr},{item.stop_short_rr},{item.stop_short_lp},"
-            f"{item.stop_long_max_pct},{item.stop_short_max_pct},"
-            f"{item.stop_long_max_days},{item.stop_short_max_days},"
-            f"{item.trail_rr_long},{item.trail_rr_short},"
-            f"{item.trail_ma_long_type},{item.trail_ma_long_length},{item.trail_ma_long_offset},"
-            f"{item.trail_ma_short_type},{item.trail_ma_short_length},{item.trail_ma_short_offset},"
-            f"{item.net_profit_pct:.2f}%,{item.max_drawdown_pct:.2f}%,{item.total_trades}\n"
-        )
+        row_values = []
+        for _, frontend_name, attr_name, formatter in filtered_columns:
+            value = getattr(item, attr_name)
+            row_values.append(_format_csv_value(value, formatter))
+        output.write(",".join(row_values) + "\n")
+
     return output.getvalue()
