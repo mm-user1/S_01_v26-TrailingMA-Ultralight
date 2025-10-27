@@ -1216,6 +1216,10 @@
         });
       });
 
+      // Reference configuration used to calibrate the historical ETA formula:
+      // 2025-04-01 → 2025-09-01 on a 15 minute timeframe results in 14 689 bars.
+      const REFERENCE_BAR_COUNT = 14689;
+
       const defaults = {
         dateFilter: true,
         backtester: true,
@@ -1285,7 +1289,9 @@
 
       if (csvFileInputEl) {
         csvFileInputEl.addEventListener('change', () => {
-          renderSelectedFiles(Array.from(csvFileInputEl.files || []));
+          const files = Array.from(csvFileInputEl.files || []);
+          renderSelectedFiles(files);
+          calculateTotalCombinations();
         });
       }
 
@@ -1681,14 +1687,18 @@
         return Math.round(Math.min(32, Math.max(1, workerProcesses)));
       }
 
-      function formatEstimatedTimeValue(total, workerCount) {
+      function formatEstimatedTimeValue(total, workerCount, barCount) {
         if (!Number.isFinite(total) || total <= 0) {
           return '-';
         }
         const normalizedWorkers = Math.round(
           Math.min(32, Math.max(1, Number.isFinite(workerCount) ? workerCount : defaults.workerProcesses))
         );
-        const combinationsPerSecond = (normalizedWorkers / 6) * 16;
+        const baseRate = (normalizedWorkers / 6) * 16;
+        let combinationsPerSecond = baseRate;
+        if (Number.isFinite(barCount) && barCount > 0) {
+          combinationsPerSecond = baseRate * (REFERENCE_BAR_COUNT / barCount);
+        }
         if (!Number.isFinite(combinationsPerSecond) || combinationsPerSecond <= 0) {
           return '-';
         }
@@ -1709,6 +1719,138 @@
         const days = Math.floor(hours / 24);
         const remHours = hours % 24;
         return `${days}d ${remHours}h`;
+      }
+
+      let latestBarCountRequestId = 0;
+
+      function parseDateRangeForBars() {
+        const startValue = composeDateTime(
+          document.getElementById('startDate').value,
+          document.getElementById('startTime').value
+        );
+        const endValue = composeDateTime(
+          document.getElementById('endDate').value,
+          document.getElementById('endTime').value
+        );
+
+        if (!startValue || !endValue) {
+          return { error: 'Invalid date range' };
+        }
+
+        const startDate = new Date(startValue);
+        const endDate = new Date(endValue);
+
+        if (!Number.isFinite(startDate.valueOf()) || !Number.isFinite(endDate.valueOf())) {
+          return { error: 'Invalid date range' };
+        }
+
+        if (endDate < startDate) {
+          return { error: 'Invalid date range' };
+        }
+
+        return {
+          startSec: Math.floor(startDate.getTime() / 1000),
+          endSec: Math.floor(endDate.getTime() / 1000)
+        };
+      }
+
+      function countBarsInCsvText(csvText, startSec, endSec) {
+        if (!csvText || !Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec < startSec) {
+          return 0;
+        }
+
+        const lines = csvText.split(/\r?\n/);
+        if (lines.length <= 1) {
+          return 0;
+        }
+
+        let count = 0;
+        for (let index = 1; index < lines.length; index += 1) {
+          const line = lines[index].trim();
+          if (!line) {
+            continue;
+          }
+
+          const commaIndex = line.indexOf(',');
+          const timePart = commaIndex >= 0 ? line.slice(0, commaIndex) : line;
+          const timestamp = Number(timePart.trim());
+          if (!Number.isFinite(timestamp)) {
+            continue;
+          }
+
+          if (timestamp >= startSec && timestamp <= endSec) {
+            count += 1;
+          }
+        }
+
+        return count;
+      }
+
+      function countBarsInFile(file, startSec, endSec) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            try {
+              const text = typeof reader.result === 'string' ? reader.result : '';
+              resolve(countBarsInCsvText(text, startSec, endSec));
+            } catch (error) {
+              reject(error);
+            }
+          };
+          reader.onerror = () => {
+            reject(reader.error || new Error('Failed to read CSV file'));
+          };
+          reader.readAsText(file);
+        });
+      }
+
+      function updateEstimatedTime(total, workerCount) {
+        if (!estimatedTimeEl) {
+          return;
+        }
+
+        if (!Number.isFinite(total) || total <= 0) {
+          estimatedTimeEl.textContent = '-';
+          return;
+        }
+
+        const files = Array.from(csvFileInputEl?.files || []);
+        if (!files.length) {
+          estimatedTimeEl.textContent = 'Load CSV for calculation';
+          return;
+        }
+
+        const dateRange = parseDateRangeForBars();
+        if (!dateRange || dateRange.error) {
+          estimatedTimeEl.textContent = dateRange?.error || 'Invalid date range';
+          return;
+        }
+
+        const requestId = latestBarCountRequestId + 1;
+        latestBarCountRequestId = requestId;
+        estimatedTimeEl.textContent = 'Calculating…';
+
+        Promise.all(files.map((file) => countBarsInFile(file, dateRange.startSec, dateRange.endSec)))
+          .then((counts) => {
+            if (requestId !== latestBarCountRequestId) {
+              return;
+            }
+
+            const barCount = counts.reduce((acc, value) => acc + (Number.isFinite(value) ? value : 0), 0);
+            if (!Number.isFinite(barCount) || barCount <= 0) {
+              estimatedTimeEl.textContent = 'No data in range';
+              return;
+            }
+
+            estimatedTimeEl.textContent = formatEstimatedTimeValue(total, workerCount, barCount);
+          })
+          .catch((error) => {
+            if (requestId !== latestBarCountRequestId) {
+              return;
+            }
+            console.error('Failed to calculate bar count from CSV', error);
+            estimatedTimeEl.textContent = 'Failed to read CSV';
+          });
       }
 
       function calculateTotalCombinations() {
@@ -1756,7 +1898,7 @@
 
         const workerProcesses = getWorkerProcessesValue();
         totalCombinationsEl.textContent = total.toLocaleString('en-US');
-        estimatedTimeEl.textContent = formatEstimatedTimeValue(total, workerProcesses);
+        updateEstimatedTime(total, workerProcesses);
         return total;
       }
 
@@ -1981,6 +2123,15 @@
         if (workerInput) {
           workerInput.addEventListener('input', calculateTotalCombinations);
         }
+
+        const dateInputs = ['startDate', 'startTime', 'endDate', 'endTime'];
+        dateInputs.forEach((inputId) => {
+          const input = document.getElementById(inputId);
+          if (input) {
+            input.addEventListener('input', calculateTotalCombinations);
+            input.addEventListener('change', calculateTotalCombinations);
+          }
+        });
       }
 
       async function submitForm(event) {
