@@ -69,6 +69,19 @@ def _build_optimization_config(csv_file, payload: dict, worker_processes=None) -
     if not isinstance(payload, dict):
         raise ValueError("Invalid optimization config payload.")
 
+    def _parse_bool(value, default=False):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "y", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "n", "off"}:
+                return False
+        return default
+
     enabled_params = payload.get("enabled_params")
     if not isinstance(enabled_params, dict):
         raise ValueError("enabled_params must be a dictionary.")
@@ -112,6 +125,20 @@ def _build_optimization_config(csv_file, payload: dict, worker_processes=None) -
     if atr_period is None:
         atr_period = payload.get("atrPeriod", 14)
 
+    filter_min_profit_raw = payload.get("filter_min_profit")
+    if filter_min_profit_raw is None:
+        filter_min_profit_raw = payload.get("filterMinProfit")
+    filter_min_profit = _parse_bool(filter_min_profit_raw, False)
+
+    threshold_raw = payload.get("min_profit_threshold")
+    if threshold_raw is None:
+        threshold_raw = payload.get("minProfitThreshold", 0.0)
+    try:
+        min_profit_threshold = float(threshold_raw)
+    except (TypeError, ValueError):
+        min_profit_threshold = 0.0
+    min_profit_threshold = max(0.0, min(99000.0, min_profit_threshold))
+
     if hasattr(csv_file, "seek"):
         try:
             csv_file.seek(0)
@@ -137,6 +164,8 @@ def _build_optimization_config(csv_file, payload: dict, worker_processes=None) -
         commission_rate=float(commission_rate),
         atr_period=int(atr_period),
         worker_processes=worker_processes_value,
+        filter_min_profit=filter_min_profit,
+        min_profit_threshold=min_profit_threshold,
     )
 
 
@@ -272,7 +301,12 @@ def run_optimization_endpoint() -> object:
                     value = getattr(results[0], attr_name, None)
             fixed_parameters[name] = value
 
-    csv_content = export_to_csv(results, fixed_parameters)
+    csv_content = export_to_csv(
+        results,
+        fixed_parameters,
+        filter_min_profit=optimization_config.filter_min_profit,
+        min_profit_threshold=optimization_config.min_profit_threshold,
+    )
     buffer = io.BytesIO(csv_content.encode("utf-8"))
     filename = generate_output_filename(csv_file.filename, optimization_config)
     buffer.seek(0)

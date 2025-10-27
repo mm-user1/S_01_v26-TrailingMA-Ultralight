@@ -39,6 +39,8 @@ class OptimizationConfig:
     commission_rate: float = 0.0005
     atr_period: int = DEFAULT_ATR_PERIOD
     worker_processes: int = 6
+    filter_min_profit: bool = False
+    min_profit_threshold: float = 0.0
 
 
 @dataclass
@@ -653,9 +655,18 @@ def _format_fixed_param_value(value: Any) -> str:
 
 
 def export_to_csv(
-    results: List[OptimizationResult], fixed_params: Dict[str, Any]
+    results: List[OptimizationResult],
+    fixed_params: Dict[str, Any],
+    *,
+    filter_min_profit: bool = False,
+    min_profit_threshold: float = 0.0,
 ) -> str:
-    """Export results to CSV format string with fixed parameter metadata."""
+    """Export results to CSV format string with fixed parameter metadata.
+
+    When ``filter_min_profit`` is enabled, rows whose ``net_profit_pct`` is
+    strictly below ``min_profit_threshold`` are omitted from the export. The
+    optimisation itself remains unaffected.
+    """
 
     import io
 
@@ -674,7 +685,15 @@ def export_to_csv(
     header_line = ",".join(column[0] for column in filtered_columns)
     output.write(header_line + "\n")
 
-    for item in results:
+    if filter_min_profit:
+        threshold = float(min_profit_threshold)
+        filtered_results = [
+            item for item in results if float(item.net_profit_pct) >= threshold
+        ]
+    else:
+        filtered_results = results
+
+    for item in filtered_results:
         row_values = []
         for _, frontend_name, attr_name, formatter in filtered_columns:
             value = getattr(item, attr_name)

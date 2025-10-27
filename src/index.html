@@ -236,6 +236,34 @@
       gap: 6px;
     }
 
+    .filter-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .filter-group .filter-input-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .filter-group .filter-input-group input[type="number"] {
+      width: 100px;
+    }
+
+    .filter-group.active {
+      background: #e0f3ff;
+      border-radius: 4px;
+      padding: 6px 10px;
+    }
+
+    .filter-group.active label {
+      color: #1a3a5a;
+      font-weight: 600;
+    }
+
     .date-input {
       width: 150px;
     }
@@ -575,6 +603,30 @@
                   <div id="selectedFilesWrapper" class="selected-files">
                     <div class="selected-files-title">Выбранные файлы</div>
                     <ul id="selectedFilesList" class="selected-files-list"></ul>
+                  </div>
+                </div>
+              </div>
+
+              <div class="section">
+                <div class="section-title">Optimization Filters</div>
+                <div class="form-group">
+                  <div class="filter-group" id="minProfitFilterGroup">
+                    <div class="checkbox-group">
+                      <input type="checkbox" id="minProfitFilter" />
+                      <label for="minProfitFilter">Min Net Profit Filter</label>
+                    </div>
+                    <div class="filter-input-group">
+                      <label for="minProfitThreshold">Min %</label>
+                      <input
+                        type="number"
+                        id="minProfitThreshold"
+                        min="0"
+                        max="99000"
+                        step="1.0"
+                        value="0"
+                        disabled
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1251,7 +1303,9 @@
         trailShortOffset: 1,
         riskPerTrade: 2,
         contractSize: 0.01,
-        workerProcesses: 6
+        workerProcesses: 6,
+        minProfitFilter: false,
+        minProfitThreshold: 0
       };
 
       const optimizerForm = document.getElementById('optimizerForm');
@@ -1285,6 +1339,27 @@
 
         selectedFilesList.appendChild(fragment);
         selectedFilesWrapper.style.display = 'block';
+      }
+
+      function getMinProfitElements() {
+        return {
+          checkbox: document.getElementById('minProfitFilter'),
+          input: document.getElementById('minProfitThreshold'),
+          group: document.getElementById('minProfitFilterGroup'),
+        };
+      }
+
+      function syncMinProfitFilterUI() {
+        const { checkbox, input, group } = getMinProfitElements();
+        if (!checkbox || !input) {
+          return;
+        }
+
+        const isChecked = Boolean(checkbox.checked);
+        input.disabled = !isChecked;
+        if (group) {
+          group.classList.toggle('active', isChecked);
+        }
       }
 
       if (csvFileInputEl) {
@@ -1560,6 +1635,13 @@
         if (workerInput) {
           workerInput.value = defaults.workerProcesses;
         }
+        const { checkbox: minProfitCheckbox, input: minProfitInput } = getMinProfitElements();
+        if (minProfitCheckbox) {
+          minProfitCheckbox.checked = defaults.minProfitFilter;
+        }
+        if (minProfitInput) {
+          minProfitInput.value = defaults.minProfitThreshold;
+        }
         if (csvFileInputEl) {
           csvFileInputEl.value = '';
           renderSelectedFiles([]);
@@ -1580,6 +1662,7 @@
           progressFill.style.width = '0%';
           progressText.textContent = 'Processing: 0 / 0 (0%)';
         }
+        syncMinProfitFilterUI();
         calculateTotalCombinations();
       }
 
@@ -1912,6 +1995,16 @@
           end: state.end
         };
 
+        const { checkbox: minProfitCheckbox, input: minProfitInput } = getMinProfitElements();
+        const filterEnabled = Boolean(minProfitCheckbox && minProfitCheckbox.checked);
+        let minProfitThreshold = 0;
+        if (minProfitInput) {
+          const parsedValue = Number(minProfitInput.value);
+          if (Number.isFinite(parsedValue)) {
+            minProfitThreshold = Math.min(99000, Math.max(0, parsedValue));
+          }
+        }
+
         OPTIMIZATION_PARAMETERS.forEach((param) => {
           const checkbox = document.getElementById(param.checkboxId);
           const fromInput = document.getElementById(param.fromId);
@@ -1952,7 +2045,9 @@
           contract_size: Number(document.getElementById('contractSize').value) || 0,
           commission_rate: 0.0005,
           atr_period: 14,
-          worker_processes: workerProcesses
+          worker_processes: workerProcesses,
+          filter_min_profit: filterEnabled,
+          min_profit_threshold: minProfitThreshold
         };
       }
 
@@ -2134,6 +2229,16 @@
         });
       }
 
+      function bindMinProfitFilterControl() {
+        const { checkbox, input } = getMinProfitElements();
+        if (!checkbox || !input) {
+          return;
+        }
+
+        checkbox.addEventListener('change', syncMinProfitFilterUI);
+        syncMinProfitFilterUI();
+      }
+
       async function submitForm(event) {
         event.preventDefault();
         const resultsEl = document.getElementById('results');
@@ -2240,6 +2345,7 @@
       }
 
       bindOptimizerInputs();
+      bindMinProfitFilterControl();
       bindMASelectors();
       applyDefaults();
     });
