@@ -393,6 +393,9 @@ def _simulate_combination(params_dict: Dict[str, Any]) -> OptimizationResult:
         current_time = _time_index[i]
 
         if position > 0:
+            if trail_activated_long and not math.isnan(trail_long_value):
+                if math.isnan(trail_price_long) or trail_long_value > trail_price_long:
+                    trail_price_long = trail_long_value
             if (
                 not trail_activated_long
                 and not math.isnan(entry_price)
@@ -401,11 +404,10 @@ def _simulate_combination(params_dict: Dict[str, Any]) -> OptimizationResult:
                 activation_price = entry_price + (entry_price - stop_price) * trail_rr_long
                 if h >= activation_price:
                     trail_activated_long = True
-                    if math.isnan(trail_price_long):
+                    if not math.isnan(trail_long_value):
+                        trail_price_long = max(stop_price, trail_long_value)
+                    else:
                         trail_price_long = stop_price
-            if not math.isnan(trail_price_long) and not math.isnan(trail_long_value):
-                if math.isnan(trail_price_long) or trail_long_value > trail_price_long:
-                    trail_price_long = trail_long_value
             if trail_activated_long:
                 if not math.isnan(trail_price_long) and l <= trail_price_long:
                     exit_price = trail_price_long
@@ -434,6 +436,9 @@ def _simulate_combination(params_dict: Dict[str, Any]) -> OptimizationResult:
                 trades_count += 1
 
         elif position < 0:
+            if trail_activated_short and not math.isnan(trail_short_value):
+                if math.isnan(trail_price_short) or trail_short_value < trail_price_short:
+                    trail_price_short = trail_short_value
             if (
                 not trail_activated_short
                 and not math.isnan(entry_price)
@@ -442,11 +447,10 @@ def _simulate_combination(params_dict: Dict[str, Any]) -> OptimizationResult:
                 activation_price = entry_price - (stop_price - entry_price) * trail_rr_short
                 if l <= activation_price:
                     trail_activated_short = True
-                    if math.isnan(trail_price_short):
+                    if not math.isnan(trail_short_value):
+                        trail_price_short = min(stop_price, trail_short_value)
+                    else:
                         trail_price_short = stop_price
-            if not math.isnan(trail_price_short) and not math.isnan(trail_short_value):
-                if math.isnan(trail_price_short) or trail_short_value < trail_price_short:
-                    trail_price_short = trail_short_value
             if trail_activated_short:
                 if not math.isnan(trail_price_short) and h >= trail_price_short:
                     exit_price = trail_price_short
