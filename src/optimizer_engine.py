@@ -6,7 +6,7 @@ import math
 import multiprocessing as mp
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import IO, Any, Dict, Iterable, List, Optional, Tuple
+from typing import IO, Any, Dict, Iterable, List, Mapping, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -632,7 +632,7 @@ def run_optimization(config: OptimizationConfig) -> List[OptimizationResult]:
 
 
 CSV_COLUMN_SPECS: List[Tuple[str, Optional[str], str, Optional[str]]] = [
-    ("MA Type", None, "ma_type", None),
+    ("MA Type", "maType", "ma_type", None),
     ("MA Length", "maLength", "ma_length", None),
     ("Close Count Long", "closeCountLong", "close_count_long", None),
     ("Close Count Short", "closeCountShort", "close_count_short", None),
@@ -648,10 +648,10 @@ CSV_COLUMN_SPECS: List[Tuple[str, Optional[str], str, Optional[str]]] = [
     ("Stop Short Max Days", "stopShortMaxDays", "stop_short_max_days", None),
     ("Trail RR Long", "trailRRLong", "trail_rr_long", None),
     ("Trail RR Short", "trailRRShort", "trail_rr_short", None),
-    ("Trail MA Long Type", None, "trail_ma_long_type", None),
+    ("Trail MA Long Type", "trailLongType", "trail_ma_long_type", None),
     ("Trail MA Long Length", "trailLongLength", "trail_ma_long_length", None),
     ("Trail MA Long Offset", "trailLongOffset", "trail_ma_long_offset", None),
-    ("Trail MA Short Type", None, "trail_ma_short_type", None),
+    ("Trail MA Short Type", "trailShortType", "trail_ma_short_type", None),
     ("Trail MA Short Length", "trailShortLength", "trail_ma_short_length", None),
     ("Trail MA Short Offset", "trailShortOffset", "trail_ma_short_offset", None),
     ("Net Profit%", None, "net_profit_pct", "percent"),
@@ -674,7 +674,7 @@ def _format_fixed_param_value(value: Any) -> str:
 
 def export_to_csv(
     results: List[OptimizationResult],
-    fixed_params: Dict[str, Any],
+    fixed_params: Union[Mapping[str, Any], Iterable[Tuple[str, Any]]],
     *,
     filter_min_profit: bool = False,
     min_profit_threshold: float = 0.0,
@@ -690,14 +690,20 @@ def export_to_csv(
 
     output = io.StringIO()
 
+    if isinstance(fixed_params, Mapping):
+        fixed_items = list(fixed_params.items())
+    else:
+        fixed_items = list(fixed_params)
+    fixed_lookup = {name: value for name, value in fixed_items}
+
     output.write("Parameter Name,Value\n")
-    for name, value in fixed_params.items():
+    for name, value in fixed_items:
         formatted_value = _format_fixed_param_value(value)
         output.write(f"{name},{formatted_value}\n")
     output.write("\n")
 
     filtered_columns = [
-        spec for spec in CSV_COLUMN_SPECS if spec[1] is None or spec[1] not in fixed_params
+        spec for spec in CSV_COLUMN_SPECS if spec[1] is None or spec[1] not in fixed_lookup
     ]
 
     header_line = ",".join(column[0] for column in filtered_columns)

@@ -9,6 +9,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 
 from backtest_engine import StrategyParams, load_data, run_strategy
 from optimizer_engine import (
+    CSV_COLUMN_SPECS,
     OptimizationConfig,
     PARAMETER_MAP,
     export_to_csv,
@@ -202,6 +203,13 @@ def _unique_preserve_order(items):
     return result
 
 
+_PARAMETER_FRONTEND_ORDER = [
+    frontend_name
+    for _, frontend_name, _, _ in CSV_COLUMN_SPECS
+    if frontend_name is not None
+]
+
+
 def _format_ma_segment(config: OptimizationConfig) -> str:
     ma_types = _unique_preserve_order([ma.upper() for ma in config.ma_types_trend])
     if not ma_types:
@@ -290,16 +298,35 @@ def run_optimization_endpoint() -> object:
         app.logger.exception("Optimization run failed")
         return ("Optimization execution failed.", HTTPStatus.INTERNAL_SERVER_ERROR)
 
-    fixed_parameters = {}
-    for name, enabled in optimization_config.enabled_params.items():
-        if not bool(enabled):
-            value = optimization_config.fixed_params.get(name)
-            if value is None:
-                param_info = PARAMETER_MAP.get(name)
-                if param_info and results:
-                    attr_name = param_info[0]
-                    value = getattr(results[0], attr_name, None)
-            fixed_parameters[name] = value
+    fixed_parameters = []
+    trend_types = _unique_preserve_order(optimization_config.ma_types_trend)
+    trail_long_types = _unique_preserve_order(optimization_config.ma_types_trail_long)
+    trail_short_types = _unique_preserve_order(optimization_config.ma_types_trail_short)
+
+    for name in _PARAMETER_FRONTEND_ORDER:
+        if name == "maType":
+            if len(trend_types) == 1:
+                fixed_parameters.append((name, trend_types[0]))
+            continue
+        if name == "trailLongType":
+            if len(trail_long_types) == 1:
+                fixed_parameters.append((name, trail_long_types[0]))
+            continue
+        if name == "trailShortType":
+            if len(trail_short_types) == 1:
+                fixed_parameters.append((name, trail_short_types[0]))
+            continue
+
+        if bool(optimization_config.enabled_params.get(name, False)):
+            continue
+
+        value = optimization_config.fixed_params.get(name)
+        if value is None:
+            param_info = PARAMETER_MAP.get(name)
+            if param_info and results:
+                attr_name = param_info[0]
+                value = getattr(results[0], attr_name, None)
+        fixed_parameters.append((name, value))
 
     csv_content = export_to_csv(
         results,
