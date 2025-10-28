@@ -5,6 +5,7 @@ import itertools
 import math
 import multiprocessing as mp
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import IO, Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
@@ -97,20 +98,37 @@ def _generate_numeric_sequence(
         raise ValueError("Step must be non-zero for optimization ranges.")
     delta = abs(step)
     step_value = delta if start <= stop else -delta
+    decimals = max(0, -Decimal(str(step)).normalize().as_tuple().exponent)
+    epsilon = delta * 1e-9
+
     values: List[Any] = []
-    current = start
+    index = 0
 
-    def should_continue(val: float) -> bool:
+    while True:
+        raw_value = start + index * step_value
         if step_value > 0:
-            return val <= stop + delta * 1e-9
-        return val >= stop - delta * 1e-9
+            if raw_value > stop + epsilon:
+                break
+        else:
+            if raw_value < stop - epsilon:
+                break
 
-    while should_continue(current):
-        values.append(int(round(current)) if is_int else float(current))
-        current += step_value
+        if is_int:
+            values.append(int(round(raw_value)))
+        else:
+            rounded_value = round(raw_value, decimals)
+            if rounded_value == 0:
+                rounded_value = 0.0
+            values.append(float(rounded_value))
+
+        index += 1
 
     if not values:
-        values.append(int(round(start)) if is_int else float(start))
+        if is_int:
+            values.append(int(round(start)))
+        else:
+            rounded_start = round(start, decimals)
+            values.append(float(0.0 if rounded_start == 0 else rounded_start))
     return values
 
 
