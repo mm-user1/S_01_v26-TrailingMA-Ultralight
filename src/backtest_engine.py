@@ -204,7 +204,7 @@ def hma(series: pd.Series, length: int) -> pd.Series:
     if length <= 0:
         return pd.Series(np.nan, index=series.index)
     half_length = max(1, length // 2)
-    sqrt_length = max(1, int(round(math.sqrt(length))))
+    sqrt_length = max(1, int(math.sqrt(length)))
     return wma(2 * wma(series, half_length) - wma(series, length), sqrt_length)
 
 
