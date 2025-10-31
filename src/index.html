@@ -264,11 +264,18 @@
       font-weight: 600;
     }
 
+    .score-formula-params {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding-left: 12px;
+    }
+
     .score-metric-row {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 6px 0;
+      padding: 4px 0;
     }
 
     .score-metric-row input[type="checkbox"] {
@@ -809,10 +816,6 @@
                     </div>
                   </div>
                 </div>
-              </div>
-
-              <div class="section">
-                <div class="section-title">Score Configuration</div>
 
                 <div class="form-group">
                   <div class="filter-group" id="scoreFilterGroup">
@@ -846,7 +849,7 @@
                       Adjust weights (0.00-1.00) for each metric. Disabled metrics are excluded from Score.
                     </div>
 
-                    <div class="param-group" style="flex-direction: column; gap: 8px;">
+                    <div class="score-formula-params">
                       <div class="score-metric-row">
                         <input type="checkbox" id="metric-romad" checked />
                         <label for="metric-romad" style="min-width: 140px;">RoMaD</label>
