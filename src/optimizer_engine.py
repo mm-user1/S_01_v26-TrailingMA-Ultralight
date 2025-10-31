@@ -602,15 +602,17 @@ def _simulate_combination(params_dict: Dict[str, Any]) -> OptimizationResult:
         elif position < 0 and not math.isnan(entry_price):
             current_equity += (entry_price - c) * position_size
         equity_curve.append(current_equity)
-        last_equity = current_equity
+
+        # For Sharpe calculations we track realized equity only
+        last_equity = realized_equity
         prev_position = position
 
     equity_series = pd.Series(realized_curve, index=_time_index[: len(realized_curve)])
     net_profit_pct = ((realized_equity - equity) / equity) * 100
     max_drawdown_pct = compute_max_drawdown(equity_series)
 
-    if has_month_data and equity_curve and month_start_equity > 0:
-        monthly_returns.append((last_equity / month_start_equity - 1.0) * 100.0)
+    if has_month_data and month_start_equity > 0:
+        monthly_returns.append((realized_equity / month_start_equity - 1.0) * 100.0)
 
     profit_factor: Optional[float]
     if gross_loss > 0:
