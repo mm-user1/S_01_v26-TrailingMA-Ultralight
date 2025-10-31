@@ -389,11 +389,14 @@ def _simulate_combination(params_dict: Dict[str, Any]) -> OptimizationResult:
     realized_curve: List[float] = []
     equity_curve: List[float] = []
     monthly_returns: List[float] = []
-    month_start_equity = realized_equity
+    month_start_equity: Optional[float] = None
+    current_month: Optional[int] = None
     last_equity = realized_equity
+    in_range_previous = False
     gross_profit = 0.0
     gross_loss = 0.0
     has_month_data = len(_month_arr) == len(_data_close)
+    has_time_filter = len(_time_in_range) == len(_data_close)
 
     for i in range(len(_data_close)):
         c = float(_data_close[i])
@@ -432,10 +435,23 @@ def _simulate_combination(params_dict: Dict[str, Any]) -> OptimizationResult:
         exit_price: Optional[float] = None
         current_time = _time_index[i]
 
-        if i > 0 and has_month_data and _month_arr[i] != _month_arr[i - 1]:
-            if month_start_equity > 0:
+        in_range = bool(_time_in_range[i]) if has_time_filter else True
+
+        if has_month_data:
+            month_value = int(_month_arr[i])
+            if in_range:
+                if not in_range_previous:
+                    month_start_equity = last_equity
+                    current_month = month_value
+                elif current_month is not None and month_value != current_month:
+                    if month_start_equity is not None and month_start_equity > 0:
+                        monthly_returns.append((last_equity / month_start_equity - 1.0) * 100.0)
+                    month_start_equity = last_equity
+                    current_month = month_value
+            elif in_range_previous and month_start_equity is not None and month_start_equity > 0:
                 monthly_returns.append((last_equity / month_start_equity - 1.0) * 100.0)
-            month_start_equity = last_equity
+                month_start_equity = None
+                current_month = None
 
         if position > 0:
             if (
@@ -604,12 +620,18 @@ def _simulate_combination(params_dict: Dict[str, Any]) -> OptimizationResult:
         equity_curve.append(current_equity)
         last_equity = current_equity
         prev_position = position
+        in_range_previous = in_range
 
     equity_series = pd.Series(realized_curve, index=_time_index[: len(realized_curve)])
     net_profit_pct = ((realized_equity - equity) / equity) * 100
     max_drawdown_pct = compute_max_drawdown(equity_series)
 
-    if has_month_data and equity_curve and month_start_equity > 0:
+    if (
+        has_month_data
+        and month_start_equity is not None
+        and month_start_equity > 0
+        and in_range_previous
+    ):
         monthly_returns.append((last_equity / month_start_equity - 1.0) * 100.0)
 
     profit_factor: Optional[float]
