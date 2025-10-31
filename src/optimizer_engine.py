@@ -899,11 +899,11 @@ CSV_COLUMN_SPECS: List[Tuple[str, Optional[str], str, Optional[str]]] = [
     ("Trades", None, "total_trades", None),
     ("Score", None, "score", "float"),
     ("RoMaD", None, "romad", "optional_float"),
-    ("Sharpe Ratio", None, "sharpe_ratio", "optional_float"),
-    ("Profit Factor", None, "profit_factor", "optional_float"),
-    ("Ulcer Index", None, "ulcer_index", "optional_float"),
-    ("Recovery Factor", None, "recovery_factor", "optional_float"),
-    ("Consistency Score", None, "consistency_score", "optional_float"),
+    ("Sharpe", None, "sharpe_ratio", "optional_float"),
+    ("PF", None, "profit_factor", "optional_float"),
+    ("Ulcer", None, "ulcer_index", "optional_float"),
+    ("Recover", None, "recovery_factor", "optional_float"),
+    ("Consist", None, "consistency_score", "optional_float"),
 ]
 
 
