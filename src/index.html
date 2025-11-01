@@ -2785,7 +2785,7 @@
         const trendTypes = collectSelectedTypes('trend');
         const trailLongTypes = collectSelectedTypes('trailLong');
         const trailShortTypes = collectSelectedTypes('trailShort');
-        const trailLock = Boolean(document.getElementById('trailLock')?.checked);
+        const lockTrailTypes = Boolean(document.getElementById('trailLock')?.checked);
 
         return {
           start,
@@ -2793,7 +2793,7 @@
           trendTypes,
           trailLongTypes,
           trailShortTypes,
-          trailLock,
+          trailLock: lockTrailTypes,
           payload: {
             dateFilter: document.getElementById('dateFilter').checked,
             backtester: document.getElementById('backtester').checked,
@@ -2820,7 +2820,7 @@
             trailShortOffset: Number(document.getElementById('trailShortOffset').value),
             riskPerTrade: Number(document.getElementById('riskPerTrade').value),
             contractSize: Number(document.getElementById('contractSize').value),
-            trailLock
+            lock_trail_types: lockTrailTypes
           }
         };
       }
@@ -3073,10 +3073,10 @@
 
         let maCombos = 0;
         if (lock) {
-          const setShort = new Set(trailShortTypes.map((type) => type.toUpperCase()));
+          const shortSet = new Set(trailShortTypes.map((type) => type.toUpperCase()));
           const intersection = trailLongTypes
             .map((type) => type.toUpperCase())
-            .filter((type) => setShort.has(type));
+            .filter((type) => shortSet.has(type));
           maCombos = trendTypes.length * intersection.length;
         } else {
           maCombos = trendTypes.length * trailLongTypes.length * trailShortTypes.length;
@@ -3357,10 +3357,13 @@
           }
         });
 
-        const trailLockCheckbox = document.getElementById('trailLock');
-        if (trailLockCheckbox) {
-          trailLockCheckbox.addEventListener('change', calculateTotalCombinations);
+        const lockEl = document.getElementById('trailLock');
+        if (lockEl) {
+          lockEl.removeEventListener('change', calculateTotalCombinations);
+          lockEl.addEventListener('change', calculateTotalCombinations);
         }
+
+        calculateTotalCombinations();
       }
 
       function bindMinProfitFilterControl() {
@@ -3460,13 +3463,33 @@
         }
 
         const combinations = [];
-        state.trendTypes.forEach((trendType) => {
+        if (state.trailLock) {
+          const shortLookup = new Map();
+          state.trailShortTypes.forEach((type) => {
+            const key = type.toUpperCase();
+            if (!shortLookup.has(key)) {
+              shortLookup.set(key, type);
+            }
+          });
+
           state.trailLongTypes.forEach((trailLongType) => {
-            state.trailShortTypes.forEach((trailShortType) => {
-              combinations.push({ trendType, trailLongType, trailShortType });
+            const matchedShort = shortLookup.get(trailLongType.toUpperCase());
+            if (!matchedShort) {
+              return;
+            }
+            state.trendTypes.forEach((trendType) => {
+              combinations.push({ trendType, trailLongType, trailShortType: matchedShort });
             });
-        });
-        });
+          });
+        } else {
+          state.trendTypes.forEach((trendType) => {
+            state.trailLongTypes.forEach((trailLongType) => {
+              state.trailShortTypes.forEach((trailShortType) => {
+                combinations.push({ trendType, trailLongType, trailShortType });
+              });
+            });
+          });
+        }
 
         if (!combinations.length) {
           errorEl.textContent = 'Нет комбинаций для запуска.';
