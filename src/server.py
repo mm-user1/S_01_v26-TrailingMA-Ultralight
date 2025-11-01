@@ -97,6 +97,7 @@ DEFAULT_PRESET: Dict[str, Any] = {
     "trailLongLength": 160,
     "trailLongOffset": -1.0,
     "trailShortTypes": ["SMA"],
+    "trailLock": False,
     "trailShortLength": 160,
     "trailShortOffset": 1.0,
     "riskPerTrade": 2.0,
@@ -125,9 +126,7 @@ DEFAULT_PRESET: Dict[str, Any] = {
     "scoreInvertMetrics": {"ulcer": True},
     "csvPath": "",
 }
-
-
-BOOL_FIELDS = {"dateFilter", "backtester", "minProfitFilter", "scoreFilterEnabled"}
+BOOL_FIELDS = {"dateFilter", "backtester", "trailLock", "minProfitFilter", "scoreFilterEnabled"}
 INT_FIELDS = {
     "maLength",
     "closeCountLong",
@@ -745,6 +744,13 @@ def _build_optimization_config(csv_file, payload: dict, worker_processes=None) -
         or []
     )
 
+    lock_trail_types_raw = (
+        payload.get("lock_trail_types")
+        or payload.get("lockTrailTypes")
+        or payload.get("trailLock")
+    )
+    lock_trail_types = _parse_bool(lock_trail_types_raw, False)
+
     risk_per_trade = payload.get("risk_per_trade_pct")
     if risk_per_trade is None:
         risk_per_trade = payload.get("riskPerTrade", 2.0)
@@ -806,6 +812,7 @@ def _build_optimization_config(csv_file, payload: dict, worker_processes=None) -
         filter_min_profit=filter_min_profit,
         min_profit_threshold=min_profit_threshold,
         score_config=score_config,
+        lock_trail_types=lock_trail_types,
     )
 
 

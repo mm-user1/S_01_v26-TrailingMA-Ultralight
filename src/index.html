@@ -1091,6 +1091,14 @@
                     </div>
                   </div>
 
+                  <!-- Lock (pair Trail MA Long & Short types) -->
+                  <div class="param-group" style="margin: 6px 0 10px 0;">
+                    <label style="display:flex; align-items:center; gap:8px;">
+                      <input type="checkbox" id="trailLock" />
+                      <span title="Pair Trail MA Long & Short by the same MA type during optimization">Lock</span>
+                    </label>
+                  </div>
+
                   <div class="param-group" style="flex-direction: column; align-items: flex-start;">
                     <label>Trail MA Short</label>
                     <div class="ma-selector" data-group="trailShort">
@@ -1606,6 +1614,7 @@
         trailLongLength: 160,
         trailLongOffset: -1,
         trailShortTypes: ['SMA'],
+        trailLock: false,
         trailShortLength: 160,
         trailShortOffset: 1,
         riskPerTrade: 2,
@@ -1649,6 +1658,7 @@
         trailLongTypes: 'Trail MA Long Type',
         trailLongLength: 'Trail MA Long Length',
         trailLongOffset: 'Trail MA Long Offset',
+        trailLock: 'Trail MA Lock',
         trailShortTypes: 'Trail MA Short Type',
         trailShortLength: 'Trail MA Short Length',
         trailShortOffset: 'Trail MA Short Offset',
@@ -2227,6 +2237,9 @@
         if (Object.prototype.hasOwnProperty.call(values, 'backtester')) {
           setCheckboxValue('backtester', values.backtester);
         }
+        if (Object.prototype.hasOwnProperty.call(values, 'trailLock')) {
+          setCheckboxValue('trailLock', values.trailLock);
+        }
 
         if (Object.prototype.hasOwnProperty.call(values, 'startDate')) {
           setInputValue('startDate', values.startDate);
@@ -2379,6 +2392,7 @@
         return {
           dateFilter: document.getElementById('dateFilter').checked,
           backtester: document.getElementById('backtester').checked,
+          trailLock: Boolean(document.getElementById('trailLock')?.checked),
           startDate: document.getElementById('startDate').value.trim(),
           startTime: document.getElementById('startTime').value.trim(),
           endDate: document.getElementById('endDate').value.trim(),
@@ -2775,6 +2789,7 @@
         const trendTypes = collectSelectedTypes('trend');
         const trailLongTypes = collectSelectedTypes('trailLong');
         const trailShortTypes = collectSelectedTypes('trailShort');
+        const trailLock = Boolean(document.getElementById('trailLock')?.checked);
 
         return {
           start,
@@ -2782,6 +2797,7 @@
           trendTypes,
           trailLongTypes,
           trailShortTypes,
+          trailLock,
           payload: {
             dateFilter: document.getElementById('dateFilter').checked,
             backtester: document.getElementById('backtester').checked,
@@ -2807,7 +2823,8 @@
             trailShortLength: Number(document.getElementById('trailShortLength').value),
             trailShortOffset: Number(document.getElementById('trailShortOffset').value),
             riskPerTrade: Number(document.getElementById('riskPerTrade').value),
-            contractSize: Number(document.getElementById('contractSize').value)
+            contractSize: Number(document.getElementById('contractSize').value),
+            trailLock
           }
         };
       }
@@ -3056,7 +3073,19 @@
         const trendTypes = collectSelectedTypes('trend');
         const trailLongTypes = collectSelectedTypes('trailLong');
         const trailShortTypes = collectSelectedTypes('trailShort');
-        const maCombos = trendTypes.length * trailLongTypes.length * trailShortTypes.length;
+        const lock = Boolean(document.getElementById('trailLock')?.checked);
+
+        let maCombos = 0;
+        if (lock) {
+          const setShort = new Set(trailShortTypes.map((type) => type.toUpperCase()));
+          const intersection = trailLongTypes
+            .map((type) => type.toUpperCase())
+            .filter((type) => setShort.has(type));
+          maCombos = trendTypes.length * intersection.length;
+        } else {
+          maCombos = trendTypes.length * trailLongTypes.length * trailShortTypes.length;
+        }
+
         if (maCombos === 0) {
           valid = false;
         } else {
@@ -3131,6 +3160,7 @@
           ma_types_trend: state.trendTypes,
           ma_types_trail_long: state.trailLongTypes,
           ma_types_trail_short: state.trailShortTypes,
+          lock_trail_types: Boolean(document.getElementById('trailLock')?.checked),
           risk_per_trade_pct: Number(document.getElementById('riskPerTrade').value) || 0,
           contract_size: Number(document.getElementById('contractSize').value) || 0,
           commission_rate: 0.0005,
@@ -3330,6 +3360,11 @@
             input.addEventListener('change', calculateTotalCombinations);
           }
         });
+
+        const trailLockCheckbox = document.getElementById('trailLock');
+        if (trailLockCheckbox) {
+          trailLockCheckbox.addEventListener('change', calculateTotalCombinations);
+        }
       }
 
       function bindMinProfitFilterControl() {
