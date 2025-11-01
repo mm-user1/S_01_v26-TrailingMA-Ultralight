@@ -54,6 +54,7 @@ class OptimizationConfig:
     ma_types_trend: List[str]
     ma_types_trail_long: List[str]
     ma_types_trail_short: List[str]
+    lock_trail_types: bool = False
     risk_per_trade_pct: float = 2.0
     contract_size: float = 0.01
     commission_rate: float = 0.0005
@@ -204,29 +205,49 @@ def generate_parameter_grid(config: OptimizationConfig) -> List[Dict[str, Any]]:
             values = [int(value) if is_int else float(value)]
         param_values[internal_name] = values
 
-    ma_type_combos = list(
-        itertools.product(
-            [ma.upper() for ma in config.ma_types_trend],
-            [ma.upper() for ma in config.ma_types_trail_long],
-            [ma.upper() for ma in config.ma_types_trail_short],
-        )
-    )
+    trend_types = [ma.upper() for ma in config.ma_types_trend]
+    trail_long_types = [ma.upper() for ma in config.ma_types_trail_long]
+    trail_short_types = [ma.upper() for ma in config.ma_types_trail_short]
 
     param_names = list(param_values.keys())
     param_lists = [param_values[name] for name in param_names]
 
     combinations: List[Dict[str, Any]] = []
-    for ma_type, trail_long_type, trail_short_type in ma_type_combos:
-        for values in itertools.product(*param_lists):
-            combo = dict(zip(param_names, values))
-            combo.update(
-                {
-                    "ma_type": ma_type,
-                    "trail_ma_long_type": trail_long_type,
-                    "trail_ma_short_type": trail_short_type,
-                }
+
+    if config.lock_trail_types:
+        trail_short_set = set(trail_short_types)
+        paired_trail_types = [trail for trail in trail_long_types if trail in trail_short_set]
+        if not paired_trail_types:
+            raise ValueError(
+                "No overlapping trail MA types available when lock_trail_types is enabled."
             )
-            combinations.append(combo)
+
+        for ma_type in trend_types:
+            for paired_type in paired_trail_types:
+                for values in itertools.product(*param_lists):
+                    combo = dict(zip(param_names, values))
+                    combo.update(
+                        {
+                            "ma_type": ma_type,
+                            "trail_ma_long_type": paired_type,
+                            "trail_ma_short_type": paired_type,
+                        }
+                    )
+                    combinations.append(combo)
+    else:
+        for ma_type, trail_long_type, trail_short_type in itertools.product(
+            trend_types, trail_long_types, trail_short_types
+        ):
+            for values in itertools.product(*param_lists):
+                combo = dict(zip(param_names, values))
+                combo.update(
+                    {
+                        "ma_type": ma_type,
+                        "trail_ma_long_type": trail_long_type,
+                        "trail_ma_short_type": trail_short_type,
+                    }
+                )
+                combinations.append(combo)
     return combinations
 
 
