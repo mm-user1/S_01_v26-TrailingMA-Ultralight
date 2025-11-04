@@ -309,26 +309,27 @@ class OptunaOptimizer:
 
         result = self._evaluate_parameters(params_dict)
 
-        score_config = self.base_config.score_config or DEFAULT_SCORE_CONFIG
-        scored_results = calculate_score([result], score_config)
-        if scored_results:
-            result = scored_results[0]
-
         if self.base_config.filter_min_profit and (
             result.net_profit_pct < float(self.base_config.min_profit_threshold)
         ):
             self.pruned_trials += 1
             raise optuna.TrialPruned("Below minimum profit threshold")
 
-        if score_config.get("filter_enabled"):
-            min_score = float(score_config.get("min_score_threshold", 0.0))
-            if result.score < min_score:
-                self.pruned_trials += 1
-                raise optuna.TrialPruned("Below minimum score threshold")
-
+        # For composite score target, calculate score dynamically based on all results so far
+        score_config = self.base_config.score_config or DEFAULT_SCORE_CONFIG
         objective_value: float
+
         if self.optuna_config.target == "score":
-            objective_value = float(result.score)
+            # Add current result to accumulated results
+            temp_results = self.trial_results + [result]
+            # Calculate scores for all results using percentile ranking
+            scored_results = calculate_score(temp_results, score_config)
+            # Get the score of the current (last) result
+            if scored_results:
+                result = scored_results[-1]
+                objective_value = float(result.score)
+            else:
+                objective_value = 0.0
         elif self.optuna_config.target == "net_profit":
             objective_value = float(result.net_profit_pct)
         elif self.optuna_config.target == "romad":
@@ -338,7 +339,14 @@ class OptunaOptimizer:
         elif self.optuna_config.target == "max_drawdown":
             objective_value = -float(result.max_drawdown_pct)
         else:
-            objective_value = float(result.score)
+            objective_value = float(result.romad or 0.0)
+
+        # Check score threshold filter (only applies when score is calculated)
+        if self.optuna_config.target == "score" and score_config.get("filter_enabled"):
+            min_score = float(score_config.get("min_score_threshold", 0.0))
+            if result.score < min_score:
+                self.pruned_trials += 1
+                raise optuna.TrialPruned("Below minimum score threshold")
 
         if self.pruner is not None:
             trial.report(objective_value, step=0)
@@ -446,6 +454,10 @@ class OptunaOptimizer:
             getattr(self.study, "best_value", float("nan")),
             optimisation_time,
         )
+
+        # Calculate scores for all results using percentile ranking
+        score_config = self.base_config.score_config or DEFAULT_SCORE_CONFIG
+        self.trial_results = calculate_score(self.trial_results, score_config)
 
         if self.study:
             completed_trials = sum(1 for trial in self.study.trials if trial.state == TrialState.COMPLETE)
