@@ -63,6 +63,7 @@ class OptimizationConfig:
     filter_min_profit: bool = False
     min_profit_threshold: float = 0.0
     score_config: Optional[Dict[str, Any]] = None
+    optimization_mode: str = "grid"
 
 
 @dataclass
@@ -844,7 +845,7 @@ def calculate_score(
     return results
 
 
-def run_optimization(config: OptimizationConfig) -> List[OptimizationResult]:
+def run_grid_optimization(config: OptimizationConfig) -> List[OptimizationResult]:
     """Execute the grid search optimization."""
 
     df = load_data(config.csv_file)
@@ -911,6 +912,36 @@ def run_optimization(config: OptimizationConfig) -> List[OptimizationResult]:
     return results
 
 
+def run_optimization(config: OptimizationConfig) -> List[OptimizationResult]:
+    """Router that delegates to grid or Optuna optimization engines."""
+
+    mode = getattr(config, "optimization_mode", "grid")
+    if mode == "optuna":
+        from optuna_engine import OptunaConfig, run_optuna_optimization
+
+        optuna_config = OptunaConfig(
+            target=getattr(config, "optuna_target", "score"),
+            budget_mode=getattr(config, "optuna_budget_mode", "trials"),
+            n_trials=int(getattr(config, "optuna_n_trials", 500) or 500),
+            time_limit=int(getattr(config, "optuna_time_limit", 3600) or 3600),
+            convergence_patience=int(
+                getattr(config, "optuna_convergence", 50) or 50
+            ),
+            enable_pruning=bool(getattr(config, "optuna_enable_pruning", True)),
+            sampler=getattr(config, "optuna_sampler", "tpe"),
+            pruner=getattr(config, "optuna_pruner", "median"),
+            warmup_trials=int(
+                getattr(config, "optuna_warmup_trials", 20) or 20
+            ),
+            save_study=bool(getattr(config, "optuna_save_study", False)),
+            study_name=getattr(config, "optuna_study_name", None),
+        )
+
+        return run_optuna_optimization(config, optuna_config)
+
+    return run_grid_optimization(config)
+
+
 CSV_COLUMN_SPECS: List[Tuple[str, Optional[str], str, Optional[str]]] = [
     ("MA Type", "maType", "ma_type", None),
     ("MA Length", "maLength", "ma_length", None),
@@ -971,6 +1002,7 @@ def export_to_csv(
     *,
     filter_min_profit: bool = False,
     min_profit_threshold: float = 0.0,
+    optimization_metadata: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Export results to CSV format string with fixed parameter metadata.
 
@@ -989,6 +1021,41 @@ def export_to_csv(
         fixed_items = list(fixed_params)
     fixed_lookup = {name: value for name, value in fixed_items}
 
+    if optimization_metadata:
+        output.write("Optimization Metadata\n")
+        output.write(f"Method,{optimization_metadata.get('method', 'Grid Search')}\n")
+        if optimization_metadata.get("method") == "Optuna":
+            output.write(
+                f"Target,{optimization_metadata.get('target', 'Composite Score')}\n"
+            )
+            output.write(
+                f"Total Trials,{optimization_metadata.get('total_trials', 0)}\n"
+            )
+            output.write(
+                f"Completed Trials,{optimization_metadata.get('completed_trials', 0)}\n"
+            )
+            output.write(
+                f"Pruned Trials,{optimization_metadata.get('pruned_trials', 0)}\n"
+            )
+            output.write(
+                f"Best Trial Number,{optimization_metadata.get('best_trial_number', 0)}\n"
+            )
+            output.write(
+                f"Best Value,{optimization_metadata.get('best_value', 0)}\n"
+            )
+            output.write(
+                f"Optimization Time,{optimization_metadata.get('optimization_time', '-')}\n"
+            )
+        else:
+            output.write(
+                f"Total Combinations,{optimization_metadata.get('total_combinations', 0)}\n"
+            )
+            output.write(
+                f"Optimization Time,{optimization_metadata.get('optimization_time', '-')}\n"
+            )
+        output.write("\n")
+
+    output.write("Fixed Parameters\n")
     output.write("Parameter Name,Value\n")
     for name, value in fixed_items:
         formatted_value = _format_fixed_param_value(value)

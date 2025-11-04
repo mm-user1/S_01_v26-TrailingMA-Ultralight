@@ -1,16 +1,18 @@
 import io
 import json
 import re
+import time
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
 from backtest_engine import StrategyParams, load_data, run_strategy
 from optimizer_engine import (
     CSV_COLUMN_SPECS,
+    OptimizationResult,
     OptimizationConfig,
     PARAMETER_MAP,
     export_to_csv,
@@ -796,7 +798,78 @@ def _build_optimization_config(csv_file, payload: dict, worker_processes=None) -
         score_config_payload = payload.get("scoreConfig")
     score_config = _sanitize_score_config(score_config_payload)
 
-    return OptimizationConfig(
+    optimization_mode_raw = (
+        payload.get("optimization_mode")
+        or payload.get("optimizationMode")
+        or "grid"
+    )
+    optimization_mode = str(optimization_mode_raw).strip().lower()
+    if optimization_mode not in {"grid", "optuna"}:
+        raise ValueError(f"Invalid optimization mode: {optimization_mode_raw}")
+
+    optuna_params: Dict[str, Any] = {}
+    if optimization_mode == "optuna":
+        optuna_target = str(payload.get("optuna_target", "score")).strip().lower()
+        optuna_budget_mode = str(payload.get("optuna_budget_mode", "trials")).strip().lower()
+
+        try:
+            optuna_n_trials = int(payload.get("optuna_n_trials", 500))
+        except (TypeError, ValueError):
+            optuna_n_trials = 500
+
+        try:
+            optuna_time_limit = int(payload.get("optuna_time_limit", 3600))
+        except (TypeError, ValueError):
+            optuna_time_limit = 3600
+
+        try:
+            optuna_convergence = int(payload.get("optuna_convergence", 50))
+        except (TypeError, ValueError):
+            optuna_convergence = 50
+
+        try:
+            optuna_warmup_trials = int(payload.get("optuna_warmup_trials", 20))
+        except (TypeError, ValueError):
+            optuna_warmup_trials = 20
+
+        optuna_enable_pruning = _parse_bool(payload.get("optuna_enable_pruning", True), True)
+        optuna_sampler = str(payload.get("optuna_sampler", "tpe")).strip().lower()
+        optuna_pruner = str(payload.get("optuna_pruner", "median")).strip().lower()
+        optuna_save_study = _parse_bool(payload.get("optuna_save_study", False), False)
+
+        allowed_targets = {"score", "net_profit", "romad", "sharpe", "max_drawdown"}
+        allowed_budget_modes = {"trials", "time", "convergence"}
+        allowed_samplers = {"tpe", "random"}
+        allowed_pruners = {"median", "percentile", "patient", "none"}
+
+        if optuna_target not in allowed_targets:
+            raise ValueError(f"Invalid Optuna target: {optuna_target}")
+        if optuna_budget_mode not in allowed_budget_modes:
+            raise ValueError(f"Invalid Optuna budget mode: {optuna_budget_mode}")
+        if optuna_sampler not in allowed_samplers:
+            raise ValueError(f"Invalid Optuna sampler: {optuna_sampler}")
+        if optuna_pruner not in allowed_pruners:
+            raise ValueError(f"Invalid Optuna pruner: {optuna_pruner}")
+
+        optuna_n_trials = max(10, optuna_n_trials)
+        optuna_time_limit = max(60, optuna_time_limit)
+        optuna_convergence = max(10, optuna_convergence)
+        optuna_warmup_trials = max(0, optuna_warmup_trials)
+
+        optuna_params = {
+            "optuna_target": optuna_target,
+            "optuna_budget_mode": optuna_budget_mode,
+            "optuna_n_trials": optuna_n_trials,
+            "optuna_time_limit": optuna_time_limit,
+            "optuna_convergence": optuna_convergence,
+            "optuna_enable_pruning": optuna_enable_pruning,
+            "optuna_sampler": optuna_sampler,
+            "optuna_pruner": optuna_pruner,
+            "optuna_warmup_trials": optuna_warmup_trials,
+            "optuna_save_study": optuna_save_study,
+        }
+
+    config = OptimizationConfig(
         csv_file=csv_file,
         enabled_params=enabled_params,
         param_ranges=param_ranges,
@@ -813,7 +886,14 @@ def _build_optimization_config(csv_file, payload: dict, worker_processes=None) -
         min_profit_threshold=min_profit_threshold,
         score_config=score_config,
         lock_trail_types=lock_trail_types,
+        optimization_mode=optimization_mode,
     )
+
+    if optimization_mode == "optuna":
+        for key, value in optuna_params.items():
+            setattr(config, key, value)
+
+    return config
 
 
 _DATE_PREFIX_RE = re.compile(r"\b\d{4}[.\-/]\d{2}[.\-/]\d{2}\b")
@@ -963,8 +1043,69 @@ def run_optimization_endpoint() -> object:
         app.logger.exception("Failed to construct optimization config")
         return ("Failed to prepare optimization config.", HTTPStatus.INTERNAL_SERVER_ERROR)
 
+    results: List[OptimizationResult] = []
+    optimization_metadata: Optional[Dict[str, Any]] = None
     try:
+        start_time = time.time()
         results = run_optimization(optimization_config)
+        end_time = time.time()
+
+        optimization_time_seconds = max(0.0, end_time - start_time)
+        minutes = int(optimization_time_seconds // 60)
+        seconds = int(optimization_time_seconds % 60)
+        optimization_time_str = f"{minutes}m {seconds}s"
+
+        if optimization_config.optimization_mode == "optuna":
+            target_labels = {
+                "score": "Composite Score",
+                "net_profit": "Net Profit %",
+                "romad": "RoMaD",
+                "sharpe": "Sharpe Ratio",
+                "max_drawdown": "Max Drawdown %",
+            }
+
+            summary = getattr(optimization_config, "optuna_summary", {})
+            total_trials = int(summary.get("total_trials", getattr(optimization_config, "optuna_n_trials", 0)))
+            completed_trials = int(summary.get("completed_trials", len(results)))
+            pruned_trials = int(summary.get("pruned_trials", 0))
+            best_value = summary.get("best_value")
+
+            if best_value is None and results:
+                best_result = results[0]
+                if optimization_config.optuna_target == "score":
+                    best_value = best_result.score
+                elif optimization_config.optuna_target == "net_profit":
+                    best_value = best_result.net_profit_pct
+                elif optimization_config.optuna_target == "romad":
+                    best_value = best_result.romad
+                elif optimization_config.optuna_target == "sharpe":
+                    best_value = best_result.sharpe_ratio
+                elif optimization_config.optuna_target == "max_drawdown":
+                    best_value = best_result.max_drawdown_pct
+
+            best_value_str = "-"
+            if best_value is not None:
+                try:
+                    best_value_str = f"{float(best_value):.4f}"
+                except (TypeError, ValueError):
+                    best_value_str = str(best_value)
+
+            optimization_metadata = {
+                "method": "Optuna",
+                "target": target_labels.get(optimization_config.optuna_target, "Composite Score"),
+                "total_trials": total_trials,
+                "completed_trials": completed_trials,
+                "pruned_trials": pruned_trials,
+                "best_trial_number": summary.get("best_trial_number"),
+                "best_value": best_value_str,
+                "optimization_time": optimization_time_str,
+            }
+        else:
+            optimization_metadata = {
+                "method": "Grid Search",
+                "total_combinations": len(results),
+                "optimization_time": optimization_time_str,
+            }
     except ValueError as exc:
         if opened_file:
             opened_file.close()
@@ -1019,6 +1160,7 @@ def run_optimization_endpoint() -> object:
         fixed_parameters,
         filter_min_profit=optimization_config.filter_min_profit,
         min_profit_threshold=optimization_config.min_profit_threshold,
+        optimization_metadata=optimization_metadata,
     )
     buffer = io.BytesIO(csv_content.encode("utf-8"))
     filename = generate_output_filename(source_name, optimization_config)

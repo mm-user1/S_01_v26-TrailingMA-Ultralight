@@ -230,6 +230,13 @@
       cursor: pointer;
     }
 
+    input[type="radio"] {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+      margin-right: 6px;
+    }
+
     .checkbox-group {
       display: flex;
       align-items: center;
@@ -1237,6 +1244,120 @@
                 </div>
 
                 <div class="section">
+                  <div class="section-title">Optimization Method</div>
+                  <div class="form-group">
+                    <div class="checkbox-group">
+                      <input type="radio" id="optMethodGrid" name="optMethod" value="grid" checked />
+                      <label for="optMethodGrid">Grid Search (full enumeration)</label>
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <div class="checkbox-group">
+                      <input type="radio" id="optMethodOptuna" name="optMethod" value="optuna" />
+                      <label for="optMethodOptuna">Optuna (smart search)</label>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="optunaSettings" class="collapsible open" style="display: none;">
+                  <div class="collapsible-header">
+                    <span class="collapsible-icon">▼</span>
+                    <span class="section-title" style="margin: 0; border: none;">OPTUNA SETTINGS</span>
+                  </div>
+                  <div class="collapsible-content">
+                    <div class="form-group">
+                      <label for="optunaTarget">Optimization target:</label>
+                      <select id="optunaTarget" style="width: 220px;">
+                        <option value="score" selected>Composite Score (recommended)</option>
+                        <option value="net_profit">Net Profit %</option>
+                        <option value="romad">RoMaD</option>
+                        <option value="sharpe">Sharpe Ratio</option>
+                        <option value="max_drawdown">Max Drawdown % (minimize)</option>
+                      </select>
+                    </div>
+
+                    <div class="form-group" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+                      <label>Optimization budget:</label>
+
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="radio" id="budgetTrials" name="budgetMode" value="trials" checked />
+                        <label for="budgetTrials" style="min-width: auto;">Number of trials:</label>
+                        <input type="number" id="optunaTrials" min="10" max="10000" value="500" style="width: 80px;" />
+                      </div>
+
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="radio" id="budgetTime" name="budgetMode" value="time" />
+                        <label for="budgetTime" style="min-width: auto;">Time limit:</label>
+                        <input type="number" id="optunaTimeLimit" min="1" max="1440" value="60" style="width: 80px;" />
+                        <span style="font-size: 13px; color: #5a5a5a;">minutes</span>
+                      </div>
+
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="radio" id="budgetConvergence" name="budgetMode" value="convergence" />
+                        <label for="budgetConvergence" style="min-width: auto;">No improvement for:</label>
+                        <input type="number" id="optunaConvergence" min="10" max="500" value="50" style="width: 80px;" />
+                        <span style="font-size: 13px; color: #5a5a5a;">trials</span>
+                      </div>
+                    </div>
+
+                    <div class="form-group">
+                      <div class="checkbox-group">
+                        <input type="checkbox" id="optunaPruning" checked />
+                        <label for="optunaPruning">Enable pruning (stop bad trials early)</label>
+                      </div>
+                    </div>
+
+                    <div
+                      style="padding: 10px; background: #e0f3ff; border: 1px solid #90caf9; border-radius: 3px; margin-top: 10px;"
+                    >
+                      <div style="font-size: 12px; color: #1565c0;">
+                        ℹ️ When using "Composite Score" target, weights are taken from
+                        <a href="#" id="linkToScoreConfig" style="color: #0d47a1; text-decoration: underline;">Score Filter configuration</a>
+                        in the left panel.
+                      </div>
+                    </div>
+
+                    <div class="collapsible" style="margin-top: 15px;">
+                      <div class="collapsible-header">
+                        <span class="collapsible-icon">▼</span>
+                        <span class="section-title" style="margin: 0; border: none;">Advanced Settings</span>
+                      </div>
+                      <div class="collapsible-content">
+                        <div class="form-group">
+                          <label for="optunaSampler">Sampler:</label>
+                          <select id="optunaSampler" style="width: 200px;">
+                            <option value="tpe" selected>TPE (recommended)</option>
+                            <option value="random">Random</option>
+                          </select>
+                        </div>
+
+                        <div class="form-group">
+                          <label for="optunaPruner">Pruner:</label>
+                          <select id="optunaPruner" style="width: 200px;">
+                            <option value="median" selected>Median</option>
+                            <option value="percentile">Percentile (25%)</option>
+                            <option value="patient">Patient (stable)</option>
+                            <option value="none">None</option>
+                          </select>
+                        </div>
+
+                        <div class="form-group">
+                          <label for="optunaWarmupTrials">Initial random trials:</label>
+                          <input type="number" id="optunaWarmupTrials" min="0" max="100" value="20" style="width: 80px;" />
+                        </div>
+
+                        <div class="form-group">
+                          <div class="checkbox-group">
+                            <input type="checkbox" id="optunaSaveStudy" />
+                            <label for="optunaSaveStudy">Save study database (optuna_study.db)</label>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="section">
                   <div class="opt-section">
                     <div class="opt-section-title">T MA</div>
                     <div class="opt-row">
@@ -1517,10 +1638,33 @@
                 </div>
 
                 <div id="optimizerProgress" style="display: none;">
-                  <div class="progress-bar">
-                    <div id="progressFill" class="progress-fill"></div>
+                  <div id="gridProgress" style="display: none;">
+                    <div class="progress-bar">
+                      <div id="progressFill" class="progress-fill"></div>
+                    </div>
+                    <div id="progressText">Processing: 0 / 0 (0%)</div>
                   </div>
-                  <div id="progressText">Processing: 0 / 0 (0%)</div>
+
+                  <div id="optunaProgress" style="display: none;">
+                    <div class="progress-bar">
+                      <div id="optunaProgressFill" class="progress-fill"></div>
+                    </div>
+                    <div id="optunaProgressText">Trial: 0 / 500 (0%)</div>
+
+                    <div
+                      style="margin-top: 15px; padding: 12px; background: #ffffff; border: 1px solid #cccccc; border-radius: 4px;"
+                    >
+                      <div style="font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #2a2a2a;">Best trial so far:</div>
+                      <div id="optunaBestTrial" style="font-size: 12px; color: #2a2a2a; line-height: 1.6;">
+                        Waiting for first trial...
+                      </div>
+                    </div>
+
+                    <div style="margin-top: 10px; font-size: 12px; color: #5a5a5a;">
+                      <span id="optunaCurrentTrial">Current trial: -</span><br />
+                      <span id="optunaEta">Est. time remaining: -</span>
+                    </div>
+                  </div>
                 </div>
 
                 <div id="optimizerResults" class="results-area" style="display: none;"></div>
@@ -1675,13 +1819,34 @@
       const optimizerForm = document.getElementById('optimizerForm');
       const optimizerResultsEl = document.getElementById('optimizerResults');
       const progressContainer = document.getElementById('optimizerProgress');
+      const gridProgress = document.getElementById('gridProgress');
+      const optunaProgress = document.getElementById('optunaProgress');
       const progressFill = document.getElementById('progressFill');
       const progressText = document.getElementById('progressText');
+      const optunaProgressFill = document.getElementById('optunaProgressFill');
+      const optunaProgressText = document.getElementById('optunaProgressText');
+      const optunaBestTrial = document.getElementById('optunaBestTrial');
+      const optunaCurrentTrial = document.getElementById('optunaCurrentTrial');
+      const optunaEta = document.getElementById('optunaEta');
       const totalCombinationsEl = document.getElementById('totalCombinations');
       const estimatedTimeEl = document.getElementById('estimatedTime');
       const csvFileInputEl = document.getElementById('csvFile');
       const selectedFilesWrapper = document.getElementById('selectedFilesWrapper');
       const selectedFilesList = document.getElementById('selectedFilesList');
+      const optMethodGrid = document.getElementById('optMethodGrid');
+      const optMethodOptuna = document.getElementById('optMethodOptuna');
+      const optunaSettings = document.getElementById('optunaSettings');
+      const optunaTarget = document.getElementById('optunaTarget');
+      const budgetModeRadios = document.querySelectorAll('input[name="budgetMode"]');
+      const optunaTrials = document.getElementById('optunaTrials');
+      const optunaTimeLimit = document.getElementById('optunaTimeLimit');
+      const optunaConvergence = document.getElementById('optunaConvergence');
+      const optunaPruning = document.getElementById('optunaPruning');
+      const optunaSampler = document.getElementById('optunaSampler');
+      const optunaPruner = document.getElementById('optunaPruner');
+      const optunaWarmupTrials = document.getElementById('optunaWarmupTrials');
+      const optunaSaveStudy = document.getElementById('optunaSaveStudy');
+      const linkToScoreConfig = document.getElementById('linkToScoreConfig');
       const presetDropdownEl = document.getElementById('presetDropdown');
       const presetToggleEl = document.getElementById('presetToggle');
       const presetMenuEl = document.getElementById('presetMenu');
@@ -1720,6 +1885,81 @@
         selectedFilesList.appendChild(fragment);
         selectedFilesWrapper.style.display = 'block';
       }
+
+      function toggleOptimizationMode() {
+        const isOptuna = Boolean(optMethodOptuna && optMethodOptuna.checked);
+
+        if (optunaSettings) {
+          optunaSettings.style.display = isOptuna ? 'block' : 'none';
+        }
+
+        if (totalCombinationsEl) {
+          const row = totalCombinationsEl.closest('.info-row');
+          if (row) {
+            row.style.display = isOptuna ? 'none' : 'flex';
+          }
+        }
+
+        if (estimatedTimeEl) {
+          const row = estimatedTimeEl.closest('.info-row');
+          if (row) {
+            const label = row.querySelector('span:first-child');
+            if (label) {
+              label.textContent = isOptuna ? 'Estimated time:' : 'Estimated time:';
+            }
+          }
+        }
+      }
+
+      function syncBudgetInputs() {
+        if (!budgetModeRadios || !budgetModeRadios.length) {
+          return;
+        }
+
+        const selected = Array.from(budgetModeRadios).find((radio) => radio.checked)?.value || 'trials';
+
+        if (optunaTrials) {
+          optunaTrials.disabled = selected !== 'trials';
+        }
+        if (optunaTimeLimit) {
+          optunaTimeLimit.disabled = selected !== 'time';
+        }
+        if (optunaConvergence) {
+          optunaConvergence.disabled = selected !== 'convergence';
+        }
+      }
+
+      if (optMethodGrid) {
+        optMethodGrid.addEventListener('change', toggleOptimizationMode);
+      }
+      if (optMethodOptuna) {
+        optMethodOptuna.addEventListener('change', toggleOptimizationMode);
+      }
+
+      budgetModeRadios.forEach((radio) => {
+        radio.addEventListener('change', syncBudgetInputs);
+      });
+
+      if (linkToScoreConfig) {
+        linkToScoreConfig.addEventListener('click', (event) => {
+          event.preventDefault();
+          const scoreConfigBtn = document.getElementById('scoreConfigBtn');
+          const scoreConfigCollapsible = document.getElementById('scoreConfigCollapsible');
+          if (scoreConfigBtn && scoreConfigCollapsible) {
+            if (!scoreConfigCollapsible.classList.contains('open')) {
+              scoreConfigCollapsible.classList.add('open');
+            }
+            scoreConfigBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            scoreConfigCollapsible.style.outline = '3px solid #90caf9';
+            window.setTimeout(() => {
+              scoreConfigCollapsible.style.outline = '';
+            }, 2000);
+          }
+        });
+      }
+
+      toggleOptimizationMode();
+      syncBudgetInputs();
 
       function clonePreset(data) {
         try {
@@ -3163,7 +3403,39 @@
           worker_processes: workerProcesses,
           filter_min_profit: filterEnabled,
           min_profit_threshold: minProfitThreshold,
-          score_config: collectScoreConfig()
+          score_config: collectScoreConfig(),
+          optimization_mode: 'grid'
+        };
+      }
+
+      function buildOptunaConfig(state) {
+        const baseConfig = buildOptimizationConfig(state);
+        const selectedBudget = Array.from(budgetModeRadios).find((radio) => radio.checked)?.value || 'trials';
+        const trialsValue = Number(optunaTrials?.value);
+        const timeLimitMinutes = Number(optunaTimeLimit?.value);
+        const convergenceValue = Number(optunaConvergence?.value);
+        const warmupValue = Number(optunaWarmupTrials?.value);
+
+        const normalizedTrials = Number.isFinite(trialsValue) ? Math.max(10, Math.min(10000, Math.round(trialsValue))) : 500;
+        const normalizedMinutes = Number.isFinite(timeLimitMinutes) ? Math.max(1, Math.round(timeLimitMinutes)) : 60;
+        const normalizedConvergence = Number.isFinite(convergenceValue)
+          ? Math.max(10, Math.min(500, Math.round(convergenceValue)))
+          : 50;
+        const normalizedWarmup = Number.isFinite(warmupValue) ? Math.max(0, Math.min(100, Math.round(warmupValue))) : 20;
+
+        return {
+          ...baseConfig,
+          optimization_mode: 'optuna',
+          optuna_target: optunaTarget ? optunaTarget.value : 'score',
+          optuna_budget_mode: selectedBudget,
+          optuna_n_trials: normalizedTrials,
+          optuna_time_limit: normalizedMinutes * 60,
+          optuna_convergence: normalizedConvergence,
+          optuna_enable_pruning: Boolean(optunaPruning && optunaPruning.checked),
+          optuna_sampler: optunaSampler ? optunaSampler.value : 'tpe',
+          optuna_pruner: optunaPruner ? optunaPruner.value : 'median',
+          optuna_warmup_trials: normalizedWarmup,
+          optuna_save_study: Boolean(optunaSaveStudy && optunaSaveStudy.checked)
         };
       }
 
@@ -3179,7 +3451,9 @@
           return;
         }
 
+        const isOptunaMode = Boolean(optMethodOptuna && optMethodOptuna.checked);
         const state = gatherFormState();
+
         if (!state.start || !state.end) {
           optimizerResultsEl.textContent = 'Please specify both start and end dates before optimization.';
           optimizerResultsEl.classList.remove('ready');
@@ -3194,12 +3468,15 @@
           return;
         }
 
-        const total = calculateTotalCombinations();
-        if (!total) {
-          optimizerResultsEl.textContent = 'Please configure valid ranges for optimization parameters.';
-          optimizerResultsEl.classList.remove('ready');
-          optimizerResultsEl.style.display = 'block';
-          return;
+        let total = null;
+        if (!isOptunaMode) {
+          total = calculateTotalCombinations();
+          if (!total) {
+            optimizerResultsEl.textContent = 'Please configure valid ranges for optimization parameters.';
+            optimizerResultsEl.classList.remove('ready');
+            optimizerResultsEl.style.display = 'block';
+            return;
+          }
         }
 
         if (fileList.length) {
@@ -3207,7 +3484,8 @@
         } else {
           renderSelectedFiles([]);
         }
-        const config = buildOptimizationConfig(state);
+
+        const config = isOptunaMode ? buildOptunaConfig(state) : buildOptimizationConfig(state);
         const totalSources = sources.length;
         const statusMessages = new Array(totalSources).fill('');
         const updateStatus = (index, message) => {
@@ -3221,12 +3499,55 @@
         optimizerResultsEl.style.display = 'block';
 
         progressContainer.style.display = 'block';
-        progressFill.style.width = '0%';
-        progressText.textContent = 'Preparing optimization…';
+        if (isOptunaMode) {
+          if (gridProgress) {
+            gridProgress.style.display = 'none';
+          }
+          if (optunaProgress) {
+            optunaProgress.style.display = 'block';
+          }
+          if (optunaProgressFill) {
+            optunaProgressFill.style.width = '0%';
+          }
+          if (optunaProgressText) {
+            if (config.optuna_budget_mode === 'trials') {
+              optunaProgressText.textContent = `Trial: 0 / ${config.optuna_n_trials.toLocaleString('en-US')} (0%)`;
+            } else if (config.optuna_budget_mode === 'time') {
+              const minutes = Math.round(config.optuna_time_limit / 60);
+              optunaProgressText.textContent = `Time budget: ${minutes} min`;
+            } else {
+              optunaProgressText.textContent = 'Waiting for convergence threshold…';
+            }
+          }
+          if (optunaBestTrial) {
+            optunaBestTrial.textContent = 'Waiting for first trial...';
+          }
+          if (optunaCurrentTrial) {
+            optunaCurrentTrial.textContent = 'Current trial: -';
+          }
+          if (optunaEta) {
+            optunaEta.textContent = 'Est. time remaining: -';
+          }
+        } else {
+          if (gridProgress) {
+            gridProgress.style.display = 'block';
+          }
+          if (optunaProgress) {
+            optunaProgress.style.display = 'none';
+          }
+          if (progressFill) {
+            progressFill.style.width = '0%';
+          }
+          if (progressText) {
+            progressText.textContent = 'Preparing optimization…';
+          }
+        }
 
         const errors = [];
         let successCount = 0;
-        const totalFormatted = total.toLocaleString('en-US');
+        const totalFormatted = !isOptunaMode && total ? total.toLocaleString('en-US') : '';
+        const optunaBudgetMode = isOptunaMode ? config.optuna_budget_mode : null;
+        const plannedTrials = isOptunaMode && optunaBudgetMode === 'trials' ? config.optuna_n_trials : null;
 
         for (let index = 0; index < totalSources; index += 1) {
           const source = sources[index];
@@ -3235,16 +3556,40 @@
           const sourceName = rawSourceName || (isFileObject ? 'Unnamed file' : 'Saved path');
           const sourceNumber = index + 1;
           const fileLabel = `Processing source ${sourceNumber} of ${totalSources}: ${sourceName}`;
-          const formatProgress = (current) => {
-            const percent = total ? ((current / total) * 100) : 0;
-            const currentFormatted = current.toLocaleString('en-US');
-            const percentFormatted = percent.toFixed(2);
-            return `${fileLabel}: ${currentFormatted} / ${totalFormatted} (${percentFormatted}%)`;
-          };
+          let formatProgress = null;
+
+          if (!isOptunaMode && total) {
+            formatProgress = (current) => {
+              const percent = total ? (current / total) * 100 : 0;
+              const currentFormatted = current.toLocaleString('en-US');
+              const percentFormatted = percent.toFixed(2);
+              return `${fileLabel}: ${currentFormatted} / ${totalFormatted} (${percentFormatted}%)`;
+            };
+          }
 
           updateStatus(index, `${fileLabel} — processing…`);
-          progressFill.style.width = '0%';
-          progressText.textContent = formatProgress(0);
+          if (isOptunaMode) {
+            if (optunaProgressText) {
+              if (plannedTrials) {
+                optunaProgressText.textContent = `Trial: 0 / ${plannedTrials.toLocaleString('en-US')} (0%)`;
+              } else if (optunaBudgetMode === 'time') {
+                const minutes = Math.round(config.optuna_time_limit / 60);
+                optunaProgressText.textContent = `Time budget: ${minutes} min — running…`;
+              } else {
+                optunaProgressText.textContent = 'Running Optuna optimization…';
+              }
+            }
+            if (optunaProgressFill) {
+              optunaProgressFill.style.width = '0%';
+            }
+          } else {
+            if (progressFill) {
+              progressFill.style.width = '0%';
+            }
+            if (progressText && formatProgress) {
+              progressText.textContent = formatProgress(0);
+            }
+          }
 
           const formData = new FormData();
           if (isFileObject) {
@@ -3291,16 +3636,52 @@
             link.remove();
             window.URL.revokeObjectURL(url);
 
-            progressFill.style.width = '100%';
-            progressText.textContent = formatProgress(total);
+            if (isOptunaMode) {
+              if (optunaProgressFill) {
+                optunaProgressFill.style.width = '100%';
+              }
+              if (optunaProgressText) {
+                if (plannedTrials) {
+                  optunaProgressText.textContent = `Trial: ${plannedTrials.toLocaleString('en-US')} / ${plannedTrials.toLocaleString('en-US')} (100%)`;
+                } else {
+                  optunaProgressText.textContent = 'Optuna optimization completed.';
+                }
+              }
+              if (optunaBestTrial) {
+                optunaBestTrial.textContent = 'Review the downloaded CSV to inspect the best trial and metrics.';
+              }
+            } else {
+              if (progressFill) {
+                progressFill.style.width = '100%';
+              }
+              if (progressText && formatProgress) {
+                progressText.textContent = formatProgress(total);
+              }
+            }
+
             updateStatus(index, `✅ Source ${sourceNumber} of ${totalSources} (${sourceName}) processed successfully.`);
             successCount += 1;
           } catch (err) {
             const message = err && err.message ? err.message : 'Optimization failed.';
             console.error(`Optimization failed for source ${sourceName}`, err);
             errors.push({ file: sourceName, message });
-            progressFill.style.width = '0%';
-            progressText.textContent = `${fileLabel} — error: ${message}`;
+
+            if (isOptunaMode) {
+              if (optunaProgressFill) {
+                optunaProgressFill.style.width = '0%';
+              }
+              if (optunaProgressText) {
+                optunaProgressText.textContent = `Error: ${message}`;
+              }
+            } else {
+              if (progressFill) {
+                progressFill.style.width = '0%';
+              }
+              if (progressText) {
+                progressText.textContent = `${fileLabel} — error: ${message}`;
+              }
+            }
+
             updateStatus(index, `❌ Source ${sourceNumber} of ${totalSources} (${sourceName}) failed: ${message}`);
           }
         }
