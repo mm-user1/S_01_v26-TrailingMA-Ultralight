@@ -947,24 +947,24 @@ CSV_COLUMN_SPECS: List[Tuple[str, Optional[str], str, Optional[str]]] = [
     ("MA Length", "maLength", "ma_length", None),
     ("Close Count Long", "closeCountLong", "close_count_long", None),
     ("Close Count Short", "closeCountShort", "close_count_short", None),
-    ("Stop Long X", "stopLongX", "stop_long_atr", None),
-    ("Stop Long RR", "stopLongRR", "stop_long_rr", None),
+    ("Stop Long X", "stopLongX", "stop_long_atr", "float1"),
+    ("Stop Long RR", "stopLongRR", "stop_long_rr", "float1"),
     ("Stop Long LP", "stopLongLP", "stop_long_lp", None),
-    ("Stop Short X", "stopShortX", "stop_short_atr", None),
-    ("Stop Short RR", "stopShortRR", "stop_short_rr", None),
+    ("Stop Short X", "stopShortX", "stop_short_atr", "float1"),
+    ("Stop Short RR", "stopShortRR", "stop_short_rr", "float1"),
     ("Stop Short LP", "stopShortLP", "stop_short_lp", None),
-    ("Stop Long Max %", "stopLongMaxPct", "stop_long_max_pct", None),
-    ("Stop Short Max %", "stopShortMaxPct", "stop_short_max_pct", None),
+    ("Stop Long Max %", "stopLongMaxPct", "stop_long_max_pct", "float1"),
+    ("Stop Short Max %", "stopShortMaxPct", "stop_short_max_pct", "float1"),
     ("Stop Long Max Days", "stopLongMaxDays", "stop_long_max_days", None),
     ("Stop Short Max Days", "stopShortMaxDays", "stop_short_max_days", None),
-    ("Trail RR Long", "trailRRLong", "trail_rr_long", None),
-    ("Trail RR Short", "trailRRShort", "trail_rr_short", None),
+    ("Trail RR Long", "trailRRLong", "trail_rr_long", "float1"),
+    ("Trail RR Short", "trailRRShort", "trail_rr_short", "float1"),
     ("Tr L Type", "trailLongType", "trail_ma_long_type", None),
     ("Tr L Len", "trailLongLength", "trail_ma_long_length", None),
-    ("Tr L Off", "trailLongOffset", "trail_ma_long_offset", None),
+    ("Tr L Off", "trailLongOffset", "trail_ma_long_offset", "float1"),
     ("Tr S Type", "trailShortType", "trail_ma_short_type", None),
     ("Tr S Len", "trailShortLength", "trail_ma_short_length", None),
-    ("Tr S Off", "trailShortOffset", "trail_ma_short_offset", None),
+    ("Tr S Off", "trailShortOffset", "trail_ma_short_offset", "float1"),
     ("Net Profit%", None, "net_profit_pct", "percent"),
     ("Max DD%", None, "max_drawdown_pct", "percent"),
     ("Trades", None, "total_trades", None),
@@ -983,6 +983,8 @@ def _format_csv_value(value: Any, formatter: Optional[str]) -> str:
         return f"{float(value):.2f}%"
     if formatter == "float":
         return f"{float(value):.2f}"
+    if formatter == "float1":
+        return f"{float(value):.1f}"
     if formatter == "optional_float":
         if value is None:
             return ""
@@ -993,6 +995,8 @@ def _format_csv_value(value: Any, formatter: Optional[str]) -> str:
 def _format_fixed_param_value(value: Any) -> str:
     if value is None:
         return ""
+    if isinstance(value, float):
+        return f"{value:.1f}"
     return str(value)
 
 
