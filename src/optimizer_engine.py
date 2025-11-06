@@ -491,7 +491,7 @@ def _simulate_combination(params_dict: Dict[str, Any]) -> OptimizationResult:
                     trail_price_long = trail_long_value
             if trail_activated_long:
                 if not math.isnan(trail_price_long) and l <= trail_price_long:
-                    exit_price = trail_price_long
+                    exit_price = h if trail_price_long > h else trail_price_long
             else:
                 if l <= stop_price:
                     exit_price = stop_price
@@ -537,7 +537,7 @@ def _simulate_combination(params_dict: Dict[str, Any]) -> OptimizationResult:
                     trail_price_short = trail_short_value
             if trail_activated_short:
                 if not math.isnan(trail_price_short) and h >= trail_price_short:
-                    exit_price = trail_price_short
+                    exit_price = l if trail_price_short < l else trail_price_short
             else:
                 if h >= stop_price:
                     exit_price = stop_price
