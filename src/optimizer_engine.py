@@ -1026,7 +1026,7 @@ def export_to_csv(
     fixed_lookup = {name: value for name, value in fixed_items}
 
     if optimization_metadata:
-        output.write("Optimization Metadata\n")
+        output.write("Optuna Metadata\n")
         output.write(f"Method,{optimization_metadata.get('method', 'Grid Search')}\n")
         if optimization_metadata.get("method") == "Optuna":
             output.write(
