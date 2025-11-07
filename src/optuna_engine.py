@@ -253,18 +253,16 @@ class OptunaOptimizer:
         When running with n_jobs, each worker process needs to initialize its caches.
         We check if the global caches are initialized, and if not, call _init_worker.
         """
-        # Check if worker is initialized by trying to access _ma_cache
+        # Check if worker is initialized by checking multiple critical global variables
         # On Windows with spawn, globals aren't defined until _init_worker is called
         needs_init = False
-        try:
-            # Try to access the cache - this will raise NameError if not initialized
-            _ = optimizer_engine._ma_cache
-            # If it exists, check if it's populated
-            if not optimizer_engine._ma_cache:
+
+        # Check for existence of all critical cache variables
+        required_vars = ['_data_close', '_ma_cache', '_lowest_cache', '_highest_cache', '_atr_values']
+        for var_name in required_vars:
+            if not hasattr(optimizer_engine, var_name):
                 needs_init = True
-        except (AttributeError, NameError):
-            # Cache doesn't exist yet - need to initialize
-            needs_init = True
+                break
 
         if needs_init:
             if self.worker_init_args is None:
