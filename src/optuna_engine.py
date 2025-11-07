@@ -51,7 +51,6 @@ class OptunaOptimizer:
     def __init__(self, base_config, optuna_config: OptunaConfig) -> None:
         self.base_config = base_config
         self.optuna_config = optuna_config
-        self.pool: Optional[mp.pool.Pool] = None
         self.trial_results: List[OptimizationResult] = []
         self.best_value: float = float("-inf")
         self.trials_without_improvement: int = 0
@@ -59,6 +58,9 @@ class OptunaOptimizer:
         self.pruned_trials: int = 0
         self.study: Optional[optuna.Study] = None
         self.pruner: Optional[optuna.pruners.BasePruner] = None
+
+        # Worker initialization parameters (set during optimize())
+        self.worker_init_args: Optional[Tuple] = None
 
     # ------------------------------------------------------------------
     # Search space handling
@@ -164,7 +166,7 @@ class OptunaOptimizer:
         )
 
     # ------------------------------------------------------------------
-    # Worker pool initialisation
+    # Worker initialization parameters preparation
     # ------------------------------------------------------------------
     def _collect_lengths(self, frontend_key: str) -> Iterable[int]:
         if self.base_config.enabled_params.get(frontend_key):
@@ -175,7 +177,8 @@ class OptunaOptimizer:
             sequence = [value]
         return [int(round(val)) for val in sequence]
 
-    def _setup_worker_pool(self, df: pd.DataFrame) -> None:
+    def _prepare_worker_init_params(self, df: pd.DataFrame) -> None:
+        """Prepare initialization parameters for workers (used by Optuna's n_jobs)."""
         ma_specs: Set[Tuple[str, int]] = set()
 
         trend_lengths = self._collect_lengths("maLength")
@@ -226,7 +229,8 @@ class OptunaOptimizer:
         start = _parse_timestamp(self.base_config.fixed_params.get("start"))
         end = _parse_timestamp(self.base_config.fixed_params.get("end"))
 
-        pool_args = (
+        # Store initialization arguments for use in worker processes
+        self.worker_init_args = (
             df,
             float(self.base_config.risk_per_trade_pct),
             float(self.base_config.contract_size),
@@ -240,16 +244,34 @@ class OptunaOptimizer:
             end,
         )
 
-        processes = min(32, max(1, int(self.base_config.worker_processes)))
-        self.pool = mp.Pool(processes=processes, initializer=_init_worker, initargs=pool_args)
-
     # ------------------------------------------------------------------
     # Objective evaluation
     # ------------------------------------------------------------------
     def _evaluate_parameters(self, params_dict: Dict[str, Any]) -> OptimizationResult:
-        if self.pool is None:
-            raise RuntimeError("Worker pool is not initialised.")
-        return self.pool.apply(_simulate_combination, (params_dict,))
+        """Evaluate parameters by calling _simulate_combination.
+
+        When running with n_jobs, each worker process needs to initialize its caches.
+        We check if the global caches are initialized, and if not, call _init_worker.
+        """
+        import optimizer_engine
+
+        # Check if worker is initialized by looking for the global cache
+        # If _data_close is not defined or is empty, we need to initialize
+        needs_init = False
+        try:
+            if optimizer_engine._data_close is None or len(optimizer_engine._data_close) == 0:
+                needs_init = True
+        except (AttributeError, NameError):
+            needs_init = True
+
+        if needs_init:
+            if self.worker_init_args is None:
+                raise RuntimeError("Worker initialization parameters not set.")
+            # Initialize worker caches in this process
+            _init_worker(*self.worker_init_args)
+
+        # Now call simulation directly
+        return _simulate_combination(params_dict)
 
     def _prepare_trial_parameters(self, trial: optuna.Trial, search_space: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         params_dict: Dict[str, Any] = {}
@@ -384,17 +406,21 @@ class OptunaOptimizer:
 
         df = load_data(self.base_config.csv_file)
         search_space = self._build_search_space()
-        self._setup_worker_pool(df)
+        self._prepare_worker_init_params(df)
 
         sampler = self._create_sampler()
         self.pruner = self._create_pruner()
 
-        storage = None
+        # Storage is required for parallel optimization with n_jobs
+        # Use in-memory SQLite by default, or persistent if save_study is enabled
         if self.optuna_config.save_study:
             storage = optuna.storages.RDBStorage(
                 url="sqlite:///optuna_study.db",
                 engine_kwargs={"connect_args": {"timeout": 30}},
             )
+        else:
+            # In-memory storage for parallel trials (required for n_jobs > 1)
+            storage = optuna.storages.InMemoryStorage()
 
         study_name = self.optuna_config.study_name or f"strategy_opt_{int(time.time())}"
 
@@ -428,6 +454,9 @@ class OptunaOptimizer:
 
             callbacks.append(convergence_callback)
 
+        # Determine number of parallel jobs
+        n_jobs = min(32, max(1, int(self.base_config.worker_processes)))
+
         try:
             self.study.optimize(
                 lambda trial: self._objective(trial, search_space),
@@ -435,14 +464,12 @@ class OptunaOptimizer:
                 timeout=timeout,
                 callbacks=callbacks or None,
                 show_progress_bar=False,
+                n_jobs=n_jobs,  # Enable parallel optimization
             )
         except KeyboardInterrupt:
             logger.info("Optuna optimisation interrupted by user")
         finally:
-            if self.pool is not None:
-                self.pool.close()
-                self.pool.join()
-                self.pool = None
+            # Cleanup (no pool to close, Optuna manages its own workers)
             self.pruner = None
 
         end_time = time.time()
