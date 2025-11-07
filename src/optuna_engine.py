@@ -60,6 +60,7 @@ class OptunaOptimizer:
 
         # Worker initialization parameters (set during optimize())
         self.worker_init_args: Optional[Tuple] = None
+        self._temp_db_path: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Search space handling
@@ -412,16 +413,34 @@ class OptunaOptimizer:
         sampler = self._create_sampler()
         self.pruner = self._create_pruner()
 
-        # Storage is required for parallel optimization with n_jobs
-        # Use in-memory SQLite by default, or persistent if save_study is enabled
-        if self.optuna_config.save_study:
-            storage = optuna.storages.RDBStorage(
-                url="sqlite:///optuna_study.db",
-                engine_kwargs={"connect_args": {"timeout": 30}},
-            )
+        # Storage is required for parallel optimization with n_jobs > 1
+        # SQLite (even temporary) is needed for multiprocessing synchronization
+        n_jobs = min(32, max(1, int(self.base_config.worker_processes)))
+
+        if n_jobs > 1:
+            # Parallel optimization requires shared storage (SQLite or other DB)
+            if self.optuna_config.save_study:
+                storage = optuna.storages.RDBStorage(
+                    url="sqlite:///optuna_study.db",
+                    engine_kwargs={"connect_args": {"timeout": 30}},
+                )
+            else:
+                # Use temporary SQLite for parallel trials (deleted after optimization)
+                import tempfile
+                import os
+                temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+                temp_db_path = temp_db.name
+                temp_db.close()
+                storage = optuna.storages.RDBStorage(
+                    url=f"sqlite:///{temp_db_path}",
+                    engine_kwargs={"connect_args": {"timeout": 30}},
+                )
+                # Store path for cleanup
+                self._temp_db_path = temp_db_path
         else:
-            # In-memory storage for parallel trials (required for n_jobs > 1)
+            # Single-threaded: InMemoryStorage is fine
             storage = optuna.storages.InMemoryStorage()
+            self._temp_db_path = None
 
         study_name = self.optuna_config.study_name or f"strategy_opt_{int(time.time())}"
 
@@ -455,9 +474,6 @@ class OptunaOptimizer:
 
             callbacks.append(convergence_callback)
 
-        # Determine number of parallel jobs
-        n_jobs = min(32, max(1, int(self.base_config.worker_processes)))
-
         try:
             self.study.optimize(
                 lambda trial: self._objective(trial, search_space),
@@ -472,6 +488,16 @@ class OptunaOptimizer:
         finally:
             # Cleanup (no pool to close, Optuna manages its own workers)
             self.pruner = None
+
+            # Delete temporary SQLite file if created
+            if hasattr(self, '_temp_db_path') and self._temp_db_path:
+                try:
+                    import os
+                    if os.path.exists(self._temp_db_path):
+                        os.unlink(self._temp_db_path)
+                        logger.debug("Deleted temporary SQLite file: %s", self._temp_db_path)
+                except Exception as e:
+                    logger.warning("Failed to delete temporary SQLite file: %s", e)
 
         end_time = time.time()
         optimisation_time = end_time - (self.start_time or end_time)
