@@ -234,7 +234,7 @@ class WalkForwardEngine:
         min_window_bars = max(
             1000,
             int((self.config.is_pct + self.config.oos_pct) / 100.0 * 1000),
-        )
+        ) + self.config.gap_bars
         min_required_total = required_warmup + max(min_window_bars * 2, 2000)
         return {
             "sufficient": total_bars >= min_required_total,
@@ -255,7 +255,10 @@ class WalkForwardEngine:
 
         total_bars = len(df)
         warmup_bars = self.calculate_required_warmup(param_ranges)
-        min_window_bars = max(1000, int((self.config.is_pct + self.config.oos_pct) / 100.0 * 1000))
+        min_window_bars = max(
+            1000,
+            int((self.config.is_pct + self.config.oos_pct) / 100.0 * 1000),
+        ) + self.config.gap_bars
         wf_zone_bars = int(total_bars * (self.config.wf_zone_pct / 100.0))
         wf_zone_bars = max(
             warmup_bars + min_window_bars,
@@ -280,14 +283,59 @@ class WalkForwardEngine:
 
         return windows, forward_start_idx, forward_end_idx
 
+    def _derive_window_lengths(self, available: int) -> Tuple[int, int]:
+        """Derive IS and OOS lengths that honour gap and minimum sizes."""
+
+        gap = max(0, self.config.gap_bars)
+        usable = available - gap
+        if usable <= 0:
+            return 0, 0
+
+        min_is = 200
+        min_oos = 100
+        min_total = min_is + min_oos
+        if usable < min_total:
+            return 0, 0
+
+        ratio = max(1.0, self.config.is_pct + self.config.oos_pct)
+        is_share = self.config.is_pct / ratio
+        oos_share = self.config.oos_pct / ratio
+
+        is_bars = max(min_is, int(round(usable * is_share)))
+        oos_bars = max(min_oos, int(round(usable * oos_share)))
+
+        total = is_bars + oos_bars
+        if total > usable:
+            overflow = total - usable
+            reduce_oos = min(overflow, max(0, oos_bars - min_oos))
+            oos_bars -= reduce_oos
+            overflow -= reduce_oos
+
+            if overflow > 0:
+                reduce_is = min(overflow, max(0, is_bars - min_is))
+                is_bars -= reduce_is
+                overflow -= reduce_is
+
+            if overflow > 0:
+                if oos_bars - overflow >= min_oos:
+                    oos_bars -= overflow
+                    overflow = 0
+                elif is_bars - overflow >= min_is:
+                    is_bars -= overflow
+                    overflow = 0
+
+            if overflow > 0:
+                return 0, 0
+
+        return is_bars, oos_bars
+
     def _split_rolling(
         self, wf_start: int, wf_end: int, available: int, warmup: int
     ) -> List[WindowSplit]:
         windows: List[WindowSplit] = []
-        ratio = max(10.0, self.config.is_pct + self.config.oos_pct)
-        unit = available / ratio
-        is_bars = max(200, int(unit * self.config.is_pct))
-        oos_bars = max(100, int(unit * self.config.oos_pct))
+        is_bars, oos_bars = self._derive_window_lengths(available)
+        if is_bars == 0 or oos_bars == 0:
+            return windows
         step_bars = max(1, int(oos_bars * (self.config.step_pct / 100.0)))
 
         window_id = 1
@@ -327,10 +375,9 @@ class WalkForwardEngine:
         self, wf_start: int, wf_end: int, available: int, warmup: int
     ) -> List[WindowSplit]:
         windows: List[WindowSplit] = []
-        ratio = max(10.0, self.config.is_pct + self.config.oos_pct)
-        unit = available / ratio
-        base_is = max(200, int(unit * self.config.is_pct))
-        oos_bars = max(100, int(unit * self.config.oos_pct))
+        base_is, oos_bars = self._derive_window_lengths(available)
+        if base_is == 0 or oos_bars == 0:
+            return windows
         step_bars = max(1, int(oos_bars * (self.config.step_pct / 100.0)))
 
         window_id = 1
