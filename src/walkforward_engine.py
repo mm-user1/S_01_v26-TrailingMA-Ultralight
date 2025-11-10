@@ -231,7 +231,10 @@ class WalkForwardEngine:
         total_bars = len(df)
         required_warmup = self.calculate_required_warmup(param_ranges)
         available_for_wf = max(0, total_bars - required_warmup)
-        min_window_bars = max(1000, int((self.is_pct + self.oos_pct) / 100.0 * 1000))
+        min_window_bars = max(
+            1000,
+            int((self.config.is_pct + self.config.oos_pct) / 100.0 * 1000),
+        )
         min_required_total = required_warmup + max(min_window_bars * 2, 2000)
         return {
             "sufficient": total_bars >= min_required_total,
