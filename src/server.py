@@ -557,6 +557,178 @@ def import_preset_from_csv() -> object:
     return jsonify({"values": updates, "applied": applied})
 
 
+@app.post("/api/walkforward")
+def run_walkforward_optimization() -> object:
+    """Run Walk-Forward Analysis"""
+    data = request.form
+    csv_file = request.files.get("file")
+    csv_path_raw = (data.get("csvPath") or "").strip()
+    data_source = None
+    opened_file = None
+
+    try:
+        if csv_file and csv_file.filename:
+            data_source = csv_file
+        elif csv_path_raw:
+            resolved_path = _resolve_csv_path(csv_path_raw)
+            opened_file = resolved_path.open("rb")
+            data_source = opened_file
+        else:
+            return jsonify({"error": "CSV file is required."}), HTTPStatus.BAD_REQUEST
+    except (FileNotFoundError, IsADirectoryError, ValueError):
+        return jsonify({"error": "CSV file is required."}), HTTPStatus.BAD_REQUEST
+    except OSError:
+        return jsonify({"error": "Failed to access CSV file."}), HTTPStatus.BAD_REQUEST
+
+    config_raw = data.get("config")
+    if not config_raw:
+        if opened_file:
+            opened_file.close()
+        return jsonify({"error": "Missing optimization config."}), HTTPStatus.BAD_REQUEST
+
+    try:
+        config_payload = json.loads(config_raw)
+    except json.JSONDecodeError:
+        if opened_file:
+            opened_file.close()
+        return jsonify({"error": "Invalid optimization config JSON."}), HTTPStatus.BAD_REQUEST
+
+    try:
+        optimization_config = _build_optimization_config(data_source, config_payload)
+    except ValueError as exc:
+        if opened_file:
+            opened_file.close()
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    except Exception:  # pragma: no cover - defensive
+        if opened_file:
+            opened_file.close()
+        app.logger.exception("Failed to build optimization config for walk-forward")
+        return jsonify({"error": "Failed to prepare optimization config."}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    if optimization_config.optimization_mode != "optuna":
+        if opened_file:
+            opened_file.close()
+        return jsonify({"error": "Walk-Forward requires Optuna optimization mode."}), HTTPStatus.BAD_REQUEST
+
+    if hasattr(data_source, "seek"):
+        try:
+            data_source.seek(0)
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    try:
+        df = load_data(data_source)
+    except ValueError as exc:
+        if opened_file:
+            opened_file.close()
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    except Exception:  # pragma: no cover - defensive
+        if opened_file:
+            opened_file.close()
+        app.logger.exception("Failed to load CSV for walk-forward")
+        return jsonify({"error": "Failed to load CSV data."}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    base_template = {
+        "enabled_params": json.loads(json.dumps(optimization_config.enabled_params)),
+        "param_ranges": json.loads(json.dumps(optimization_config.param_ranges)),
+        "fixed_params": json.loads(json.dumps(optimization_config.fixed_params)),
+        "ma_types_trend": list(optimization_config.ma_types_trend),
+        "ma_types_trail_long": list(optimization_config.ma_types_trail_long),
+        "ma_types_trail_short": list(optimization_config.ma_types_trail_short),
+        "lock_trail_types": bool(optimization_config.lock_trail_types),
+        "risk_per_trade_pct": float(optimization_config.risk_per_trade_pct),
+        "contract_size": float(optimization_config.contract_size),
+        "commission_rate": float(optimization_config.commission_rate),
+        "atr_period": int(optimization_config.atr_period),
+        "worker_processes": int(optimization_config.worker_processes),
+        "filter_min_profit": bool(optimization_config.filter_min_profit),
+        "min_profit_threshold": float(optimization_config.min_profit_threshold),
+        "score_config": json.loads(json.dumps(optimization_config.score_config or {})),
+    }
+
+    optuna_settings = {
+        "target": getattr(optimization_config, "optuna_target", "score"),
+        "budget_mode": getattr(optimization_config, "optuna_budget_mode", "trials"),
+        "n_trials": int(getattr(optimization_config, "optuna_n_trials", 100)),
+        "time_limit": int(getattr(optimization_config, "optuna_time_limit", 3600)),
+        "convergence_patience": int(getattr(optimization_config, "optuna_convergence", 50)),
+        "enable_pruning": bool(getattr(optimization_config, "optuna_enable_pruning", True)),
+        "sampler": getattr(optimization_config, "optuna_sampler", "tpe"),
+        "pruner": getattr(optimization_config, "optuna_pruner", "median"),
+        "warmup_trials": int(getattr(optimization_config, "optuna_warmup_trials", 20)),
+        "save_study": bool(getattr(optimization_config, "optuna_save_study", False)),
+    }
+
+    try:
+        num_windows = int(data.get("wf_num_windows", 5))
+        gap_bars = int(data.get("wf_gap_bars", 100))
+        topk = int(data.get("wf_topk", 20))
+    except (TypeError, ValueError):
+        if opened_file:
+            opened_file.close()
+        return jsonify({"error": "Invalid Walk-Forward parameters."}), HTTPStatus.BAD_REQUEST
+
+    num_windows = max(1, min(20, num_windows))
+    gap_bars = max(0, gap_bars)
+    topk = max(1, min(200, topk))
+
+    from walkforward_engine import WFConfig, WalkForwardEngine, export_wf_results_csv
+
+    wf_config = WFConfig(num_windows=num_windows, gap_bars=gap_bars, topk_per_window=topk)
+    engine = WalkForwardEngine(wf_config, base_template, optuna_settings)
+
+    try:
+        result = engine.run_wf_optimization(df)
+    except ValueError as exc:
+        if opened_file:
+            opened_file.close()
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    except Exception:  # pragma: no cover - defensive
+        if opened_file:
+            opened_file.close()
+        app.logger.exception("Walk-forward optimization failed")
+        return jsonify({"error": "Walk-forward optimization failed."}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    import uuid
+    from pathlib import Path
+
+    results_dir = Path(app.root_path) / "static" / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    output_filename = f"wf_results_{uuid.uuid4().hex[:8]}.csv"
+    output_path = results_dir / output_filename
+    export_wf_results_csv(result, str(output_path))
+
+    top10: List[Dict[str, Any]] = []
+    for rank, agg in enumerate(result.aggregated[:10], 1):
+        forward_profit = result.forward_profits[rank - 1] if rank <= len(result.forward_profits) else None
+        top10.append(
+            {
+                "rank": rank,
+                "param_id": agg.param_id,
+                "appearances": f"{agg.appearances}/{len(result.windows)}",
+                "avg_oos_profit": round(agg.avg_oos_profit, 2),
+                "oos_win_rate": round(agg.oos_win_rate * 100, 1),
+                "forward_profit": round(forward_profit, 2) if isinstance(forward_profit, (int, float)) else None,
+            }
+        )
+
+    response_payload = {
+        "status": "success",
+        "summary": {
+            "total_windows": len(result.windows),
+            "top_param_id": result.aggregated[0].param_id if result.aggregated else "N/A",
+            "top_avg_oos_profit": round(result.aggregated[0].avg_oos_profit, 2) if result.aggregated else 0.0,
+        },
+        "top10": top10,
+        "csv_url": f"/static/results/{output_filename}",
+    }
+
+    if opened_file:
+        opened_file.close()
+
+    return jsonify(response_payload)
+
+
 @app.post("/api/backtest")
 def run_backtest() -> object:
     csv_file = request.files.get("file")

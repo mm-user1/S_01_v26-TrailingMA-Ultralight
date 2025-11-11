@@ -1633,6 +1633,51 @@
                   </div>
                 </div>
 
+                <!-- Walk-Forward Analysis Section -->
+                <div class="wf-section" style="margin-top: 30px; padding: 20px; border: 2px solid #3498db; border-radius: 8px; background-color: #f8f9fa;">
+                  <h3 style="color: #3498db; margin-bottom: 12px;">⚡ Walk-Forward Analysis</h3>
+
+                  <div class="form-group vertical" style="align-items: flex-start;">
+                    <label style="margin-bottom: 8px;">
+                      <input type="checkbox" id="enableWF" onchange="toggleWFSettings()" />
+                      <strong>Enable Walk-Forward Optimization</strong>
+                    </label>
+                    <p style="font-size: 12px; color: #666; margin: 0;">
+                      Splits data into multiple training/testing windows to find robust parameters.
+                    </p>
+                  </div>
+
+                  <div id="wfSettings" style="display: none; margin-top: 20px;">
+                    <div class="form-group" style="margin-bottom: 12px;">
+                      <label style="min-width: 150px;">Number of Windows:</label>
+                      <input type="number" id="wfNumWindows" value="5" min="3" max="10" style="width: 100px;" />
+                      <span style="font-size: 12px; color: #666; margin-left: 10px;">(Recommended: 5-6 for 1-2 years of data)</span>
+                    </div>
+
+                    <div class="form-group" style="margin-bottom: 12px;">
+                      <label style="min-width: 150px;">Gap (bars):</label>
+                      <input type="number" id="wfGapBars" value="100" min="0" max="500" style="width: 100px;" />
+                      <span style="font-size: 12px; color: #666; margin-left: 10px;">(Bars between training and testing to prevent look-ahead bias)</span>
+                    </div>
+
+                    <div class="form-group" style="margin-bottom: 12px;">
+                      <label style="min-width: 150px;">Top-K per Window:</label>
+                      <input type="number" id="wfTopK" value="20" min="5" max="50" style="width: 100px;" />
+                      <span style="font-size: 12px; color: #666; margin-left: 10px;">(Best parameter sets to test on each window)</span>
+                    </div>
+
+                    <div style="background-color: #e8f4f8; padding: 15px; border-radius: 5px;">
+                      <strong>Fixed Settings (Stage 1):</strong>
+                      <ul style="margin-top: 10px; font-size: 13px; color: #555; padding-left: 18px;">
+                        <li>WF Zone: 80% of data</li>
+                        <li>Forward Reserve: 20% of data</li>
+                        <li>Each window: 70% training (IS), 30% testing (OOS)</li>
+                        <li>Rolling window mode</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+
                 <div class="opt-actions">
                   <button type="submit" id="runOptimizationBtn">Run Optimization</button>
                 </div>
@@ -1664,6 +1709,33 @@
                       <span id="optunaCurrentTrial">Current trial: -</span><br />
                       <span id="optunaEta">Est. time remaining: -</span>
                     </div>
+                  </div>
+                </div>
+
+                <div id="wfResults" style="display: none; margin-top: 30px;">
+                  <h3 style="margin-bottom: 15px;">Walk-Forward Results</h3>
+
+                  <div id="wfStatus" style="margin-bottom: 15px; font-size: 14px; color: #555;"></div>
+
+                  <div id="wfSummary" style="background-color: #d4edda; padding: 15px; border-radius: 5px; margin-bottom: 20px;"></div>
+
+                  <h4 style="margin-bottom: 10px;">Top 10 Parameter Sets</h4>
+                  <table id="wfTable" style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                      <tr style="background-color: #3498db; color: white;">
+                        <th style="padding: 10px; border: 1px solid #ddd;">Rank</th>
+                        <th style="padding: 10px; border: 1px solid #ddd;">Param ID</th>
+                        <th style="padding: 10px; border: 1px solid #ddd;">Appearances</th>
+                        <th style="padding: 10px; border: 1px solid #ddd;">Avg OOS Profit %</th>
+                        <th style="padding: 10px; border: 1px solid #ddd;">OOS Win Rate</th>
+                        <th style="padding: 10px; border: 1px solid #ddd;">Forward Profit %</th>
+                      </tr>
+                    </thead>
+                    <tbody id="wfTableBody"></tbody>
+                  </table>
+
+                  <div style="margin-top: 20px; font-size: 14px; color: #666;">
+                    Full detailed results will be automatically downloaded as CSV.
                   </div>
                 </div>
 
@@ -1816,6 +1888,15 @@
 
       let knownPresets = [];
 
+      window.toggleWFSettings = function toggleWFSettings() {
+        const wfToggle = document.getElementById('enableWF');
+        const wfSettings = document.getElementById('wfSettings');
+        if (!wfToggle || !wfSettings) {
+          return;
+        }
+        wfSettings.style.display = wfToggle.checked ? 'block' : 'none';
+      };
+
       const optimizerForm = document.getElementById('optimizerForm');
       const optimizerResultsEl = document.getElementById('optimizerResults');
       const progressContainer = document.getElementById('optimizerProgress');
@@ -1846,6 +1927,10 @@
       const optunaPruner = document.getElementById('optunaPruner');
       const optunaWarmupTrials = document.getElementById('optunaWarmupTrials');
       const optunaSaveStudy = document.getElementById('optunaSaveStudy');
+      const wfResultsContainer = document.getElementById('wfResults');
+      const wfSummaryEl = document.getElementById('wfSummary');
+      const wfTableBody = document.getElementById('wfTableBody');
+      const wfStatusEl = document.getElementById('wfStatus');
       const linkToScoreConfig = document.getElementById('linkToScoreConfig');
       const presetDropdownEl = document.getElementById('presetDropdown');
       const presetToggleEl = document.getElementById('presetToggle');
@@ -1960,6 +2045,7 @@
 
       toggleOptimizationMode();
       syncBudgetInputs();
+      toggleWFSettings();
 
       function clonePreset(data) {
         try {
@@ -3439,6 +3525,135 @@
         };
       }
 
+      function clearWFResults() {
+        if (wfResultsContainer) {
+          wfResultsContainer.style.display = 'none';
+        }
+        if (wfSummaryEl) {
+          wfSummaryEl.textContent = '';
+        }
+        if (wfTableBody) {
+          wfTableBody.innerHTML = '';
+        }
+        if (wfStatusEl) {
+          wfStatusEl.textContent = '';
+        }
+      }
+
+      function displayWFResults(data) {
+        if (!wfResultsContainer || !wfSummaryEl || !wfTableBody || !wfStatusEl) {
+          return;
+        }
+
+        wfResultsContainer.style.display = 'block';
+        wfStatusEl.textContent = '';
+
+        const summary = data.summary || {};
+        const totalWindowsValue = Number(summary.total_windows);
+        const totalWindows = Number.isFinite(totalWindowsValue) ? totalWindowsValue : 0;
+        const topParamId = summary.top_param_id || 'N/A';
+        const topAvgValue = Number(summary.top_avg_oos_profit);
+        const topAvgProfit = Number.isFinite(topAvgValue) ? topAvgValue : 0;
+
+        wfSummaryEl.innerHTML = `
+          <strong>Summary:</strong><br>
+          Total Windows: ${totalWindows}<br>
+          Best Parameter Set: ${topParamId}<br>
+          Best Avg OOS Profit: ${topAvgProfit.toFixed(2)}%
+        `;
+
+        wfTableBody.innerHTML = '';
+        (data.top10 || []).forEach((row) => {
+          const avgValue = Number(row.avg_oos_profit);
+          const winValue = Number(row.oos_win_rate);
+          const forwardValue = row.forward_profit === null || row.forward_profit === undefined
+            ? null
+            : Number(row.forward_profit);
+          const tr = document.createElement('tr');
+          const avgOos = Number.isFinite(avgValue) ? avgValue.toFixed(2) : row.avg_oos_profit;
+          const winRate = Number.isFinite(winValue) ? winValue.toFixed(1) : row.oos_win_rate;
+          const forward = forwardValue === null || forwardValue === undefined || Number.isNaN(forwardValue)
+            ? 'N/A'
+            : `${forwardValue.toFixed(2)}%`;
+          tr.innerHTML = `
+            <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${row.rank}</td>
+            <td style="padding: 10px; border: 1px solid #ddd;">${row.param_id}</td>
+            <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${row.appearances}</td>
+            <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${avgOos}%</td>
+            <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${winRate}%</td>
+            <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${forward}</td>
+          `;
+          wfTableBody.appendChild(tr);
+        });
+
+        if (data.csv_url) {
+          window.setTimeout(() => {
+            window.location.href = data.csv_url;
+          }, 200);
+        }
+      }
+
+      async function runWalkForward({ sources, state }) {
+        if (!sources.length) {
+          if (wfStatusEl) {
+            wfStatusEl.textContent = 'Please select a CSV file before running Walk-Forward.';
+          }
+          return;
+        }
+
+        const source = sources[0];
+        const isFileObject = typeof File !== 'undefined' && source instanceof File;
+        const formData = new FormData();
+        if (isFileObject) {
+          formData.append('file', source, source.name);
+        } else if (source && source.path) {
+          formData.append('csvPath', source.path);
+        }
+
+        const config = buildOptunaConfig(state);
+        formData.append('config', JSON.stringify(config));
+        formData.append('wf_num_windows', document.getElementById('wfNumWindows').value);
+        formData.append('wf_gap_bars', document.getElementById('wfGapBars').value);
+        formData.append('wf_topk', document.getElementById('wfTopK').value);
+
+        if (wfResultsContainer) {
+          wfResultsContainer.style.display = 'block';
+        }
+        if (wfStatusEl) {
+          const sourceName = isFileObject ? source.name : (source && source.path) || 'Saved path';
+          wfStatusEl.textContent = `Running Walk-Forward on ${sourceName}…`;
+        }
+        if (wfSummaryEl) {
+          wfSummaryEl.textContent = '';
+        }
+        if (wfTableBody) {
+          wfTableBody.innerHTML = '';
+        }
+
+        try {
+          const response = await fetch('/api/walkforward', {
+            method: 'POST',
+            body: formData
+          });
+          const data = await response.json();
+
+          if (!response.ok || data.status !== 'success') {
+            const message = data && data.error ? data.error : 'Walk-Forward request failed.';
+            if (wfStatusEl) {
+              wfStatusEl.textContent = `❌ ${message}`;
+            }
+            return;
+          }
+
+          wfStatusEl.textContent = '✅ Walk-Forward completed successfully.';
+          displayWFResults(data);
+        } catch (error) {
+          if (wfStatusEl) {
+            wfStatusEl.textContent = `❌ ${error.message || 'Walk-Forward request failed.'}`;
+          }
+        }
+      }
+
       async function submitOptimization(event) {
         event.preventDefault();
         const fileInput = document.getElementById('csvFile');
@@ -3454,6 +3669,14 @@
         const isOptunaMode = Boolean(optMethodOptuna && optMethodOptuna.checked);
         const state = gatherFormState();
 
+        const wfEnabled = Boolean(document.getElementById('enableWF')?.checked);
+        if (wfEnabled && !isOptunaMode) {
+          optimizerResultsEl.textContent = 'Enable Optuna mode before running Walk-Forward analysis.';
+          optimizerResultsEl.classList.remove('ready');
+          optimizerResultsEl.style.display = 'block';
+          return;
+        }
+
         if (!state.start || !state.end) {
           optimizerResultsEl.textContent = 'Please specify both start and end dates before optimization.';
           optimizerResultsEl.classList.remove('ready');
@@ -3465,6 +3688,12 @@
           optimizerResultsEl.textContent = 'Select at least one MA type in each group for optimization.';
           optimizerResultsEl.classList.remove('ready');
           optimizerResultsEl.style.display = 'block';
+          return;
+        }
+
+        if (wfEnabled) {
+          clearWFResults();
+          await runWalkForward({ sources, state });
           return;
         }
 
