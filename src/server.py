@@ -7,6 +7,7 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import pandas as pd
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
 from backtest_engine import StrategyParams, load_data, run_strategy
@@ -627,6 +628,50 @@ def run_walkforward_optimization() -> object:
             opened_file.close()
         app.logger.exception("Failed to load CSV for walk-forward")
         return jsonify({"error": "Failed to load CSV data."}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    # Apply date filtering for Walk-Forward Analysis
+    use_date_filter = optimization_config.fixed_params.get('dateFilter', False)
+    start_date = optimization_config.fixed_params.get('start')
+    end_date = optimization_config.fixed_params.get('end')
+
+    if use_date_filter and start_date is not None and end_date is not None:
+        try:
+            # Ensure dates are pandas Timestamps with UTC timezone
+            if not isinstance(start_date, pd.Timestamp):
+                start_ts = pd.Timestamp(start_date)
+                if start_ts.tzinfo is None:
+                    start_ts = start_ts.tz_localize('UTC')
+                else:
+                    start_ts = start_ts.tz_convert('UTC')
+            else:
+                start_ts = start_date if start_date.tzinfo else start_date.tz_localize('UTC')
+
+            if not isinstance(end_date, pd.Timestamp):
+                end_ts = pd.Timestamp(end_date)
+                if end_ts.tzinfo is None:
+                    end_ts = end_ts.tz_localize('UTC')
+                else:
+                    end_ts = end_ts.tz_convert('UTC')
+            else:
+                end_ts = end_date if end_date.tzinfo else end_date.tz_localize('UTC')
+
+            # Filter dataframe by date range
+            df_filtered = df[(df.index >= start_ts) & (df.index <= end_ts)].copy()
+
+            if len(df_filtered) < 1000:
+                if opened_file:
+                    opened_file.close()
+                return jsonify({
+                    "error": f"Selected date range contains only {len(df_filtered)} bars. Need at least 1000 bars for Walk-Forward Analysis."
+                }), HTTPStatus.BAD_REQUEST
+
+            df = df_filtered
+            print(f"Walk-Forward: Using date-filtered data: {len(df)} bars from {df.index[0]} to {df.index[-1]}")
+
+        except Exception as e:
+            if opened_file:
+                opened_file.close()
+            return jsonify({"error": f"Failed to apply date filter: {str(e)}"}), HTTPStatus.BAD_REQUEST
 
     base_template = {
         "enabled_params": json.loads(json.dumps(optimization_config.enabled_params)),
