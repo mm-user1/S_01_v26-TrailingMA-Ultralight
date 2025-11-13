@@ -452,160 +452,163 @@ class WalkForwardEngine:
         return f"{ma_type} {ma_length}_{param_hash}"
 
 
-def export_wf_results_csv(result: WFResult, output_path: str) -> None:
-    """Export Walk-Forward results to CSV"""
+def export_wf_results_csv(result: WFResult) -> str:
+    """Export Walk-Forward results to CSV string"""
     import csv
+    from io import StringIO
 
-    with open(output_path, "w", newline="", encoding="utf-8") as file_handle:
-        writer = csv.writer(file_handle)
+    output = StringIO()
+    writer = csv.writer(output)
 
-        writer.writerow(["=== WALK-FORWARD ANALYSIS - RESULTS ==="])
-        writer.writerow([])
+    writer.writerow(["=== WALK-FORWARD ANALYSIS - RESULTS ==="])
+    writer.writerow([])
 
-        writer.writerow(["=== SUMMARY ==="])
-        writer.writerow(["Total Windows", len(result.windows)])
-        writer.writerow(["WF Zone", f"{result.config.wf_zone_pct}%"])
-        writer.writerow(["Forward Reserve", f"{result.config.forward_pct}%"])
-        writer.writerow(["Gap Between IS/OOS", f"{result.config.gap_bars} bars"])
-        writer.writerow(["Top-K Per Window", result.config.topk_per_window])
-        writer.writerow([])
+    writer.writerow(["=== SUMMARY ==="])
+    writer.writerow(["Total Windows", len(result.windows)])
+    writer.writerow(["WF Zone", f"{result.config.wf_zone_pct}%"])
+    writer.writerow(["Forward Reserve", f"{result.config.forward_pct}%"])
+    writer.writerow(["Gap Between IS/OOS", f"{result.config.gap_bars} bars"])
+    writer.writerow(["Top-K Per Window", result.config.topk_per_window])
+    writer.writerow([])
 
-        writer.writerow(["=== TOP 10 PARAMETER SETS (by Avg OOS Profit) ==="])
+    writer.writerow(["=== TOP 10 PARAMETER SETS (by Avg OOS Profit) ==="])
+    writer.writerow(
+        [
+            "Rank",
+            "Param ID",
+            "Appearances",
+            "Avg OOS Profit %",
+            "OOS Win Rate",
+            "Forward Profit %",
+        ]
+    )
+
+    for rank, agg in enumerate(result.aggregated[:10], 1):
+        forward_profit = (
+            result.forward_profits[rank - 1]
+            if rank <= len(result.forward_profits)
+            else "N/A"
+        )
+
         writer.writerow(
             [
-                "Rank",
-                "Param ID",
-                "Appearances",
-                "Avg OOS Profit %",
-                "OOS Win Rate",
-                "Forward Profit %",
+                rank,
+                agg.param_id,
+                f"{agg.appearances}/{len(result.windows)}",
+                f"{agg.avg_oos_profit:.2f}%",
+                f"{agg.oos_win_rate * 100:.1f}%",
+                f"{forward_profit:.2f}%"
+                if isinstance(forward_profit, float)
+                else forward_profit,
             ]
         )
 
-        for rank, agg in enumerate(result.aggregated[:10], 1):
-            forward_profit = (
-                result.forward_profits[rank - 1]
-                if rank <= len(result.forward_profits)
-                else "N/A"
-            )
+    writer.writerow([])
 
-            writer.writerow(
-                [
-                    rank,
-                    agg.param_id,
-                    f"{agg.appearances}/{len(result.windows)}",
-                    f"{agg.avg_oos_profit:.2f}%",
-                    f"{agg.oos_win_rate * 100:.1f}%",
-                    f"{forward_profit:.2f}%"
-                    if isinstance(forward_profit, float)
-                    else forward_profit,
-                ]
-            )
+    writer.writerow(["=== WINDOW DETAILS ==="])
+    writer.writerow(
+        [
+            "Window",
+            "IS Start",
+            "IS End",
+            "Gap Start",
+            "Gap End",
+            "OOS Start",
+            "OOS End",
+            "Top Param ID",
+            "OOS Profit %",
+        ]
+    )
 
-        writer.writerow([])
+    helper_engine = WalkForwardEngine(result.config, {}, {})
 
-        writer.writerow(["=== WINDOW DETAILS ==="])
+    for window_result in result.window_results:
+        window = result.windows[window_result.window_id - 1]
+
+        if window_result.oos_profits:
+            best_index = int(np.argmax(window_result.oos_profits))
+            best_param = window_result.top_params[best_index]
+            best_param_id = helper_engine._create_param_id(best_param)
+            best_oos_profit = window_result.oos_profits[best_index]
+        else:
+            best_param_id = "N/A"
+            best_oos_profit = 0.0
+
         writer.writerow(
             [
-                "Window",
-                "IS Start",
-                "IS End",
-                "Gap Start",
-                "Gap End",
-                "OOS Start",
-                "OOS End",
-                "Top Param ID",
-                "OOS Profit %",
+                window.window_id,
+                window.is_start,
+                window.is_end,
+                window.gap_start,
+                window.gap_end,
+                window.oos_start,
+                window.oos_end,
+                best_param_id,
+                f"{best_oos_profit:.2f}%",
             ]
         )
 
-        helper_engine = WalkForwardEngine(result.config, {}, {})
+    writer.writerow([])
 
-        for window_result in result.window_results:
-            window = result.windows[window_result.window_id - 1]
+    writer.writerow(["=== FORWARD TEST RESULTS ==="])
+    writer.writerow(["Rank", "Param ID", "Forward Profit %"])
 
-            if window_result.oos_profits:
-                best_index = int(np.argmax(window_result.oos_profits))
-                best_param = window_result.top_params[best_index]
-                best_param_id = helper_engine._create_param_id(best_param)
-                best_oos_profit = window_result.oos_profits[best_index]
-            else:
-                best_param_id = "N/A"
-                best_oos_profit = 0.0
+    for rank, agg in enumerate(result.aggregated[:10], 1):
+        if rank <= len(result.forward_profits):
+            forward_profit = result.forward_profits[rank - 1]
+            writer.writerow([rank, agg.param_id, f"{forward_profit:.2f}%"])
 
-            writer.writerow(
-                [
-                    window.window_id,
-                    window.is_start,
-                    window.is_end,
-                    window.gap_start,
-                    window.gap_end,
-                    window.oos_start,
-                    window.oos_end,
-                    best_param_id,
-                    f"{best_oos_profit:.2f}%",
-                ]
-            )
+    writer.writerow([])
+
+    writer.writerow(["=== DETAILED PARAMETERS FOR TOP 10 ==="])
+    writer.writerow([])
+
+    for rank, agg in enumerate(result.aggregated[:10], 1):
+        writer.writerow([f"--- Rank #{rank}: {agg.param_id} ---"])
+        params = agg.params
+        writer.writerow(["Parameter", "Value"])
+        writer.writerow(["MA Type", params.get("maType", "N/A")])
+        writer.writerow(["MA Length", params.get("maLength", "N/A")])
+        writer.writerow(["Close Count Long", params.get("closeCountLong", "N/A")])
+        writer.writerow(["Close Count Short", params.get("closeCountShort", "N/A")])
+        writer.writerow(["Stop Long ATR", params.get("stopLongX", "N/A")])
+        writer.writerow(["Stop Long RR", params.get("stopLongRR", "N/A")])
+        writer.writerow(["Stop Long LP", params.get("stopLongLP", "N/A")])
+        writer.writerow(["Stop Short ATR", params.get("stopShortX", "N/A")])
+        writer.writerow(["Stop Short RR", params.get("stopShortRR", "N/A")])
+        writer.writerow(["Stop Short LP", params.get("stopShortLP", "N/A")])
+        writer.writerow(["Stop Long Max %", params.get("stopLongMaxPct", "N/A")])
+        writer.writerow(["Stop Short Max %", params.get("stopShortMaxPct", "N/A")])
+        writer.writerow(["Stop Long Max Days", params.get("stopLongMaxDays", "N/A")])
+        writer.writerow(["Stop Short Max Days", params.get("stopShortMaxDays", "N/A")])
+        writer.writerow(["Trail RR Long", params.get("trailRRLong", "N/A")])
+        writer.writerow(["Trail RR Short", params.get("trailRRShort", "N/A")])
+        writer.writerow(["Trail MA Long Type", params.get("trailLongType", "N/A")])
+        writer.writerow(["Trail MA Long Length", params.get("trailLongLength", "N/A")])
+        writer.writerow(["Trail MA Long Offset", params.get("trailLongOffset", "N/A")])
+        writer.writerow(["Trail MA Short Type", params.get("trailShortType", "N/A")])
+        writer.writerow(["Trail MA Short Length", params.get("trailShortLength", "N/A")])
+        writer.writerow(["Trail MA Short Offset", params.get("trailShortOffset", "N/A")])
 
         writer.writerow([])
-
-        writer.writerow(["=== FORWARD TEST RESULTS ==="])
-        writer.writerow(["Rank", "Param ID", "Forward Profit %"])
-
-        for rank, agg in enumerate(result.aggregated[:10], 1):
-            if rank <= len(result.forward_profits):
-                forward_profit = result.forward_profits[rank - 1]
-                writer.writerow([rank, agg.param_id, f"{forward_profit:.2f}%"])
+        writer.writerow(["Performance Metrics", ""])
+        writer.writerow(["Appearances", f"{agg.appearances}/{len(result.windows)}"])
+        writer.writerow(["Avg OOS Profit %", f"{agg.avg_oos_profit:.2f}%"])
+        writer.writerow(["OOS Win Rate", f"{agg.oos_win_rate * 100:.1f}%"])
+        writer.writerow(
+            [
+                "OOS Profits by Window",
+                ", ".join([f"{profit:.2f}%" for profit in agg.oos_profits]),
+            ]
+        )
+        rank_index = rank - 1
+        if rank_index < len(result.forward_profits):
+            writer.writerow([
+                "Forward Test Profit %",
+                f"{result.forward_profits[rank_index]:.2f}%",
+            ])
 
         writer.writerow([])
-
-        writer.writerow(["=== DETAILED PARAMETERS FOR TOP 10 ==="])
         writer.writerow([])
 
-        for rank, agg in enumerate(result.aggregated[:10], 1):
-            writer.writerow([f"--- Rank #{rank}: {agg.param_id} ---"])
-            params = agg.params
-            writer.writerow(["Parameter", "Value"])
-            writer.writerow(["MA Type", params.get("maType", "N/A")])
-            writer.writerow(["MA Length", params.get("maLength", "N/A")])
-            writer.writerow(["Close Count Long", params.get("closeCountLong", "N/A")])
-            writer.writerow(["Close Count Short", params.get("closeCountShort", "N/A")])
-            writer.writerow(["Stop Long ATR", params.get("stopLongX", "N/A")])
-            writer.writerow(["Stop Long RR", params.get("stopLongRR", "N/A")])
-            writer.writerow(["Stop Long LP", params.get("stopLongLP", "N/A")])
-            writer.writerow(["Stop Short ATR", params.get("stopShortX", "N/A")])
-            writer.writerow(["Stop Short RR", params.get("stopShortRR", "N/A")])
-            writer.writerow(["Stop Short LP", params.get("stopShortLP", "N/A")])
-            writer.writerow(["Stop Long Max %", params.get("stopLongMaxPct", "N/A")])
-            writer.writerow(["Stop Short Max %", params.get("stopShortMaxPct", "N/A")])
-            writer.writerow(["Stop Long Max Days", params.get("stopLongMaxDays", "N/A")])
-            writer.writerow(["Stop Short Max Days", params.get("stopShortMaxDays", "N/A")])
-            writer.writerow(["Trail RR Long", params.get("trailRRLong", "N/A")])
-            writer.writerow(["Trail RR Short", params.get("trailRRShort", "N/A")])
-            writer.writerow(["Trail MA Long Type", params.get("trailLongType", "N/A")])
-            writer.writerow(["Trail MA Long Length", params.get("trailLongLength", "N/A")])
-            writer.writerow(["Trail MA Long Offset", params.get("trailLongOffset", "N/A")])
-            writer.writerow(["Trail MA Short Type", params.get("trailShortType", "N/A")])
-            writer.writerow(["Trail MA Short Length", params.get("trailShortLength", "N/A")])
-            writer.writerow(["Trail MA Short Offset", params.get("trailShortOffset", "N/A")])
-
-            writer.writerow([])
-            writer.writerow(["Performance Metrics", ""])
-            writer.writerow(["Appearances", f"{agg.appearances}/{len(result.windows)}"])
-            writer.writerow(["Avg OOS Profit %", f"{agg.avg_oos_profit:.2f}%"])
-            writer.writerow(["OOS Win Rate", f"{agg.oos_win_rate * 100:.1f}%"])
-            writer.writerow(
-                [
-                    "OOS Profits by Window",
-                    ", ".join([f"{profit:.2f}%" for profit in agg.oos_profits]),
-                ]
-            )
-            rank_index = rank - 1
-            if rank_index < len(result.forward_profits):
-                writer.writerow([
-                    "Forward Test Profit %",
-                    f"{result.forward_profits[rank_index]:.2f}%",
-                ])
-
-            writer.writerow([])
-            writer.writerow([])
+    return output.getvalue()
