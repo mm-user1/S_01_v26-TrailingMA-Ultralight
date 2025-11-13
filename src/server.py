@@ -734,14 +734,8 @@ def run_walkforward_optimization() -> object:
         app.logger.exception("Walk-forward optimization failed")
         return jsonify({"error": "Walk-forward optimization failed."}), HTTPStatus.INTERNAL_SERVER_ERROR
 
-    import uuid
-    from pathlib import Path
-
-    results_dir = Path(app.root_path) / "static" / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
-    output_filename = f"wf_results_{uuid.uuid4().hex[:8]}.csv"
-    output_path = results_dir / output_filename
-    export_wf_results_csv(result, str(output_path))
+    # Generate CSV content without saving to disk
+    csv_content = export_wf_results_csv(result)
 
     top10: List[Dict[str, Any]] = []
     for rank, agg in enumerate(result.aggregated[:10], 1):
@@ -765,7 +759,7 @@ def run_walkforward_optimization() -> object:
             "top_avg_oos_profit": round(result.aggregated[0].avg_oos_profit, 2) if result.aggregated else 0.0,
         },
         "top10": top10,
-        "csv_url": f"/static/results/{output_filename}",
+        "csv_content": csv_content,
     }
 
     if opened_file:
