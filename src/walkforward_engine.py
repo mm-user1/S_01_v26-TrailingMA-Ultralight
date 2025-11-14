@@ -13,9 +13,49 @@ import json
 import numpy as np
 import pandas as pd
 
-from backtest_engine import StrategyParams, run_strategy
+from backtest_engine import StrategyParams, run_strategy, TradeRecord
 from optimizer_engine import OptimizationConfig
 from optuna_engine import OptunaConfig, run_optuna_optimization
+
+
+def _compute_segment_metrics(
+    trades: List[TradeRecord],
+    initial_equity: float = 10000.0
+) -> Tuple[float, float, int]:
+    """
+    Compute performance metrics for a specific trade segment.
+
+    Args:
+        trades: List of trades in the segment
+        initial_equity: Starting equity for the segment
+
+    Returns:
+        Tuple of (profit_pct, max_drawdown_pct, trade_count)
+    """
+    if not trades:
+        return 0.0, 0.0, 0
+
+    # Calculate profit
+    total_pnl = sum(trade.net_pnl for trade in trades)
+    profit_pct = (total_pnl / initial_equity) * 100.0
+
+    # Calculate drawdown
+    equity_curve = [initial_equity]
+    running_equity = initial_equity
+    for trade in trades:
+        running_equity += trade.net_pnl
+        equity_curve.append(running_equity)
+
+    peak = equity_curve[0]
+    max_dd = 0.0
+    for equity in equity_curve:
+        if equity > peak:
+            peak = equity
+        drawdown = ((equity - peak) / peak) * 100.0
+        if drawdown < max_dd:
+            max_dd = drawdown
+
+    return profit_pct, max_dd, len(trades)
 
 
 @dataclass
@@ -201,8 +241,12 @@ class WalkForwardEngine:
             print(f"IS optimization: bars {window.is_start} to {window.is_end} "
                   f"(dates {is_start_time.date()} to {is_end_time.date()})")
 
-            # Run Optuna optimization on IS window
-            # The optimization engine will handle warmup preparation internally
+            # IMPORTANT: Run Optuna optimization on IS window
+            # The optimization engine will:
+            # 1. Call prepare_dataset_with_warmup(df, is_start_time, is_end_time, params)
+            # 2. Get trimmed df with warmup + IS period and trade_start_idx
+            # 3. Use trade_start_idx to ensure trades open only in IS period (not in warmup)
+            # This ensures IS-only optimization: warmup for MAs, but trades/metrics only from IS
             optimization_results = self._run_optuna_on_window(
                 df, is_start_time, is_end_time
             )
@@ -229,51 +273,35 @@ class WalkForwardEngine:
 
                 # Create params object for warmup calculation
                 strategy_params = StrategyParams.from_dict(params)
-                strategy_params.use_date_filter = True
-                strategy_params.start = oos_start_time
-                strategy_params.end = oos_end_time
 
-                # Prepare dataset with proper warmup
+                # IMPORTANT: For OOS validation, we use prepare_dataset_with_warmup to:
+                # 1. Add warmup period before oos_start for proper MA calculation
+                # 2. Set trade_start_idx to oos_start, ensuring trades open only in OOS
                 oos_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
                     df, oos_start_time, oos_end_time, strategy_params
                 )
 
                 # Run strategy with trade_start_idx
+                # All trades will be opened from trade_start_idx onwards (OOS period only)
+                strategy_params.use_date_filter = True
                 result = run_strategy(oos_df_prepared, strategy_params, trade_start_idx)
 
+                # Filter trades by entry time to ensure only OOS period trades are counted
+                # (trades opened in [oos_start, oos_end] even if they close later)
                 oos_period_trades = [
                     trade
                     for trade in result.trades
                     if oos_start_time <= trade.entry_time <= oos_end_time
                 ]
 
-                if oos_period_trades:
-                    oos_pnl = sum(trade.net_pnl for trade in oos_period_trades)
-                    initial_equity = 10000
-                    oos_profit_pct = (oos_pnl / initial_equity) * 100
+                # Compute OOS metrics using only OOS-period trades
+                oos_profit_pct, oos_dd_pct, oos_trade_count = _compute_segment_metrics(
+                    oos_period_trades, initial_equity=10000.0
+                )
 
-                    equity_curve = [initial_equity]
-                    running_equity = initial_equity
-                    for trade in oos_period_trades:
-                        running_equity += trade.net_pnl
-                        equity_curve.append(running_equity)
-
-                    peak = equity_curve[0]
-                    max_dd = 0.0
-                    for equity in equity_curve:
-                        if equity > peak:
-                            peak = equity
-                        drawdown = ((equity - peak) / peak) * 100
-                        if drawdown < max_dd:
-                            max_dd = drawdown
-
-                    oos_profits.append(oos_profit_pct)
-                    oos_drawdowns.append(max_dd)
-                    oos_trades.append(len(oos_period_trades))
-                else:
-                    oos_profits.append(0.0)
-                    oos_drawdowns.append(0.0)
-                    oos_trades.append(0)
+                oos_profits.append(oos_profit_pct)
+                oos_drawdowns.append(oos_dd_pct)
+                oos_trades.append(oos_trade_count)
 
             window_results.append(
                 WindowResult(
@@ -309,20 +337,36 @@ class WalkForwardEngine:
         for agg in top10:
             # Create params object for warmup calculation
             strategy_params = StrategyParams.from_dict(agg.params)
-            strategy_params.use_date_filter = True
-            strategy_params.start = forward_start_time
-            strategy_params.end = forward_end_time
 
             # CRITICAL: Prepare dataset with warmup for forward test
+            # This adds warmup period before forward_start to properly warm up MAs
+            # trade_start_idx will point to the beginning of forward period
             forward_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
                 df, forward_start_time, forward_end_time, strategy_params
             )
 
             if not forward_df_prepared.empty:
+                # Run strategy with trade_start_idx
+                # All trades will be opened from trade_start_idx onwards (forward period only)
+                strategy_params.use_date_filter = True
                 result = run_strategy(forward_df_prepared, strategy_params, trade_start_idx)
-                forward_profits.append(result.net_profit_pct)
+
+                # Filter trades by entry time to ensure only Forward period trades are counted
+                # This is the same approach as OOS for consistency
+                forward_period_trades = [
+                    trade
+                    for trade in result.trades
+                    if forward_start_time <= trade.entry_time <= forward_end_time
+                ]
+
+                # Compute Forward metrics using only Forward-period trades
+                forward_profit_pct, _, _ = _compute_segment_metrics(
+                    forward_period_trades, initial_equity=10000.0
+                )
+                forward_profits.append(forward_profit_pct)
             else:
                 forward_profits.append(0.0)
+
             forward_params.append(agg.params)
 
         print(
@@ -349,10 +393,34 @@ class WalkForwardEngine:
         return wf_result
 
     def _run_optuna_on_window(self, df: pd.DataFrame, start_time: pd.Timestamp, end_time: pd.Timestamp):
+        """
+        Run Optuna optimization for a single WFA window.
+
+        This method passes the full dataframe along with start/end dates to Optuna.
+        The Optuna engine will internally:
+        1. Call prepare_dataset_with_warmup() to add warmup period before start_time
+        2. Calculate trade_start_idx pointing to start_time in the trimmed dataframe
+        3. Pass trade_start_idx to worker processes
+        4. Workers use trade_start_idx to ensure trades open only from start_time onwards
+
+        This ensures that:
+        - MAs are properly warmed up using data before start_time
+        - Optimization metrics are calculated only for trades in [start_time, end_time]
+        - No lookahead bias from warmup period
+
+        Args:
+            df: Full dataframe with all available data
+            start_time: Start of the optimization period (IS window)
+            end_time: End of the optimization period (IS window)
+
+        Returns:
+            List of OptimizationResult objects sorted by target metric
+        """
         # Create CSV buffer from full dataframe
         csv_buffer = self._dataframe_to_csv_buffer(df)
 
         # Update fixed params with date filter and start/end dates
+        # These will be used by prepare_dataset_with_warmup() in the optimization engine
         fixed_params = deepcopy(self.base_config_template["fixed_params"])
         fixed_params["dateFilter"] = True
         fixed_params["start"] = start_time.isoformat()
