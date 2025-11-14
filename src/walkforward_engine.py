@@ -93,6 +93,7 @@ class WindowResult:
 
     window_id: int
     top_params: List[Dict[str, Any]]  # Top-K from IS optimization
+    is_profits: List[float]  # IS profit for each param
     oos_profits: List[float]  # OOS profit for each param
     oos_drawdowns: List[float]
     oos_trades: List[int]
@@ -106,8 +107,10 @@ class AggregatedResult:
     params: Dict[str, Any]
     appearances: int  # How many windows
     avg_oos_profit: float
+    avg_is_profit: float  # Average IS profit across windows
     oos_win_rate: float  # % windows profitable
     oos_profits: List[float]  # All OOS profits
+    is_profits: List[float]  # All IS profits
 
 
 @dataclass
@@ -257,6 +260,41 @@ class WalkForwardEngine:
 
             print(f"Got {len(top_params)} top parameter sets")
 
+            # Collect IS profits for each top param
+            print(f"IS validation: collecting metrics for top {len(top_params)} params")
+            is_profits: List[float] = []
+
+            for params in top_params:
+                from backtest_engine import prepare_dataset_with_warmup
+
+                # Create params object for warmup calculation
+                strategy_params = StrategyParams.from_dict(params)
+
+                # Prepare dataset with warmup for IS period
+                # This ensures MAs are properly warmed up before IS trading begins
+                is_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
+                    df, is_start_time, is_end_time, strategy_params
+                )
+
+                # Run strategy with trade_start_idx
+                # All trades will be opened from trade_start_idx onwards (IS period only)
+                strategy_params.use_date_filter = True
+                result = run_strategy(is_df_prepared, strategy_params, trade_start_idx)
+
+                # Filter trades by entry time to ensure only IS period trades are counted
+                is_period_trades = [
+                    trade
+                    for trade in result.trades
+                    if is_start_time <= trade.entry_time <= is_end_time
+                ]
+
+                # Compute IS metrics using only IS-period trades
+                is_profit_pct, _, _ = _compute_segment_metrics(
+                    is_period_trades, initial_equity=100.0
+                )
+
+                is_profits.append(is_profit_pct)
+
             # Prepare OOS dataset with accumulated history (IS + gap for warmup)
             oos_start_time = df.index[window.oos_start]
             oos_end_time = df.index[window.oos_end - 1]
@@ -307,6 +345,7 @@ class WalkForwardEngine:
                 WindowResult(
                     window_id=window.window_id,
                     top_params=top_params,
+                    is_profits=is_profits,
                     oos_profits=oos_profits,
                     oos_drawdowns=oos_drawdowns,
                     oos_trades=oos_trades,
@@ -527,6 +566,9 @@ class WalkForwardEngine:
                 if oos_profit <= 0:
                     continue
 
+                # Get corresponding IS profit
+                is_profit = window_result.is_profits[index] if index < len(window_result.is_profits) else 0.0
+
                 param_id = self._create_param_id(params)
 
                 if param_id not in param_map:
@@ -534,15 +576,19 @@ class WalkForwardEngine:
                         "params": params,
                         "appearances": 0,
                         "oos_profits": [],
+                        "is_profits": [],
                     }
 
                 param_map[param_id]["appearances"] += 1
                 param_map[param_id]["oos_profits"].append(oos_profit)
+                param_map[param_id]["is_profits"].append(is_profit)
 
         aggregated: List[AggregatedResult] = []
         for param_id, data in param_map.items():
             oos_profits = data["oos_profits"]
-            avg_profit = float(np.mean(oos_profits)) if oos_profits else 0.0
+            is_profits = data["is_profits"]
+            avg_oos_profit = float(np.mean(oos_profits)) if oos_profits else 0.0
+            avg_is_profit = float(np.mean(is_profits)) if is_profits else 0.0
             win_rate = (
                 len([profit for profit in oos_profits if profit > 0]) / len(oos_profits)
                 if oos_profits
@@ -554,9 +600,11 @@ class WalkForwardEngine:
                     param_id=param_id,
                     params=data["params"],
                     appearances=data["appearances"],
-                    avg_oos_profit=avg_profit,
+                    avg_oos_profit=avg_oos_profit,
+                    avg_is_profit=avg_is_profit,
                     oos_win_rate=win_rate,
                     oos_profits=oos_profits,
+                    is_profits=is_profits,
                 )
             )
 
@@ -625,8 +673,9 @@ def export_wf_results_csv(result: WFResult, df: Optional[pd.DataFrame] = None) -
             "Rank",
             "Param ID",
             "Appearances",
-            "Avg OOS Profit %",
             "OOS Win Rate",
+            "Avg OOS Profit %",
+            "Avg IS Profit %",
             "Forward Profit %",
         ]
     )
@@ -643,8 +692,9 @@ def export_wf_results_csv(result: WFResult, df: Optional[pd.DataFrame] = None) -
                 rank,
                 agg.param_id,
                 f"{agg.appearances}/{len(result.windows)}",
-                f"{agg.avg_oos_profit:.2f}%",
                 f"{agg.oos_win_rate * 100:.1f}%",
+                f"{agg.avg_oos_profit:.2f}%",
+                f"{agg.avg_is_profit:.2f}%",
                 f"{forward_profit:.2f}%"
                 if isinstance(forward_profit, float)
                 else forward_profit,
@@ -741,6 +791,13 @@ def export_wf_results_csv(result: WFResult, df: Optional[pd.DataFrame] = None) -
         writer.writerow([])
         writer.writerow(["Performance Metrics", ""])
         writer.writerow(["Appearances", f"{agg.appearances}/{len(result.windows)}"])
+        writer.writerow(["Avg IS Profit %", f"{agg.avg_is_profit:.2f}%"])
+        writer.writerow(
+            [
+                "IS Profits by Window",
+                ", ".join([f"{profit:.2f}%" for profit in agg.is_profits]),
+            ]
+        )
         writer.writerow(["Avg OOS Profit %", f"{agg.avg_oos_profit:.2f}%"])
         writer.writerow(["OOS Win Rate", f"{agg.oos_win_rate * 100:.1f}%"])
         writer.writerow(
