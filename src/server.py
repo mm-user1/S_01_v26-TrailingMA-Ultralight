@@ -660,15 +660,15 @@ def run_walkforward_optimization() -> object:
             # Calculate warmup dynamically based on maximum MA lengths
             max_ma_length = 1
 
-            # Check parameter ranges (varied parameters)
+            # Check parameter ranges (varied parameters) - using camelCase keys
             param_ranges = optimization_config.param_ranges
-            if "ma_length" in param_ranges:
+            if "maLength" in param_ranges:
                 # param_ranges format: (min, max, step)
-                max_ma_length = max(max_ma_length, int(param_ranges["ma_length"][1]))
-            if "trail_ma_long_length" in param_ranges:
-                max_ma_length = max(max_ma_length, int(param_ranges["trail_ma_long_length"][1]))
-            if "trail_ma_short_length" in param_ranges:
-                max_ma_length = max(max_ma_length, int(param_ranges["trail_ma_short_length"][1]))
+                max_ma_length = max(max_ma_length, int(param_ranges["maLength"][1]))
+            if "trailLongLength" in param_ranges:
+                max_ma_length = max(max_ma_length, int(param_ranges["trailLongLength"][1]))
+            if "trailShortLength" in param_ranges:
+                max_ma_length = max(max_ma_length, int(param_ranges["trailShortLength"][1]))
 
             # Check fixed params (locked parameters)
             fixed_params = optimization_config.fixed_params
