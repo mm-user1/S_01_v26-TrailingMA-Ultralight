@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
-from backtest_engine import StrategyParams, load_data, run_strategy
+from backtest_engine import StrategyParams, load_data, run_strategy, prepare_dataset_with_warmup
 from optimizer_engine import (
     CSV_COLUMN_SPECS,
     OptimizationResult,
@@ -828,8 +828,17 @@ def run_backtest() -> object:
                 pass
             opened_file = None
 
+    # Prepare dataset with warmup if date filtering is enabled
+    trade_start_idx = 0
+    if params.use_date_filter and (params.start is not None or params.end is not None):
+        try:
+            df, trade_start_idx = prepare_dataset_with_warmup(df, params.start, params.end, params)
+        except Exception as exc:  # pragma: no cover - defensive
+            app.logger.exception("Failed to prepare dataset with warmup")
+            return ("Failed to prepare dataset for backtest.", HTTPStatus.INTERNAL_SERVER_ERROR)
+
     try:
-        result = run_strategy(df, params)
+        result = run_strategy(df, params, trade_start_idx)
     except ValueError as exc:
         return (str(exc), HTTPStatus.BAD_REQUEST)
     except Exception as exc:  # pragma: no cover - defensive

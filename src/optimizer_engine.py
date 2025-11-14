@@ -119,6 +119,7 @@ _month_arr: np.ndarray
 _risk_per_trade_pct: float
 _contract_size: float
 _commission_rate: float
+_trade_start_idx: int
 
 
 def _generate_numeric_sequence(
@@ -276,15 +277,14 @@ def _init_worker(
     long_lp_values: Iterable[int],
     short_lp_values: Iterable[int],
     use_date_filter: bool,
-    start: Optional[pd.Timestamp],
-    end: Optional[pd.Timestamp],
+    trade_start_idx: int,
 ) -> None:
     """Initialise worker globals."""
 
     global _data_close, _data_high, _data_low, _times, _time_index
     global _ma_cache, _lowest_cache, _highest_cache, _atr_values, _time_in_range
     global _month_arr
-    global _risk_per_trade_pct, _contract_size, _commission_rate
+    global _risk_per_trade_pct, _contract_size, _commission_rate, _trade_start_idx
 
     close_series = df["Close"].astype(float)
     high_series = df["High"].astype(float)
@@ -328,19 +328,17 @@ def _init_worker(
             rolled = high_series.rolling(length, min_periods=1).max().to_numpy(dtype=float)
             _highest_cache[length] = rolled
 
-    if use_date_filter and (start is not None or end is not None):
-        mask = np.ones(len(df), dtype=bool)
-        if start is not None:
-            mask &= _time_index >= start
-        if end is not None:
-            mask &= _time_index <= end
-        _time_in_range = mask
+    # Use trade_start_idx to define trading zone
+    if use_date_filter:
+        _time_in_range = np.zeros(len(df), dtype=bool)
+        _time_in_range[trade_start_idx:] = True
     else:
         _time_in_range = np.ones(len(df), dtype=bool)
 
     _risk_per_trade_pct = float(risk_per_trade_pct)
     _contract_size = float(contract_size)
     _commission_rate = float(commission_rate)
+    _trade_start_idx = int(trade_start_idx)
 
 
 def _simulate_combination(params_dict: Dict[str, Any]) -> OptimizationResult:
@@ -848,6 +846,8 @@ def calculate_score(
 def run_grid_optimization(config: OptimizationConfig) -> List[OptimizationResult]:
     """Execute the grid search optimization."""
 
+    from backtest_engine import prepare_dataset_with_warmup, StrategyParams
+
     df = load_data(config.csv_file)
     combinations = generate_parameter_grid(config)
     total = len(combinations)
@@ -868,6 +868,55 @@ def run_grid_optimization(config: OptimizationConfig) -> List[OptimizationResult
     start = _parse_timestamp(config.fixed_params.get("start"))
     end = _parse_timestamp(config.fixed_params.get("end"))
 
+    # Prepare dataset with warmup if date filtering is enabled
+    trade_start_idx = 0
+    if use_date_filter and (start is not None or end is not None):
+        # Find the maximum MA length across all combinations to calculate warmup
+        max_ma_length = 0
+        for combo in combinations:
+            max_ma_length = max(
+                max_ma_length,
+                int(combo["ma_length"]),
+                int(combo["trail_ma_long_length"]),
+                int(combo["trail_ma_short_length"])
+            )
+
+        # Create a dummy StrategyParams with max MA lengths for warmup calculation
+        dummy_params = StrategyParams(
+            use_backtester=True,
+            use_date_filter=use_date_filter,
+            start=start,
+            end=end,
+            ma_type="SMA",
+            ma_length=max_ma_length,
+            trail_ma_long_type="SMA",
+            trail_ma_long_length=max_ma_length,
+            trail_ma_short_type="SMA",
+            trail_ma_short_length=max_ma_length,
+            close_count_long=1,
+            close_count_short=1,
+            stop_long_atr=1.0,
+            stop_long_rr=1.0,
+            stop_long_lp=1,
+            stop_short_atr=1.0,
+            stop_short_rr=1.0,
+            stop_short_lp=1,
+            stop_long_max_pct=0.0,
+            stop_short_max_pct=0.0,
+            stop_long_max_days=0,
+            stop_short_max_days=0,
+            trail_rr_long=1.0,
+            trail_rr_short=1.0,
+            trail_ma_long_offset=0.0,
+            trail_ma_short_offset=0.0,
+            risk_per_trade_pct=config.risk_per_trade_pct,
+            contract_size=config.contract_size,
+            commission_rate=config.commission_rate,
+            atr_period=config.atr_period
+        )
+
+        df, trade_start_idx = prepare_dataset_with_warmup(df, start, end, dummy_params)
+
     results: List[OptimizationResult] = []
     pool_args = (
         df,
@@ -879,8 +928,7 @@ def run_grid_optimization(config: OptimizationConfig) -> List[OptimizationResult
         list(long_lp_values),
         list(short_lp_values),
         use_date_filter,
-        start,
-        end,
+        trade_start_idx,
     )
     processes = min(32, max(1, int(config.worker_processes)))
     with mp.Pool(processes=processes, initializer=_init_worker, initargs=pool_args) as pool:

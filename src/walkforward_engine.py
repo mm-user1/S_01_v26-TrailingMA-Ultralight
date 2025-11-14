@@ -106,24 +106,25 @@ class WalkForwardEngine:
         total_bars = len(df)
         warmup = self.config.warmup_bars
 
-        if total_bars <= warmup:
-            raise ValueError("Dataset is too small for walk-forward analysis (insufficient warmup data).")
+        # Minimum dataset size check (need space for warmup + at least one window)
+        min_required_bars = warmup + 100  # Warmup + minimal window
+        if total_bars < min_required_bars:
+            raise ValueError(f"Dataset is too small for walk-forward analysis. "
+                           f"Need at least {min_required_bars} bars, have {total_bars}.")
 
         # Calculate zones
         wf_zone_end = int(total_bars * (self.config.wf_zone_pct / 100))
         forward_start = wf_zone_end
         forward_end = total_bars
 
-        if forward_start <= warmup:
-            raise ValueError("Dataset is too small to allocate forward reserve.")
-
-        # Available bars for WF (after warmup)
-        wf_available_start = warmup
+        # Available bars for WF windows (NO warmup reservation here)
+        # Warmup will be added when preparing datasets for each window
+        wf_available_start = 0
         wf_available_end = wf_zone_end
         wf_available_bars = wf_available_end - wf_available_start
 
         if wf_available_bars <= 0:
-            raise ValueError("No data available for walk-forward windows after warmup.")
+            raise ValueError("No data available for walk-forward windows.")
 
         total_gap = self.config.gap_bars * self.config.num_windows
         effective_bars = wf_available_bars - total_gap
@@ -193,12 +194,18 @@ class WalkForwardEngine:
         for window in windows:
             print(f"\n--- Window {window.window_id}/{len(windows)} ---")
 
-            warmup_start = max(0, window.is_start - self.config.warmup_bars)
-            is_df_with_warmup = df.iloc[warmup_start:window.is_end].copy()
+            # Prepare IS dataset with warmup using timestamps
+            is_start_time = df.index[window.is_start]
+            is_end_time = df.index[window.is_end - 1]
 
-            print(f"IS optimization: bars {window.is_start} to {window.is_end}")
+            print(f"IS optimization: bars {window.is_start} to {window.is_end} "
+                  f"(dates {is_start_time.date()} to {is_end_time.date()})")
 
-            optimization_results = self._run_optuna_on_window(is_df_with_warmup)
+            # Run Optuna optimization on IS window
+            # The optimization engine will handle warmup preparation internally
+            optimization_results = self._run_optuna_on_window(
+                df, is_start_time, is_end_time
+            )
 
             topk = min(self.config.topk_per_window, len(optimization_results))
             top_results = optimization_results[:topk]
@@ -206,18 +213,33 @@ class WalkForwardEngine:
 
             print(f"Got {len(top_params)} top parameter sets")
 
-            print(f"OOS validation: bars {window.oos_start} to {window.oos_end}")
-            oos_df_with_history = df.iloc[warmup_start:window.oos_end].copy()
+            # Prepare OOS dataset with accumulated history (IS + gap for warmup)
+            oos_start_time = df.index[window.oos_start]
+            oos_end_time = df.index[window.oos_end - 1]
+
+            print(f"OOS validation: bars {window.oos_start} to {window.oos_end} "
+                  f"(dates {oos_start_time.date()} to {oos_end_time.date()})")
 
             oos_profits: List[float] = []
             oos_drawdowns: List[float] = []
             oos_trades: List[int] = []
 
-            oos_start_time = df.index[window.oos_start]
-            oos_end_time = df.index[window.oos_end - 1]
-
             for params in top_params:
-                result = run_strategy(oos_df_with_history, StrategyParams.from_dict(params))
+                from backtest_engine import prepare_dataset_with_warmup
+
+                # Create params object for warmup calculation
+                strategy_params = StrategyParams.from_dict(params)
+                strategy_params.use_date_filter = True
+                strategy_params.start = oos_start_time
+                strategy_params.end = oos_end_time
+
+                # Prepare dataset with proper warmup
+                oos_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
+                    df, oos_start_time, oos_end_time, strategy_params
+                )
+
+                # Run strategy with trade_start_idx
+                result = run_strategy(oos_df_prepared, strategy_params, trade_start_idx)
 
                 oos_period_trades = [
                     trade
@@ -274,14 +296,30 @@ class WalkForwardEngine:
 
         # Step 4: Forward Test
         print("\n--- Forward Test ---")
-        forward_df = df.iloc[fwd_start:fwd_end].copy()
+        from backtest_engine import prepare_dataset_with_warmup
+
+        forward_start_time = df.index[fwd_start]
+        forward_end_time = df.index[fwd_end - 1]
+        print(f"Forward test period: {forward_start_time.date()} to {forward_end_time.date()}")
+
         top10 = aggregated[:10]
         forward_profits: List[float] = []
         forward_params: List[Dict[str, Any]] = []
 
         for agg in top10:
-            if not forward_df.empty:
-                result = run_strategy(forward_df, StrategyParams.from_dict(agg.params))
+            # Create params object for warmup calculation
+            strategy_params = StrategyParams.from_dict(agg.params)
+            strategy_params.use_date_filter = True
+            strategy_params.start = forward_start_time
+            strategy_params.end = forward_end_time
+
+            # CRITICAL: Prepare dataset with warmup for forward test
+            forward_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
+                df, forward_start_time, forward_end_time, strategy_params
+            )
+
+            if not forward_df_prepared.empty:
+                result = run_strategy(forward_df_prepared, strategy_params, trade_start_idx)
                 forward_profits.append(result.net_profit_pct)
             else:
                 forward_profits.append(0.0)
@@ -310,13 +348,21 @@ class WalkForwardEngine:
 
         return wf_result
 
-    def _run_optuna_on_window(self, df_window: pd.DataFrame):
-        csv_buffer = self._dataframe_to_csv_buffer(df_window)
+    def _run_optuna_on_window(self, df: pd.DataFrame, start_time: pd.Timestamp, end_time: pd.Timestamp):
+        # Create CSV buffer from full dataframe
+        csv_buffer = self._dataframe_to_csv_buffer(df)
+
+        # Update fixed params with date filter and start/end dates
+        fixed_params = deepcopy(self.base_config_template["fixed_params"])
+        fixed_params["dateFilter"] = True
+        fixed_params["start"] = start_time.isoformat()
+        fixed_params["end"] = end_time.isoformat()
+
         base_config = OptimizationConfig(
             csv_file=csv_buffer,
             enabled_params=deepcopy(self.base_config_template["enabled_params"]),
             param_ranges=deepcopy(self.base_config_template["param_ranges"]),
-            fixed_params=deepcopy(self.base_config_template["fixed_params"]),
+            fixed_params=fixed_params,
             ma_types_trend=list(self.base_config_template["ma_types_trend"]),
             ma_types_trail_long=list(self.base_config_template["ma_types_trail_long"]),
             ma_types_trail_short=list(self.base_config_template["ma_types_trail_short"]),
