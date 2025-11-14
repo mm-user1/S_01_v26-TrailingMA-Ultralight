@@ -20,7 +20,7 @@ from optuna_engine import OptunaConfig, run_optuna_optimization
 
 def _compute_segment_metrics(
     trades: List[TradeRecord],
-    initial_equity: float = 10000.0
+    initial_equity: float = 100.0
 ) -> Tuple[float, float, int]:
     """
     Compute performance metrics for a specific trade segment.
@@ -296,7 +296,7 @@ class WalkForwardEngine:
 
                 # Compute OOS metrics using only OOS-period trades
                 oos_profit_pct, oos_dd_pct, oos_trade_count = _compute_segment_metrics(
-                    oos_period_trades, initial_equity=10000.0
+                    oos_period_trades, initial_equity=100.0
                 )
 
                 oos_profits.append(oos_profit_pct)
@@ -361,7 +361,7 @@ class WalkForwardEngine:
 
                 # Compute Forward metrics using only Forward-period trades
                 forward_profit_pct, _, _ = _compute_segment_metrics(
-                    forward_period_trades, initial_equity=10000.0
+                    forward_period_trades, initial_equity=100.0
                 )
                 forward_profits.append(forward_profit_pct)
             else:
