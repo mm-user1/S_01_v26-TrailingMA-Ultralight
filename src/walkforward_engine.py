@@ -238,9 +238,16 @@ class WalkForwardEngine:
             warmup_start = max(0, window.is_start - self.config.warmup_bars)
             is_df_with_warmup = df.iloc[warmup_start:window.is_end].copy()
 
-            print(f"IS optimization: bars {window.is_start} to {window.is_end}")
+            # Calculate IS time boundaries for dateFilter
+            is_start_time = df.index[window.is_start]
+            is_end_time = df.index[window.is_end - 1]  # Last bar of IS (inclusive)
 
-            optimization_results = self._run_optuna_on_window(is_df_with_warmup)
+            print(f"IS optimization: bars {window.is_start} to {window.is_end}")
+            print(f"IS time range: {is_start_time} to {is_end_time}")
+
+            optimization_results = self._run_optuna_on_window(
+                is_df_with_warmup, is_start_time, is_end_time
+            )
 
             topk = min(self.config.topk_per_window, len(optimization_results))
             top_results = optimization_results[:topk]
@@ -319,7 +326,13 @@ class WalkForwardEngine:
         # Add warmup history before forward zone (similar to IS/OOS)
         forward_warmup_start = max(0, fwd_start - self.config.warmup_bars)
         forward_df = df.iloc[forward_warmup_start:fwd_end].copy()
+
+        # Calculate forward time boundaries
+        forward_start_time = df.index[fwd_start]
+        forward_end_time = df.index[fwd_end - 1]  # Last bar of forward zone (inclusive)
+
         print(f"Forward test using bars {forward_warmup_start} to {fwd_end} (warmup + forward zone)")
+        print(f"Forward time range: {forward_start_time} to {forward_end_time}")
 
         top10 = aggregated[:10]
         forward_profits: List[float] = []
@@ -327,11 +340,21 @@ class WalkForwardEngine:
 
         for agg in top10:
             if not forward_df.empty:
-                # For Stage 1: using result.net_profit_pct for the entire forward_df
-                # (includes warmup period in calculation)
-                # Stage 2 will filter trades to forward zone only
+                # Run strategy on warmup + forward zone
                 result = run_strategy(forward_df, StrategyParams.from_dict(agg.params))
-                forward_profits.append(result.net_profit_pct)
+
+                # Filter trades to forward zone only (Stage 2: precise forward metrics)
+                forward_trades = [
+                    trade
+                    for trade in result.trades
+                    if forward_start_time <= trade.entry_time <= forward_end_time
+                ]
+
+                # Compute profit percentage only from forward-zone trades
+                forward_profit_pct = self._compute_segment_performance(
+                    forward_trades, initial_equity=10000.0
+                )
+                forward_profits.append(forward_profit_pct)
             else:
                 forward_profits.append(0.0)
             forward_params.append(agg.params)
@@ -361,13 +384,40 @@ class WalkForwardEngine:
 
         return wf_result
 
-    def _run_optuna_on_window(self, df_window: pd.DataFrame):
+    def _run_optuna_on_window(
+        self,
+        df_window: pd.DataFrame,
+        is_start_time: pd.Timestamp,
+        is_end_time: pd.Timestamp,
+    ):
+        """
+        Run Optuna optimization on a single window.
+
+        Args:
+            df_window: Dataframe including warmup + IS period
+            is_start_time: Start timestamp of IS period (inclusive)
+            is_end_time: End timestamp of IS period (inclusive)
+
+        Returns:
+            List of OptimizationResult sorted by target metric
+        """
         csv_buffer = self._dataframe_to_csv_buffer(df_window)
+
+        # Prepare fixed_params with IS-only dateFilter boundaries
+        fixed_params = deepcopy(self.base_config_template["fixed_params"])
+
+        # Override dateFilter settings to restrict trades to IS period only
+        # Indicators will be calculated on the full df_window (warmup + IS)
+        # but trades will only be opened within [is_start_time, is_end_time]
+        fixed_params["dateFilter"] = True
+        fixed_params["start"] = is_start_time
+        fixed_params["end"] = is_end_time
+
         base_config = OptimizationConfig(
             csv_file=csv_buffer,
             enabled_params=deepcopy(self.base_config_template["enabled_params"]),
             param_ranges=deepcopy(self.base_config_template["param_ranges"]),
-            fixed_params=deepcopy(self.base_config_template["fixed_params"]),
+            fixed_params=fixed_params,
             ma_types_trend=list(self.base_config_template["ma_types_trend"]),
             ma_types_trail_long=list(self.base_config_template["ma_types_trail_long"]),
             ma_types_trail_short=list(self.base_config_template["ma_types_trail_short"]),
@@ -499,6 +549,25 @@ class WalkForwardEngine:
 
         aggregated.sort(key=lambda item: item.avg_oos_profit, reverse=True)
         return aggregated
+
+    def _compute_segment_performance(self, trades: List, initial_equity: float = 10000.0) -> float:
+        """
+        Compute profit percentage from a list of trades.
+
+        Args:
+            trades: List of TradeRecord objects
+            initial_equity: Starting equity for the segment
+
+        Returns:
+            Profit percentage relative to initial_equity
+        """
+        if not trades:
+            return 0.0
+
+        total_pnl = sum(trade.net_pnl for trade in trades)
+        profit_pct = (total_pnl / initial_equity) * 100.0
+
+        return profit_pct
 
     def _create_param_id(self, params: Dict[str, Any]) -> str:
         """
