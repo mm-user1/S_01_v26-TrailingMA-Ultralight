@@ -655,18 +655,37 @@ def run_walkforward_optimization() -> object:
             else:
                 end_ts = end_date if end_date.tzinfo else end_date.tz_localize('UTC')
 
-            # Filter dataframe by date range
-            df_filtered = df[(df.index >= start_ts) & (df.index <= end_ts)].copy()
+            # IMPORTANT: Add warmup period before start_ts for Walk-Forward Analysis
+            # The first WFA window will start from start_ts, so it needs historical data for MA warmup
+            # Use conservative warmup estimate: 1500 bars should cover most MA configurations
+            warmup_bars = 1500
 
-            if len(df_filtered) < 1000:
+            # Find the index of start_ts in the dataframe
+            start_idx = df.index.searchsorted(start_ts)
+
+            # Calculate warmup_start_idx (go back warmup_bars, but not before 0)
+            warmup_start_idx = max(0, start_idx - warmup_bars)
+
+            # Get the actual warmup start timestamp
+            warmup_start_ts = df.index[warmup_start_idx]
+
+            # Filter dataframe: include warmup period before start_ts
+            df_filtered = df[(df.index >= warmup_start_ts) & (df.index <= end_ts)].copy()
+
+            # Check that we have enough data in the ACTUAL trading period (start_ts to end_ts)
+            df_trading_period = df[(df.index >= start_ts) & (df.index <= end_ts)]
+            if len(df_trading_period) < 1000:
                 if opened_file:
                     opened_file.close()
                 return jsonify({
-                    "error": f"Selected date range contains only {len(df_filtered)} bars. Need at least 1000 bars for Walk-Forward Analysis."
+                    "error": f"Selected date range contains only {len(df_trading_period)} bars. Need at least 1000 bars for Walk-Forward Analysis."
                 }), HTTPStatus.BAD_REQUEST
 
             df = df_filtered
-            print(f"Walk-Forward: Using date-filtered data: {len(df)} bars from {df.index[0]} to {df.index[-1]}")
+            actual_warmup_bars = start_idx - warmup_start_idx
+            print(f"Walk-Forward: Using date-filtered data with warmup: {len(df)} bars total")
+            print(f"  Warmup period: {actual_warmup_bars} bars from {warmup_start_ts} to {start_ts}")
+            print(f"  Trading period: {len(df_trading_period)} bars from {start_ts} to {end_ts}")
 
         except Exception as e:
             if opened_file:

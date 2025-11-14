@@ -138,29 +138,70 @@ class WalkForwardEngine:
         """
         Split data into WF windows + Forward Reserve
 
+        IMPORTANT: If dateFilter is enabled in base_config_template, the dataframe
+        may include a warmup period before the actual trading period. This method
+        will detect the trading period boundaries and calculate WF zones correctly.
+
         Returns:
             windows: List of WindowSplit objects
             forward_start: Start index of forward period
             forward_end: End index of forward period
         """
         total_bars = len(df)
-        warmup = self.config.warmup_bars
 
-        # Minimum dataset size check (need space for warmup + at least one window)
-        min_required_bars = warmup + 100  # Warmup + minimal window
-        if total_bars < min_required_bars:
-            raise ValueError(f"Dataset is too small for walk-forward analysis. "
-                           f"Need at least {min_required_bars} bars, have {total_bars}.")
+        # Check if date filtering is enabled and find trading period boundaries
+        fixed_params = self.base_config_template.get('fixed_params', {})
+        use_date_filter = fixed_params.get('dateFilter', False)
+        start_date = fixed_params.get('start')
+        end_date = fixed_params.get('end')
 
-        # Calculate zones
-        wf_zone_end = int(total_bars * (self.config.wf_zone_pct / 100))
-        forward_start = wf_zone_end
-        forward_end = total_bars
+        trading_start_idx = 0
+        trading_end_idx = total_bars
 
-        # Available bars for WF windows (NO warmup reservation here)
-        # Warmup will be added when preparing datasets for each window
-        wf_available_start = 0
-        wf_available_end = wf_zone_end
+        if use_date_filter and start_date is not None and end_date is not None:
+            # Find indices corresponding to user-specified date range
+            # The df may include warmup data before start_date
+            try:
+                start_ts = pd.Timestamp(start_date) if not isinstance(start_date, pd.Timestamp) else start_date
+                end_ts = pd.Timestamp(end_date) if not isinstance(end_date, pd.Timestamp) else end_date
+
+                # Ensure timezone awareness
+                if start_ts.tzinfo is None:
+                    start_ts = start_ts.tz_localize('UTC')
+                if end_ts.tzinfo is None:
+                    end_ts = end_ts.tz_localize('UTC')
+
+                # Find trading period boundaries in the dataframe
+                trading_start_idx = df.index.searchsorted(start_ts)
+                trading_end_idx = min(df.index.searchsorted(end_ts, side='right'), total_bars)
+
+                print(f"Date filter detected: trading period from index {trading_start_idx} to {trading_end_idx}")
+                print(f"  Warmup bars available: {trading_start_idx}")
+                print(f"  Trading bars: {trading_end_idx - trading_start_idx}")
+
+            except Exception as e:
+                print(f"Warning: Failed to parse date filter, using full dataset: {e}")
+                trading_start_idx = 0
+                trading_end_idx = total_bars
+
+        # Calculate trading period length
+        trading_period_bars = trading_end_idx - trading_start_idx
+
+        # Minimum dataset size check
+        min_required_bars = 1000
+        if trading_period_bars < min_required_bars:
+            raise ValueError(f"Trading period is too small for walk-forward analysis. "
+                           f"Need at least {min_required_bars} bars, have {trading_period_bars}.")
+
+        # Calculate zones WITHIN the trading period
+        # WF Zone: 80% of trading period, Forward Reserve: 20% of trading period
+        wf_zone_bars = int(trading_period_bars * (self.config.wf_zone_pct / 100))
+        forward_start = trading_start_idx + wf_zone_bars
+        forward_end = trading_end_idx
+
+        # Available bars for WF windows
+        wf_available_start = trading_start_idx
+        wf_available_end = forward_start
         wf_available_bars = wf_available_end - wf_available_start
 
         if wf_available_bars <= 0:
