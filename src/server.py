@@ -629,7 +629,7 @@ def run_walkforward_optimization() -> object:
         app.logger.exception("Failed to load CSV for walk-forward")
         return jsonify({"error": "Failed to load CSV data."}), HTTPStatus.INTERNAL_SERVER_ERROR
 
-    # Apply date filtering for Walk-Forward Analysis
+    # Apply date filtering for Walk-Forward Analysis with warmup preservation
     use_date_filter = optimization_config.fixed_params.get('dateFilter', False)
     start_date = optimization_config.fixed_params.get('start')
     end_date = optimization_config.fixed_params.get('end')
@@ -655,18 +655,52 @@ def run_walkforward_optimization() -> object:
             else:
                 end_ts = end_date if end_date.tzinfo else end_date.tz_localize('UTC')
 
-            # Filter dataframe by date range
-            df_filtered = df[(df.index >= start_ts) & (df.index <= end_ts)].copy()
+            # Find indices for logical start/end boundaries
+            main_start_idx = None
+            main_end_idx = None
 
-            if len(df_filtered) < 1000:
+            for idx in range(len(df)):
+                if df.index[idx] >= start_ts:
+                    main_start_idx = idx
+                    break
+
+            for idx in range(len(df) - 1, -1, -1):
+                if df.index[idx] <= end_ts:
+                    main_end_idx = idx
+                    break
+
+            if main_start_idx is None or main_end_idx is None:
                 if opened_file:
                     opened_file.close()
                 return jsonify({
-                    "error": f"Selected date range contains only {len(df_filtered)} bars. Need at least 1000 bars for Walk-Forward Analysis."
+                    "error": "No data found in the selected date range."
                 }), HTTPStatus.BAD_REQUEST
 
-            df = df_filtered
-            print(f"Walk-Forward: Using date-filtered data: {len(df)} bars from {df.index[0]} to {df.index[-1]}")
+            # Check that the main working range has enough data
+            main_range_bars = main_end_idx - main_start_idx + 1
+            if main_range_bars < 1000:
+                if opened_file:
+                    opened_file.close()
+                return jsonify({
+                    "error": f"Selected date range contains only {main_range_bars} bars. Need at least 1000 bars for Walk-Forward Analysis."
+                }), HTTPStatus.BAD_REQUEST
+
+            # Get warmup_bars from WFConfig (default 1000, synced with WFConfig)
+            warmup_bars = 1000
+
+            # Calculate warmup-aware slice
+            warmup_start_idx = max(0, main_start_idx - warmup_bars)
+
+            # Build warmup-aware dataframe
+            df_wf = df.iloc[warmup_start_idx: main_end_idx + 1].copy()
+
+            actual_warmup = main_start_idx - warmup_start_idx
+            if actual_warmup < warmup_bars:
+                print(f"Walk-Forward: Warning - Only {actual_warmup} warmup bars available (requested {warmup_bars})")
+
+            df = df_wf
+            print(f"Walk-Forward: Using warmup-aware data: {len(df)} bars from {df.index[0]} to {df.index[-1]}, "
+                  f"logical start at {start_ts}, logical end at {end_ts}")
 
         except Exception as e:
             if opened_file:

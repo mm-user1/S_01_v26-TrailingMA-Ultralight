@@ -103,27 +103,69 @@ class WalkForwardEngine:
             forward_start: Start index of forward period
             forward_end: End index of forward period
         """
-        total_bars = len(df)
-        warmup = self.config.warmup_bars
+        # Extract logical start/end from base_config_template
+        start_date = self.base_config_template["fixed_params"].get("start")
+        end_date = self.base_config_template["fixed_params"].get("end")
 
-        if total_bars <= warmup:
-            raise ValueError("Dataset is too small for walk-forward analysis (insufficient warmup data).")
+        if start_date is None or end_date is None:
+            raise ValueError("WFA requires start and end dates in fixed_params")
 
-        # Calculate zones
-        wf_zone_end = int(total_bars * (self.config.wf_zone_pct / 100))
+        # Normalize to pandas Timestamps with UTC
+        if not isinstance(start_date, pd.Timestamp):
+            start_ts = pd.Timestamp(start_date)
+            if start_ts.tzinfo is None:
+                start_ts = start_ts.tz_localize('UTC')
+            else:
+                start_ts = start_ts.tz_convert('UTC')
+        else:
+            start_ts = start_date if start_date.tzinfo else start_date.tz_localize('UTC')
+
+        if not isinstance(end_date, pd.Timestamp):
+            end_ts = pd.Timestamp(end_date)
+            if end_ts.tzinfo is None:
+                end_ts = end_ts.tz_localize('UTC')
+            else:
+                end_ts = end_ts.tz_convert('UTC')
+        else:
+            end_ts = end_date if end_date.tzinfo else end_date.tz_localize('UTC')
+
+        # Find logical start/end indices in df
+        logical_start_idx = None
+        logical_end_idx = None
+
+        for idx in range(len(df)):
+            if df.index[idx] >= start_ts:
+                logical_start_idx = idx
+                break
+
+        for idx in range(len(df) - 1, -1, -1):
+            if df.index[idx] <= end_ts:
+                logical_end_idx = idx
+                break
+
+        if logical_start_idx is None or logical_end_idx is None:
+            raise ValueError("Could not find logical start/end dates in dataframe index")
+
+        # Now work only with the logical segment [logical_start_idx, logical_end_idx]
+        segment_len = logical_end_idx - logical_start_idx + 1
+
+        if segment_len < 1000:
+            raise ValueError(f"Logical date range too small: {segment_len} bars. Need at least 1000.")
+
+        # Calculate WF zone and Forward zone within this logical segment
+        wf_zone_len = int(segment_len * (self.config.wf_zone_pct / 100))
+        wf_zone_start = logical_start_idx
+        wf_zone_end = logical_start_idx + wf_zone_len
         forward_start = wf_zone_end
-        forward_end = total_bars
+        forward_end = logical_end_idx + 1  # Exclusive
 
-        if forward_start <= warmup:
-            raise ValueError("Dataset is too small to allocate forward reserve.")
-
-        # Available bars for WF (after warmup)
-        wf_available_start = warmup
+        # Available bars for WF (the entire wf_zone)
+        wf_available_start = wf_zone_start
         wf_available_end = wf_zone_end
         wf_available_bars = wf_available_end - wf_available_start
 
         if wf_available_bars <= 0:
-            raise ValueError("No data available for walk-forward windows after warmup.")
+            raise ValueError("No data available for walk-forward windows.")
 
         total_gap = self.config.gap_bars * self.config.num_windows
         effective_bars = wf_available_bars - total_gap
@@ -274,13 +316,20 @@ class WalkForwardEngine:
 
         # Step 4: Forward Test
         print("\n--- Forward Test ---")
-        forward_df = df.iloc[fwd_start:fwd_end].copy()
+        # Add warmup history before forward zone (similar to IS/OOS)
+        forward_warmup_start = max(0, fwd_start - self.config.warmup_bars)
+        forward_df = df.iloc[forward_warmup_start:fwd_end].copy()
+        print(f"Forward test using bars {forward_warmup_start} to {fwd_end} (warmup + forward zone)")
+
         top10 = aggregated[:10]
         forward_profits: List[float] = []
         forward_params: List[Dict[str, Any]] = []
 
         for agg in top10:
             if not forward_df.empty:
+                # For Stage 1: using result.net_profit_pct for the entire forward_df
+                # (includes warmup period in calculation)
+                # Stage 2 will filter trades to forward zone only
                 result = run_strategy(forward_df, StrategyParams.from_dict(agg.params))
                 forward_profits.append(result.net_profit_pct)
             else:
@@ -292,7 +341,9 @@ class WalkForwardEngine:
         )
 
         # Calculate WF zone boundaries
-        wf_zone_start = windows[0].is_start if windows else self.config.warmup_bars
+        # Note: windows[0].is_start now points to the logical start (UI start date)
+        # because split_data has been updated to use logical boundaries
+        wf_zone_start = windows[0].is_start if windows else 0
         wf_zone_end = fwd_start
 
         wf_result = WFResult(
