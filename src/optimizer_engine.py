@@ -119,7 +119,6 @@ _month_arr: np.ndarray
 _risk_per_trade_pct: float
 _contract_size: float
 _commission_rate: float
-_trade_start_idx: int
 
 
 def _generate_numeric_sequence(
@@ -284,7 +283,7 @@ def _init_worker(
     global _data_close, _data_high, _data_low, _times, _time_index
     global _ma_cache, _lowest_cache, _highest_cache, _atr_values, _time_in_range
     global _month_arr
-    global _risk_per_trade_pct, _contract_size, _commission_rate, _trade_start_idx
+    global _risk_per_trade_pct, _contract_size, _commission_rate
 
     close_series = df["Close"].astype(float)
     high_series = df["High"].astype(float)
@@ -338,7 +337,6 @@ def _init_worker(
     _risk_per_trade_pct = float(risk_per_trade_pct)
     _contract_size = float(contract_size)
     _commission_rate = float(commission_rate)
-    _trade_start_idx = int(trade_start_idx)
 
 
 def _simulate_combination(params_dict: Dict[str, Any]) -> OptimizationResult:
