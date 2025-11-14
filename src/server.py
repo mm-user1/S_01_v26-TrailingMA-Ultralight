@@ -657,8 +657,32 @@ def run_walkforward_optimization() -> object:
 
             # IMPORTANT: Add warmup period before start_ts for Walk-Forward Analysis
             # The first WFA window will start from start_ts, so it needs historical data for MA warmup
-            # Use conservative warmup estimate: 1500 bars should cover most MA configurations
-            warmup_bars = 1500
+            # Calculate warmup dynamically based on maximum MA lengths
+            max_ma_length = 1
+
+            # Check parameter ranges (varied parameters)
+            param_ranges = optimization_config.param_ranges
+            if "ma_length" in param_ranges:
+                # param_ranges format: (min, max, step)
+                max_ma_length = max(max_ma_length, int(param_ranges["ma_length"][1]))
+            if "trail_ma_long_length" in param_ranges:
+                max_ma_length = max(max_ma_length, int(param_ranges["trail_ma_long_length"][1]))
+            if "trail_ma_short_length" in param_ranges:
+                max_ma_length = max(max_ma_length, int(param_ranges["trail_ma_short_length"][1]))
+
+            # Check fixed params (locked parameters)
+            fixed_params = optimization_config.fixed_params
+            if "maLength" in fixed_params and fixed_params["maLength"]:
+                max_ma_length = max(max_ma_length, int(fixed_params["maLength"]))
+            if "trailLongLength" in fixed_params and fixed_params["trailLongLength"]:
+                max_ma_length = max(max_ma_length, int(fixed_params["trailLongLength"]))
+            if "trailShortLength" in fixed_params and fixed_params["trailShortLength"]:
+                max_ma_length = max(max_ma_length, int(fixed_params["trailShortLength"]))
+
+            # Use same formula as prepare_dataset_with_warmup(): max(500, max_ma_length * 1.5)
+            warmup_bars = max(500, int(max_ma_length * 1.5))
+
+            print(f"Dynamic warmup calculation: max_ma_length={max_ma_length}, warmup_bars={warmup_bars}")
 
             # Find the index of start_ts in the dataframe
             start_idx = df.index.searchsorted(start_ts)
