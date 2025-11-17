@@ -892,7 +892,7 @@ def export_wf_results_csv(result: WFResult, df: Optional[pd.DataFrame] = None) -
     from io import StringIO
 
     output = StringIO()
-    writer = csv.writer(output)
+    writer = csv.writer(output, lineterminator='\n')
 
     def bar_to_date(bar_idx: int) -> str:
         """Convert bar index to date string (YYYY-MM-DD)"""
