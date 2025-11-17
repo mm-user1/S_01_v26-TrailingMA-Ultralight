@@ -780,35 +780,120 @@ def run_walkforward_optimization() -> object:
     # Generate CSV content without saving to disk
     csv_content = export_wf_results_csv(result, df)
 
-    top10: List[Dict[str, Any]] = []
-    for rank, agg in enumerate(result.aggregated[:10], 1):
-        forward_profit = result.forward_profits[rank - 1] if rank <= len(result.forward_profits) else None
-        top10.append(
-            {
-                "rank": rank,
-                "param_id": agg.param_id,
-                "appearances": f"{agg.appearances}/{len(result.windows)}",
-                "avg_oos_profit": round(agg.avg_oos_profit, 2),
-                "oos_win_rate": round(agg.oos_win_rate * 100, 1),
-                "forward_profit": round(forward_profit, 2) if isinstance(forward_profit, (int, float)) else None,
-            }
-        )
+    # Get export trades settings from request
+    export_trades = data.get("exportTrades") == "true"
+    top_k_str = data.get("topK", "10")
+    try:
+        top_k = min(100, max(1, int(top_k_str)))
+    except (ValueError, TypeError):
+        top_k = 10
 
-    response_payload = {
-        "status": "success",
-        "summary": {
-            "total_windows": len(result.windows),
-            "top_param_id": result.aggregated[0].param_id if result.aggregated else "N/A",
-            "top_avg_oos_profit": round(result.aggregated[0].avg_oos_profit, 2) if result.aggregated else 0.0,
-        },
-        "top10": top10,
-        "csv_content": csv_content,
-    }
+    # Generate timestamp and filenames
+    timestamp = int(time.time() * 1000)
+    csv_filename = f"wf_results_{timestamp}.csv"
 
-    if opened_file:
-        opened_file.close()
+    if export_trades:
+        # Export trades history for top-K combinations
+        import tempfile
+        import zipfile
+        import shutil
+        from pathlib import Path
+        from walkforward_engine import export_wfa_trades_history, _extract_symbol_from_csv_filename
 
-    return jsonify(response_payload)
+        # Extract symbol from CSV filename
+        original_csv_name = csv_file.filename if csv_file and hasattr(csv_file, 'filename') else ""
+        if not original_csv_name and csv_path_raw:
+            original_csv_name = csv_path_raw
+        symbol = _extract_symbol_from_csv_filename(original_csv_name)
+
+        # Create temporary directory for all files
+        temp_dir = Path(tempfile.mkdtemp())
+
+        try:
+            # Save main WFA results CSV
+            csv_path = temp_dir / csv_filename
+            csv_path.write_text(csv_content, encoding='utf-8')
+
+            # Export trades to CSVs
+            trade_files = export_wfa_trades_history(
+                wf_result=result,
+                df=df,
+                symbol=symbol,
+                top_k=top_k,
+                output_dir=temp_dir
+            )
+
+            # Create ZIP with all files
+            zip_filename = f"wf_results_{timestamp}.zip"
+            zip_path = temp_dir / zip_filename
+
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                # Add main CSV
+                zf.write(csv_path, csv_filename)
+
+                # Add all trade CSVs
+                for trade_file in trade_files:
+                    trade_path = temp_dir / trade_file
+                    zf.write(trade_path, trade_file)
+
+            # Close opened file before sending response
+            if opened_file:
+                opened_file.close()
+
+            # Send ZIP file
+            response = send_file(
+                zip_path,
+                mimetype='application/zip',
+                as_attachment=True,
+                download_name=zip_filename
+            )
+
+            # Cleanup temporary directory after sending
+            # Note: Flask will handle the file, so we can't delete immediately
+            # The temp directory will be cleaned up by the OS eventually
+
+            return response
+
+        except Exception as e:
+            # Cleanup on error
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            if opened_file:
+                opened_file.close()
+            app.logger.exception("Failed to export trades history")
+            return jsonify({"error": f"Failed to export trades: {str(e)}"}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    else:
+        # No trades export - return JSON response (existing behavior)
+        top10: List[Dict[str, Any]] = []
+        for rank, agg in enumerate(result.aggregated[:10], 1):
+            forward_profit = result.forward_profits[rank - 1] if rank <= len(result.forward_profits) else None
+            top10.append(
+                {
+                    "rank": rank,
+                    "param_id": agg.param_id,
+                    "appearances": f"{agg.appearances}/{len(result.windows)}",
+                    "avg_oos_profit": round(agg.avg_oos_profit, 2),
+                    "oos_win_rate": round(agg.oos_win_rate * 100, 1),
+                    "forward_profit": round(forward_profit, 2) if isinstance(forward_profit, (int, float)) else None,
+                }
+            )
+
+        response_payload = {
+            "status": "success",
+            "summary": {
+                "total_windows": len(result.windows),
+                "top_param_id": result.aggregated[0].param_id if result.aggregated else "N/A",
+                "top_avg_oos_profit": round(result.aggregated[0].avg_oos_profit, 2) if result.aggregated else 0.0,
+            },
+            "top10": top10,
+            "csv_content": csv_content,
+        }
+
+        if opened_file:
+            opened_file.close()
+
+        return jsonify(response_payload)
 
 
 @app.post("/api/backtest")

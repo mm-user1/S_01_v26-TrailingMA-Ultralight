@@ -1640,6 +1640,16 @@
                   <span style="font-size: 12px; color: #666; margin-left: 10px;">(Best parameter sets to test on each window)</span>
                 </div>
 
+                <div class="form-group" style="margin-bottom: 12px; align-items: center;">
+                  <label style="min-width: 150px;">
+                    <input type="checkbox" id="wfExportTrades" />
+                    Export Trades History
+                  </label>
+                  <span style="margin-left: 10px; margin-right: 5px;">Top</span>
+                  <input type="number" id="wfExportTopK" value="10" min="1" max="100" style="width: 80px;" />
+                  <span style="font-size: 12px; color: #666; margin-left: 10px;">(Export detailed trade history for top-K parameter sets)</span>
+                </div>
+
                 <div style="background-color: #e8f4f8; padding: 15px; border-radius: 5px;">
                   <strong>Fixed Settings (Stage 1):</strong>
                   <ul style="margin-top: 10px; font-size: 13px; color: #555; padding-left: 18px;">
@@ -3596,6 +3606,12 @@
         formData.append('wf_gap_bars', document.getElementById('wfGapBars').value);
         formData.append('wf_topk', document.getElementById('wfTopK').value);
 
+        // Add export trades parameters
+        const exportTrades = document.getElementById('wfExportTrades').checked;
+        const exportTopK = document.getElementById('wfExportTopK').value;
+        formData.append('exportTrades', exportTrades ? 'true' : 'false');
+        formData.append('topK', exportTopK);
+
         if (wfResultsContainer) {
           wfResultsContainer.style.display = 'block';
         }
@@ -3615,18 +3631,61 @@
             method: 'POST',
             body: formData
           });
-          const data = await response.json();
 
-          if (!response.ok || data.status !== 'success') {
-            const message = data && data.error ? data.error : 'Walk-Forward request failed.';
-            if (wfStatusEl) {
-              wfStatusEl.textContent = `❌ ${message}`;
+          // Check if response is a file download (ZIP) or JSON
+          const contentType = response.headers.get('content-type');
+
+          if (contentType && contentType.includes('application/zip')) {
+            // Handle ZIP file download
+            if (!response.ok) {
+              if (wfStatusEl) {
+                wfStatusEl.textContent = `❌ Failed to download results.`;
+              }
+              return;
             }
-            return;
-          }
 
-          wfStatusEl.textContent = '✅ Walk-Forward completed successfully.';
-          displayWFResults(data);
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+
+            // Extract filename from Content-Disposition header or use default
+            const disposition = response.headers.get('content-disposition');
+            let filename = `wf_results_${new Date().getTime()}.zip`;
+            if (disposition && disposition.includes('filename=')) {
+              const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+              if (matches != null && matches[1]) {
+                filename = matches[1].replace(/['"]/g, '');
+              }
+            }
+
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(url);
+
+            if (wfStatusEl) {
+              wfStatusEl.textContent = '✅ Walk-Forward completed successfully. Results downloaded as ZIP.';
+            }
+            if (wfSummaryEl) {
+              wfSummaryEl.innerHTML = '<strong>Trade history exported!</strong> Check the downloaded ZIP file for WFA results CSV and individual trade history files.';
+            }
+          } else {
+            // Handle JSON response (no trades export)
+            const data = await response.json();
+
+            if (!response.ok || data.status !== 'success') {
+              const message = data && data.error ? data.error : 'Walk-Forward request failed.';
+              if (wfStatusEl) {
+                wfStatusEl.textContent = `❌ ${message}`;
+              }
+              return;
+            }
+
+            wfStatusEl.textContent = '✅ Walk-Forward completed successfully.';
+            displayWFResults(data);
+          }
         } catch (error) {
           if (wfStatusEl) {
             wfStatusEl.textContent = `❌ ${error.message || 'Walk-Forward request failed.'}`;

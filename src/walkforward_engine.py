@@ -106,6 +106,7 @@ class AggregatedResult:
     param_id: str  # "EMA 45_abc123"
     params: Dict[str, Any]
     appearances: int  # How many windows
+    window_ids: List[int]  # Which windows this combo appeared in (sorted)
     avg_oos_profit: float
     avg_is_profit: float  # Average IS profit across windows
     oos_win_rate: float  # % windows profitable
@@ -600,6 +601,8 @@ class WalkForwardEngine:
         param_map: Dict[str, Dict[str, Any]] = {}
 
         for window_result in window_results:
+            window_id = window_result.window_id
+
             for index, params in enumerate(window_result.top_params):
                 if index >= len(window_result.oos_profits):
                     continue
@@ -616,11 +619,13 @@ class WalkForwardEngine:
                     param_map[param_id] = {
                         "params": params,
                         "appearances": 0,
+                        "window_ids": [],
                         "oos_profits": [],
                         "is_profits": [],
                     }
 
                 param_map[param_id]["appearances"] += 1
+                param_map[param_id]["window_ids"].append(window_id)
                 param_map[param_id]["oos_profits"].append(oos_profit)
                 param_map[param_id]["is_profits"].append(is_profit)
 
@@ -628,6 +633,7 @@ class WalkForwardEngine:
         for param_id, data in param_map.items():
             oos_profits = data["oos_profits"]
             is_profits = data["is_profits"]
+            window_ids = sorted(data["window_ids"])
             avg_oos_profit = float(np.mean(oos_profits)) if oos_profits else 0.0
             avg_is_profit = float(np.mean(is_profits)) if is_profits else 0.0
             win_rate = (
@@ -641,6 +647,7 @@ class WalkForwardEngine:
                     param_id=param_id,
                     params=data["params"],
                     appearances=data["appearances"],
+                    window_ids=window_ids,
                     avg_oos_profit=avg_oos_profit,
                     avg_is_profit=avg_is_profit,
                     oos_win_rate=win_rate,
@@ -665,6 +672,213 @@ class WalkForwardEngine:
         param_hash = hashlib.md5(param_str.encode()).hexdigest()[:8]
 
         return f"{ma_type} {ma_length}_{param_hash}"
+
+
+def _extract_symbol_from_csv_filename(csv_filename: str) -> str:
+    """
+    Extract trading symbol from CSV filename in format: EXCHANGE:TICKER
+
+    Format: PREFIX_TICKER,...
+    Example: "OKX_LINKUSDT.P, 15 2025.02.01-2025.09.09.csv" -> "OKX:LINKUSDT.P"
+
+    Rules:
+    - Prefix (exchange): everything before first "_"
+    - Ticker: everything after first "_" until first ","
+
+    Args:
+        csv_filename: Name of the CSV file
+
+    Returns:
+        Symbol in format "EXCHANGE:TICKER" (e.g., "OKX:LINKUSDT.P")
+    """
+    from pathlib import Path
+
+    # Get filename without path
+    name = Path(csv_filename).name
+
+    # Find prefix (exchange) - before first "_"
+    if "_" not in name:
+        return "UNKNOWN:UNKNOWN"
+
+    prefix = name.split("_")[0]  # e.g., "OKX"
+
+    # Find ticker - after first "_" until first ","
+    remainder = name.split("_", 1)[1]  # e.g., "LINKUSDT.P, 15 2025..."
+
+    if "," in remainder:
+        ticker = remainder.split(",")[0].strip()  # e.g., "LINKUSDT.P"
+    else:
+        # Fallback: take first word
+        ticker = remainder.split()[0] if remainder.split() else "UNKNOWN"
+
+    return f"{prefix}:{ticker}"
+
+
+def _export_trades_to_csv(
+    trades: List[TradeRecord],
+    symbol: str,
+    output_path: str
+) -> None:
+    """
+    Export trades to TradingView CSV format.
+
+    Format:
+        Symbol,Side,Qty,Fill Price,Closing Time
+        OKX:LINKUSDT.P,Buy,10,13.9,2025-11-15 00:00:00
+        OKX:LINKUSDT.P,Sell,10,14,2025-11-15 08:00:00
+
+    Args:
+        trades: List of TradeRecord objects
+        symbol: Trading symbol (e.g., "OKX:LINKUSDT.P")
+        output_path: Path to save CSV file
+    """
+    import pandas as pd
+
+    if not trades:
+        # Create empty CSV with headers
+        df = pd.DataFrame(columns=["Symbol", "Side", "Qty", "Fill Price", "Closing Time"])
+        df.to_csv(output_path, index=False, encoding='utf-8')
+        return
+
+    rows = []
+    for trade in trades:
+        side = "Buy" if trade.direction == "long" else "Sell"
+        qty = int(trade.size)  # Convert to integer (number of contracts)
+        fill_price = trade.exit_price
+        closing_time = trade.exit_time.strftime("%Y-%m-%d %H:%M:%S")
+
+        rows.append({
+            "Symbol": symbol,
+            "Side": side,
+            "Qty": qty,
+            "Fill Price": fill_price,
+            "Closing Time": closing_time
+        })
+
+    df = pd.DataFrame(rows)
+    df.to_csv(output_path, index=False, encoding='utf-8')
+
+
+def export_wfa_trades_history(
+    wf_result: WFResult,
+    df: pd.DataFrame,
+    symbol: str,
+    top_k: int,
+    output_dir
+) -> List[str]:
+    """
+    Export trade history for top-K parameter combinations with exact WFA replication.
+
+    This function re-runs the strategy for each top-K combination on:
+    1. IS periods for windows where the combo appeared
+    2. OOS periods for windows where the combo appeared
+    3. Forward period (same for all combos)
+
+    All trades are combined into a single CSV per combination, sorted by entry time.
+
+    Args:
+        wf_result: WFResult object from walk-forward analysis
+        df: Original dataframe with all market data
+        symbol: Trading symbol (e.g., "OKX:LINKUSDT.P")
+        top_k: Number of top combinations to export (max 100)
+        output_dir: Directory to save trade CSV files
+
+    Returns:
+        List of generated CSV filenames
+    """
+    from pathlib import Path
+    from backtest_engine import StrategyParams, run_strategy, prepare_dataset_with_warmup
+
+    trade_files = []
+    actual_top_k = min(top_k, len(wf_result.aggregated))
+
+    for rank, agg in enumerate(wf_result.aggregated[:actual_top_k], 1):
+        # Convert aggregated params to StrategyParams
+        params = StrategyParams.from_dict(agg.params)
+        all_trades = []
+
+        # ============================================================
+        # Part 1: Re-run for each window where combo appeared in top-K
+        # ============================================================
+        for window_id in agg.window_ids:  # Already sorted
+            window = wf_result.windows[window_id - 1]  # window_id starts from 1
+
+            # --- IS period ---
+            is_start_time = df.index[window.is_start]
+            is_end_time = df.index[window.is_end - 1]
+
+            # Exact WFA replication: prepare_dataset_with_warmup + run_strategy
+            is_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
+                df, is_start_time, is_end_time, params
+            )
+
+            params.use_date_filter = True
+            is_result = run_strategy(is_df_prepared, params, trade_start_idx)
+
+            # Filter trades by IS period (same as in WFA)
+            is_trades = [
+                trade for trade in is_result.trades
+                if is_start_time <= trade.entry_time <= is_end_time
+            ]
+            all_trades.extend(is_trades)
+
+            # --- OOS period ---
+            oos_start_time = df.index[window.oos_start]
+            oos_end_time = df.index[window.oos_end - 1]
+
+            oos_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
+                df, oos_start_time, oos_end_time, params
+            )
+
+            params.use_date_filter = True
+            oos_result = run_strategy(oos_df_prepared, params, trade_start_idx)
+
+            # Filter trades by OOS period
+            oos_trades = [
+                trade for trade in oos_result.trades
+                if oos_start_time <= trade.entry_time <= oos_end_time
+            ]
+            all_trades.extend(oos_trades)
+
+        # ============================================================
+        # Part 2: Forward period (same for all combinations)
+        # ============================================================
+        forward_start_time = df.index[wf_result.forward_start]
+        forward_end_time = df.index[wf_result.forward_end - 1]
+
+        fwd_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
+            df, forward_start_time, forward_end_time, params
+        )
+
+        params.use_date_filter = True
+        fwd_result = run_strategy(fwd_df_prepared, params, trade_start_idx)
+
+        # Filter trades by Forward period
+        fwd_trades = [
+            trade for trade in fwd_result.trades
+            if forward_start_time <= trade.entry_time <= forward_end_time
+        ]
+        all_trades.extend(fwd_trades)
+
+        # ============================================================
+        # Part 3: Sort and export
+        # ============================================================
+        # Sort by entry time for chronological order
+        all_trades.sort(key=lambda t: t.entry_time)
+
+        # Calculate forward profit for filename
+        fwd_profit_pct = _compute_segment_metrics(fwd_trades)[0] if fwd_trades else 0.0
+
+        # Generate filename: rank1_fwd+16.29.csv
+        filename = f"rank{rank}_fwd{fwd_profit_pct:+.2f}.csv"
+        filepath = Path(output_dir) / filename
+
+        # Export to CSV
+        _export_trades_to_csv(all_trades, symbol, str(filepath))
+
+        trade_files.append(filename)
+
+    return trade_files
 
 
 def export_wf_results_csv(result: WFResult, df: Optional[pd.DataFrame] = None) -> str:
