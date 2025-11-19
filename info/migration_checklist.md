@@ -719,7 +719,7 @@ git commit -m "Phase 4: Refactor optimizer for multi-strategy
   - [ ] Close count: use_close_count, close_count_long, close_count_short
   - [ ] Breakout: breakout_mode, use_close_price
   - [ ] Contract size
-  - [ ] All with correct types, defaults, frontend_name
+  - [ ] All with correct types, defaults (camelCase keys)
 
 - [ ] Implement `__init__`:
   - [ ] Initialize caches: `_ma1`, `_ma2`, `_ma3`

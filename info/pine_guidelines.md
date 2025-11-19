@@ -43,7 +43,8 @@ input int count = 7
 ```
 
 **Naming Convention:**
-- Parameters: `snake_case` (matches Python)
+- **In PineScript**: Use `snake_case` (PineScript standard)
+- **In Python get_param_definitions()**: Convert to `camelCase` (API/frontend compatibility)
 - Calculated values: prefix with `calc_`
 - Counters: prefix with `counter_`
 - Conditions: prefix with `cond_`
@@ -102,24 +103,43 @@ input float commission_rate = 0.0004
 
 **Translation to Python:**
 ```python
+@classmethod
 def get_param_definitions(cls):
+    """
+    Convert PineScript snake_case parameters to Python camelCase.
+
+    PineScript: ma_type, ma_length, stop_long_atr
+    Python API: maType, maLength, stopLongAtr
+    """
     return {
-        'ma_type': {
+        'maType': {  # camelCase key (converted from ma_type)
             'type': 'categorical',
             'choices': ['SMA', 'EMA', 'HMA', ...],
             'default': 'EMA',
-            'frontend_name': 'maType'
+            'description': 'Moving average type'
         },
-        'ma_length': {
+        'maLength': {  # camelCase key (converted from ma_length)
             'type': 'int',
             'default': 45,
             'min': 1,
             'max': 500,
-            'frontend_name': 'maLength'
+            'description': 'Moving average period'
+        },
+        'stopLongAtr': {  # camelCase (converted from stop_long_atr)
+            'type': 'float',
+            'default': 2.0,
+            'min': 0.5,
+            'max': 5.0,
+            'description': 'ATR multiplier for long stops'
         },
         # ... etc
     }
 ```
+
+**Conversion Rule:** `snake_case` → `camelCase`
+- `ma_type` → `maType`
+- `close_count_long` → `closeCountLong`
+- `trail_ma_long_offset` → `trailMaLongOffset`
 
 ---
 
@@ -586,7 +606,7 @@ if entry_signal
 
 Before requesting translation, ensure your Pine code has:
 
-- [ ] Consistent naming convention (`snake_case` for params)
+- [ ] Consistent naming convention (`snake_case` in Pine, `camelCase` in Python API)
 - [ ] Clear variable names with prefixes (`calc_`, `counter_`, `cond_`)
 - [ ] Annotated indicators (`@location: indicators.py` if needed)
 - [ ] Strategy type annotation (`@strategy-type: ...`)

@@ -195,15 +195,15 @@ def _generate_parameter_grid(
     grid_params = {}
 
     for param_name, param_def in param_definitions.items():
-        frontend_name = param_def.get('frontend_name', param_name)
+        # param_name is already in camelCase (e.g., 'maLength')
 
         # Check if this parameter varies
-        if config.enabled_params.get(frontend_name, False):
+        if config.enabled_params.get(param_name, False):
             # This parameter varies - get range
-            if frontend_name not in config.param_ranges:
-                raise ValueError(f"Parameter '{frontend_name}' is enabled but has no range specified")
+            if param_name not in config.param_ranges:
+                raise ValueError(f"Parameter '{param_name}' is enabled but has no range specified")
 
-            start, stop, step = config.param_ranges[frontend_name]
+            start, stop, step = config.param_ranges[param_name]
 
             # Generate values based on type
             param_type = param_def['type']
@@ -218,9 +218,9 @@ def _generate_parameter_grid(
 
             elif param_type == 'categorical':
                 # For categorical, treat as list of choices
-                # User should provide list in config.param_ranges[frontend_name]
-                if isinstance(config.param_ranges[frontend_name], (list, tuple)):
-                    values = list(config.param_ranges[frontend_name])
+                # User should provide list in config.param_ranges[param_name]
+                if isinstance(config.param_ranges[param_name], (list, tuple)):
+                    values = list(config.param_ranges[param_name])
                 else:
                     # Fall back to all choices if range not specified properly
                     values = param_def.get('choices', [param_def['default']])
@@ -236,8 +236,8 @@ def _generate_parameter_grid(
 
         else:
             # This parameter is fixed - use value from config.fixed_params
-            if frontend_name in config.fixed_params:
-                value = config.fixed_params[frontend_name]
+            if param_name in config.fixed_params:
+                value = config.fixed_params[param_name]
             else:
                 value = param_def['default']
 
@@ -507,7 +507,7 @@ Delete the global `PARAMETER_MAP` constant:
 # }
 ```
 
-Parameter mapping is now handled dynamically through `param_definitions['frontend_name']`.
+Parameter mapping is now simple: `param_definitions` uses camelCase keys directly (e.g., 'maLength').
 
 ---
 
@@ -554,10 +554,10 @@ def export_to_csv(
 
     # Add parameter columns (dynamic based on strategy)
     for param_name, param_def in param_defs.items():
-        frontend_name = param_def.get('frontend_name', param_name)
-        display_name = param_def.get('display_name', param_name)
+        # param_name is already in camelCase (e.g., 'maLength')
+        display_name = param_def.get('description', param_name)
 
-        # Add to columns
+        # Add to columns (use param_name as is)
         csv_columns.append((param_name, display_name))
 
     # ... rest of CSV export logic using csv_columns
