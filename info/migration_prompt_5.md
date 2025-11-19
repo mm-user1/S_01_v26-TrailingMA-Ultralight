@@ -243,8 +243,7 @@ class S03Reversal(BaseStrategy):
             }
         }
 
-    @staticmethod
-    def allows_reversal() -> bool:
+    def allows_reversal(self) -> bool:
         """
         Indicate this strategy supports reversal (always in market).
 
