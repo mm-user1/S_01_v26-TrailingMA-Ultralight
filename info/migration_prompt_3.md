@@ -65,13 +65,14 @@ class S01TrailingMA(BaseStrategy):
 
 ### 2. Implement get_param_definitions()
 
-**Map all 28 S_01 parameters:**
-- Trend MA: type, length
+**Map all 29 S_01 parameters:**
+- Date filter: date_filter, start_date, end_date
+- Trend MA: ma_type, ma_length
 - Entry: close_count_long, close_count_short
 - Long stops: stop_long_atr, stop_long_rr, stop_long_lp, stop_long_max_pct, stop_long_max_days
-- Short stops: (similar)
+- Short stops: stop_short_atr, stop_short_rr, stop_short_lp, stop_short_max_pct, stop_short_max_days
 - Trailing long: trail_rr_long, trail_ma_long_type, trail_ma_long_length, trail_ma_long_offset
-- Trailing short: (similar)
+- Trailing short: trail_rr_short, trail_ma_short_type, trail_ma_short_length, trail_ma_short_offset
 - Risk: risk_per_trade_pct, contract_size, commission_rate, atr_period
 
 **Format:**

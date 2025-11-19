@@ -259,7 +259,8 @@ git commit -m "Phase 2: Create base strategy contract
     VERSION = "26"
     ```
 
-- [ ] Move S_01 parameters to `get_param_definitions()`:
+- [ ] Move S_01 parameters to `get_param_definitions()` (29 total):
+  - [ ] Date filter: dateFilter, startDate, endDate
   - [ ] Trend MA: maType, maLength
   - [ ] Close counts: closeCountLong, closeCountShort
   - [ ] Long stops: stopLongAtr, stopLongRr, stopLongLp, stopLongMaxPct, stopLongMaxDays

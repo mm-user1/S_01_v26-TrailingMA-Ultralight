@@ -302,14 +302,14 @@ def _init_worker(
     # Import indicators
     from indicators import get_ma, atr
 
-    # 1. MA Specifications
-    if 'ma_specs' in cache_requirements:
-        _cached_data['ma_specs'] = {}
+    # 1. MA Types and Lengths
+    if 'ma_types_and_lengths' in cache_requirements:
+        _cached_data['ma_cache'] = {}
 
-        ma_specs = cache_requirements['ma_specs']
-        logger.info(f"Pre-computing {len(ma_specs)} MA specifications")
+        ma_types_and_lengths = cache_requirements['ma_types_and_lengths']
+        logger.info(f"Pre-computing {len(ma_types_and_lengths)} MA types/lengths")
 
-        for ma_type, length in ma_specs:
+        for ma_type, length in ma_types_and_lengths:
             # Compute MA
             ma_values = get_ma(
                 df['Close'],
@@ -320,7 +320,7 @@ def _init_worker(
                 df['Low']
             ).to_numpy()
 
-            _cached_data['ma_specs'][(ma_type, length)] = ma_values
+            _cached_data['ma_cache'][(ma_type, length)] = ma_values
             logger.debug(f"  Cached MA: {ma_type}({length})")
 
     # 2. ATR Values

@@ -221,12 +221,13 @@ class BaseStrategy(ABC):
 - Risk-based position sizing (2% of equity per trade)
 - Max stop % and max days filters
 
-**Parameters:** 28 total
+**Parameters:** 29 total
+- Date filter: enabled, start date, end date
 - Trend MA: type, length
 - Entry: close count long/short
 - Stops: ATR multiplier, RR ratio, lookback period, max %, max days (separate for long/short)
 - Trailing: activation RR, MA type/length/offset (separate for long/short)
-- Risk: risk per trade %, contract size, commission rate
+- Risk: risk per trade %, contract size, commission rate, ATR period
 
 **State Management:**
 - Counters: close count, trade count
