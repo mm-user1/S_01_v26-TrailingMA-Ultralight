@@ -79,14 +79,13 @@ class S01TrailingMA(BaseStrategy):
 @classmethod
 def get_param_definitions(cls):
     return {
-        'ma_length': {
+        'maLength': {  # camelCase key for API/frontend
             'type': 'int',
             'default': 45,
             'min': 0,
             'max': 500,
             'step': 1,
-            'display_name': 'Trend MA Length',
-            'frontend_name': 'maLength'
+            'description': 'Trend MA Length'
         },
         # ... all 28 parameters
     }
@@ -107,30 +106,30 @@ def _prepare_data(self, df, cached_data):
     
     if cached_data:
         # Use cache from optimizer
-        ma_key = (self.params['ma_type'], self.params['ma_length'])
-        self._ma_trend = cached_data['ma_specs'][ma_key]
-        
-        trail_long_key = (self.params['trail_ma_long_type'], self.params['trail_ma_long_length'])
-        self._trail_ma_long = cached_data['ma_specs'][trail_long_key]
+        ma_key = (self.params['maType'], self.params['maLength'])
+        self._ma_trend = cached_data['ma_cache'][ma_key]
+
+        trail_long_key = (self.params['trailMaLongType'], self.params['trailMaLongLength'])
+        self._trail_ma_long = cached_data['ma_cache'][trail_long_key]
         # Apply offset
-        self._trail_ma_long = self._trail_ma_long * (1 + self.params['trail_ma_long_offset'] / 100.0)
-        
+        self._trail_ma_long = self._trail_ma_long * (1 + self.params['trailMaLongOffset'] / 100.0)
+
         # Similar for trail_short, ATR, lowest, highest
-        
+
     else:
         # Compute on-the-fly
-        self._ma_trend = get_ma(df['Close'], self.params['ma_type'], self.params['ma_length'], ...).to_numpy()
-        
-        trail_long_ma = get_ma(df['Close'], self.params['trail_ma_long_type'], self.params['trail_ma_long_length'], ...)
-        self._trail_ma_long = trail_long_ma.to_numpy() * (1 + self.params['trail_ma_long_offset'] / 100.0)
-        
+        self._ma_trend = get_ma(df['Close'], self.params['maType'], self.params['maLength'], ...).to_numpy()
+
+        trail_long_ma = get_ma(df['Close'], self.params['trailMaLongType'], self.params['trailMaLongLength'], ...)
+        self._trail_ma_long = trail_long_ma.to_numpy() * (1 + self.params['trailMaLongOffset'] / 100.0)
+
         # Similar for other indicators
-        
-        self._atr = atr(df['High'], df['Low'], df['Close'], self.params['atr_period']).to_numpy()
+
+        self._atr = atr(df['High'], df['Low'], df['Close'], self.params['atrPeriod']).to_numpy()
         
         # Compute lowest/highest
-        self._lowest = df['Low'].rolling(window=self.params['stop_long_lp']).min().to_numpy()
-        self._highest = df['High'].rolling(window=self.params['stop_short_lp']).max().to_numpy()
+        self._lowest = df['Low'].rolling(window=self.params['stopLongLp']).min().to_numpy()
+        self._highest = df['High'].rolling(window=self.params['stopShortLp']).max().to_numpy()
 ```
 
 ### 4. Implement should_long()
@@ -159,10 +158,10 @@ def should_long(self, idx):
     
     # Check conditions
     up_trend = (
-        self.counter_close_trend_long >= self.params['close_count_long']
+        self.counter_close_trend_long >= self.params['closeCountLong']
         and self.counter_trade_long == 0
     )
-    
+
     return up_trend and not math.isnan(self._atr[idx])
 ```
 
@@ -177,26 +176,26 @@ def calculate_entry(self, idx, direction):
     
     if direction == 'long':
         # Get lowest low over lookback period
-        lp = self.params['stop_long_lp']
+        lp = self.params['stopLongLp']
         if idx < lp:
             lowest = self.low[:idx+1].min()
         else:
             lowest = self.low[idx-lp+1:idx+1].min()
-        
+
         # Calculate stop
-        stop = lowest - (atr_val * self.params['stop_long_atr'])
+        stop = lowest - (atr_val * self.params['stopLongAtr'])
         stop_distance = c - stop
-        
+
         # Check max stop %
-        max_stop_pct = self.params['stop_long_max_pct']
+        max_stop_pct = self.params['stopLongMaxPct']
         if max_stop_pct > 0:
             stop_pct = (stop_distance / c) * 100
             if stop_pct > max_stop_pct:
                 return (math.nan, math.nan, math.nan)
-        
+
         # Calculate target
-        target = c + (stop_distance * self.params['stop_long_rr'])
-        
+        target = c + (stop_distance * self.params['stopLongRr'])
+
         return (c, stop, target)
     
     else:  # short
@@ -222,17 +221,17 @@ def should_exit(self, idx, position_info):
     if direction > 0:  # Long
         # Check trailing activation
         if not self.trail_activated_long:
-            activation_price = entry_price + (entry_price - stop_price) * self.params['trail_rr_long']
+            activation_price = entry_price + (entry_price - stop_price) * self.params['trailRrLong']
             if h >= activation_price:
                 self.trail_activated_long = True
                 self.trail_price_long = stop_price
-        
+
         # Update trailing price
         trail_ma_val = self._trail_ma_long[idx]
         if not math.isnan(trail_ma_val):
             if math.isnan(self.trail_price_long) or trail_ma_val > self.trail_price_long:
                 self.trail_price_long = trail_ma_val
-        
+
         # Check exits
         if self.trail_activated_long:
             if l <= self.trail_price_long:
@@ -244,9 +243,9 @@ def should_exit(self, idx, position_info):
                 return (True, stop_price, 'stop')
             if h >= target_price:
                 return (True, target_price, 'target')
-        
+
         # Max days
-        max_days = self.params['stop_long_max_days']
+        max_days = self.params['stopLongMaxDays']
         if max_days > 0:
             days_in_trade = idx - entry_idx
             if days_in_trade >= max_days:
@@ -262,25 +261,25 @@ def should_exit(self, idx, position_info):
 ```python
 @classmethod
 def get_cache_requirements(cls, param_combinations):
-    ma_specs = set()
+    ma_types_and_lengths = set()
     long_lp = set()
     short_lp = set()
     atr_periods = set()
-    
+
     for combo in param_combinations:
-        ma_specs.add((combo.get('ma_type', 'EMA'), combo.get('ma_length', 45)))
-        ma_specs.add((combo.get('trail_ma_long_type', 'SMA'), combo.get('trail_ma_long_length', 160)))
-        ma_specs.add((combo.get('trail_ma_short_type', 'SMA'), combo.get('trail_ma_short_length', 160)))
-        
-        long_lp.add(combo.get('stop_long_lp', 2))
-        short_lp.add(combo.get('stop_short_lp', 2))
-        atr_periods.add(combo.get('atr_period', 14))
-    
+        ma_types_and_lengths.add((combo.get('maType', 'EMA'), combo.get('maLength', 45)))
+        ma_types_and_lengths.add((combo.get('trailMaLongType', 'SMA'), combo.get('trailMaLongLength', 160)))
+        ma_types_and_lengths.add((combo.get('trailMaShortType', 'SMA'), combo.get('trailMaShortLength', 160)))
+
+        long_lp.add(combo.get('stopLongLp', 2))
+        short_lp.add(combo.get('stopShortLp', 2))
+        atr_periods.add(combo.get('atrPeriod', 14))
+
     return {
-        'ma_specs': list(ma_specs),
+        'ma_types_and_lengths': list(ma_types_and_lengths),
         'long_lp_values': list(long_lp),
         'short_lp_values': list(short_lp),
-        'atr_periods': list(atr_periods)
+        'needs_atr': True
     }
 ```
 
@@ -386,7 +385,7 @@ old_params = StrategyParams(ma_type='EMA', ma_length=45, ...)
 old_result = run_old(df, old_params)
 
 # New way
-new_strategy = S01TrailingMA({'ma_type': 'EMA', 'ma_length': 45, ...})
+new_strategy = S01TrailingMA({'maType': 'EMA', 'maLength': 45, ...})
 new_result = new_strategy.simulate(df)
 
 print(f"Old profit: {old_result.net_profit_pct:.6f}%")

@@ -125,14 +125,13 @@ class BaseStrategy(ABC):
 
         Returns dict with structure:
         {
-            'ma_length': {
+            'maLength': {  # camelCase key for API/frontend compatibility
                 'type': 'int',
                 'default': 45,
                 'min': 10,
                 'max': 200,
                 'step': 5,
-                'display_name': 'MA Length',
-                'frontend_name': 'maLength'
+                'description': 'Moving average period'
             }
         }
         """

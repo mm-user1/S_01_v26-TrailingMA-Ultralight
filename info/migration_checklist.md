@@ -260,14 +260,14 @@ git commit -m "Phase 2: Create base strategy contract
     ```
 
 - [ ] Move S_01 parameters to `get_param_definitions()`:
-  - [ ] Trend MA: ma_type, ma_length
-  - [ ] Close counts: close_count_long, close_count_short
-  - [ ] Long stops: stop_long_atr, stop_long_rr, stop_long_lp, stop_long_max_pct, stop_long_max_days
-  - [ ] Short stops: stop_short_atr, stop_short_rr, stop_short_lp, stop_short_max_pct, stop_short_max_days
-  - [ ] Trailing long: trail_rr_long, trail_ma_long_type, trail_ma_long_length, trail_ma_long_offset
-  - [ ] Trailing short: trail_rr_short, trail_ma_short_type, trail_ma_short_length, trail_ma_short_offset
-  - [ ] Risk: risk_per_trade_pct, contract_size, commission_rate, atr_period
-  - [ ] All with correct types, defaults, min/max, frontend_name mapping
+  - [ ] Trend MA: maType, maLength
+  - [ ] Close counts: closeCountLong, closeCountShort
+  - [ ] Long stops: stopLongAtr, stopLongRr, stopLongLp, stopLongMaxPct, stopLongMaxDays
+  - [ ] Short stops: stopShortAtr, stopShortRr, stopShortLp, stopShortMaxPct, stopShortMaxDays
+  - [ ] Trailing long: trailRrLong, trailMaLongType, trailMaLongLength, trailMaLongOffset
+  - [ ] Trailing short: trailRrShort, trailMaShortType, trailMaShortLength, trailMaShortOffset
+  - [ ] Risk: riskPerTradePct, contractSize, commissionRate, atrPeriod
+  - [ ] All with correct types, defaults, min/max (camelCase keys)
 
 - [ ] Implement `__init__`:
   - [ ] Call `super().__init__(params)`
@@ -283,9 +283,9 @@ git commit -m "Phase 2: Create base strategy contract
   def _prepare_data(self, df, cached_data):
       if cached_data:
           # Use pre-computed values from optimizer
-          ma_key = (self.params['ma_type'], self.params['ma_length'])
-          self._ma_trend = cached_data['ma_specs'][ma_key]
-          self._atr = cached_data['atr'][self.params['atr_period']]
+          ma_key = (self.params['maType'], self.params['maLength'])
+          self._ma_trend = cached_data['ma_cache'][ma_key]
+          self._atr = cached_data['atr'][self.params['atrPeriod']]
           # ... etc
       else:
           # Compute on-the-fly for single backtest
@@ -310,11 +310,11 @@ git commit -m "Phase 2: Create base strategy contract
 
   - [ ] **calculate_entry()**:
     - [ ] For long:
-      - [ ] Get lowest low over lookback period (stop_long_lp)
-      - [ ] Calculate stop: lowest - (ATR * stop_long_atr)
+      - [ ] Get lowest low over lookback period (stopLongLp)
+      - [ ] Calculate stop: lowest - (ATR * stopLongAtr)
       - [ ] Calculate entry: current close
-      - [ ] Calculate target: entry + (entry - stop) * stop_long_rr
-      - [ ] Check max stop %: if (entry - stop) / entry > max_stop_pct → return (nan, nan, nan)
+      - [ ] Calculate target: entry + (entry - stop) * stopLongRr
+      - [ ] Check max stop %: if (entry - stop) / entry > stopLongMaxPct → return (nan, nan, nan)
       - [ ] Return (entry, stop, target)
     - [ ] For short: similar with highest high
 
@@ -345,22 +345,22 @@ git commit -m "Phase 2: Create base strategy contract
 
       for combo in param_combinations:
           # Collect all MA specs
-          ma_specs.add((combo['ma_type'], combo['ma_length']))
-          ma_specs.add((combo['trail_ma_long_type'], combo['trail_ma_long_length']))
-          ma_specs.add((combo['trail_ma_short_type'], combo['trail_ma_short_length']))
+          ma_specs.add((combo['maType'], combo['maLength']))
+          ma_specs.add((combo['trailMaLongType'], combo['trailMaLongLength']))
+          ma_specs.add((combo['trailMaShortType'], combo['trailMaShortLength']))
 
           # Collect lookback periods
-          long_lp_values.add(combo['stop_long_lp'])
-          short_lp_values.add(combo['stop_short_lp'])
+          long_lp_values.add(combo['stopLongLp'])
+          short_lp_values.add(combo['stopShortLp'])
 
           # Collect ATR periods
-          atr_periods.add(combo.get('atr_period', 14))
+          atr_periods.add(combo.get('atrPeriod', 14))
 
       return {
-          'ma_specs': list(ma_specs),
+          'ma_types_and_lengths': list(ma_specs),
           'long_lp_values': list(long_lp_values),
           'short_lp_values': list(short_lp_values),
-          'atr_periods': list(atr_periods)
+          'needs_atr': True
       }
   ```
 
@@ -411,13 +411,13 @@ git commit -m "Phase 2: Create base strategy contract
 
   # Test parameter definitions
   params = S01TrailingMA.get_param_definitions()
-  assert 'ma_length' in params
-  assert params['ma_length']['type'] == 'int'
+  assert 'maLength' in params
+  assert params['maLength']['type'] == 'int'
 
   # Test strategy instantiation
   strategy = S01TrailingMA({
-      'ma_type': 'EMA',
-      'ma_length': 45,
+      'maType': 'EMA',
+      'maLength': 45,
       # ... all required params
   })
 
@@ -545,12 +545,12 @@ git commit -m "Phase 3: Extract S_01 to strategy module
       # Pre-compute indicators based on strategy's cache requirements
       _cached_data = {}
 
-      if 'ma_specs' in cache_req:
-          _cached_data['ma_specs'] = {}
-          for ma_type, length in cache_req['ma_specs']:
+      if 'ma_types_and_lengths' in cache_req:
+          _cached_data['ma_cache'] = {}
+          for ma_type, length in cache_req['ma_types_and_lengths']:
               from indicators import get_ma
               ma_values = get_ma(df['Close'], ma_type, length, ...).to_numpy()
-              _cached_data['ma_specs'][(ma_type, length)] = ma_values
+              _cached_data['ma_cache'][(ma_type, length)] = ma_values
 
       if 'atr_periods' in cache_req:
           _cached_data['atr'] = {}
@@ -603,16 +603,16 @@ git commit -m "Phase 3: Extract S_01 to strategy module
       # Build ranges for enabled parameters
       enabled_params = {}
       for param_name, param_def in param_defs.items():
-          frontend_name = param_def.get('frontend_name', param_name)
+          # param_name is already in camelCase (e.g., 'maLength')
 
-          if config.enabled_params.get(frontend_name):
+          if config.enabled_params.get(param_name):
               # This parameter varies
-              start, stop, step = config.param_ranges[frontend_name]
+              start, stop, step = config.param_ranges[param_name]
               values = _generate_numeric_sequence(start, stop, step, param_def['type'] == 'int')
               enabled_params[param_name] = values
           else:
               # Fixed parameter
-              enabled_params[param_name] = [config.fixed_params[frontend_name]]
+              enabled_params[param_name] = [config.fixed_params[param_name]]
 
       # Generate Cartesian product
       # ... existing grid generation logic

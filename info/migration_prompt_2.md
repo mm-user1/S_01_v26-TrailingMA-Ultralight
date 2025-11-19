@@ -270,35 +270,32 @@ class BaseStrategy(ABC):
         Returns:
             Dict with structure:
             {
-                'param_name': {
+                'camelCaseName': {  # Use camelCase for API/frontend compatibility
                     'type': 'int' | 'float' | 'bool' | 'categorical',
                     'default': value,
                     'min': value,  # for int/float
                     'max': value,  # for int/float
                     'step': value,  # optional
                     'choices': [...],  # for categorical
-                    'display_name': 'Human Readable Name',
-                    'frontend_name': 'camelCaseName'  # for API compatibility
+                    'description': 'Parameter description'
                 }
             }
 
         Example:
             return {
-                'ma_length': {
+                'maLength': {  # camelCase key
                     'type': 'int',
                     'default': 45,
                     'min': 10,
                     'max': 200,
                     'step': 5,
-                    'display_name': 'MA Length',
-                    'frontend_name': 'maLength'
+                    'description': 'Moving average period'
                 },
-                'ma_type': {
+                'maType': {  # camelCase key
                     'type': 'categorical',
                     'choices': ['SMA', 'EMA', 'HMA'],
                     'default': 'EMA',
-                    'display_name': 'MA Type',
-                    'frontend_name': 'maType'
+                    'description': 'Moving average type'
                 }
             }
         """
