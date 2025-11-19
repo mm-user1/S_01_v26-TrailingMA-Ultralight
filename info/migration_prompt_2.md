@@ -253,7 +253,7 @@ class BaseStrategy(ABC):
         Example:
             if cached_data:
                 # Use pre-computed values from optimizer
-                self._ma = cached_data['ma_specs'][(self.params['ma_type'], self.params['ma_length'])]
+                self._ma = cached_data['ma_cache'][(self.params['ma_type'], self.params['ma_length'])]
             else:
                 # Compute on-the-fly
                 from indicators import get_ma
@@ -576,8 +576,8 @@ class BaseStrategy(ABC):
         Returns:
             Dict specifying cache requirements:
             {
-                'ma_specs': [(type, length), ...],
-                'atr_periods': [14, 20, ...],
+                'ma_types_and_lengths': [(type, length), ...],
+                'needs_atr': True,
                 'long_lp_values': [2, 5, 10],
                 'short_lp_values': [2, 5, 10]
             }

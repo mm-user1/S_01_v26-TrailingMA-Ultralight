@@ -731,9 +731,9 @@ git commit -m "Phase 4: Refactor optimizer for multi-strategy
   def _prepare_data(self, df, cached_data):
       if cached_data:
           # Use cache
-          self._ma1 = cached_data['ma_specs'][(self.params['ma1_type'], self.params['ma1_length'])]
-          self._ma2 = cached_data['ma_specs'][(self.params['ma2_type'], self.params['ma2_length'])]
-          self._ma3 = cached_data['ma_specs'][(self.params['ma3_type'], self.params['ma3_length'])]
+          self._ma1 = cached_data['ma_cache'][(self.params['ma1_type'], self.params['ma1_length'])]
+          self._ma2 = cached_data['ma_cache'][(self.params['ma2_type'], self.params['ma2_length'])]
+          self._ma3 = cached_data['ma_cache'][(self.params['ma3_type'], self.params['ma3_length'])]
       else:
           # Compute on-the-fly
           from indicators import get_ma
@@ -800,7 +800,7 @@ git commit -m "Phase 4: Refactor optimizer for multi-strategy
           if combo.get('use_ma3', True):
               ma_specs.add((combo['ma3_type'], combo['ma3_length']))
 
-      return {'ma_specs': list(ma_specs)}
+      return {'ma_types_and_lengths': list(ma_specs), 'needs_atr': False}
   ```
 
 - [ ] Register S_03 in `strategy_registry.py`:

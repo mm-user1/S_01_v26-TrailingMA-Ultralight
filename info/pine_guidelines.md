@@ -169,8 +169,8 @@ calc_highest_short = ta.highest(high, stop_short_lp)
 
 **Python translation:** Calculated in `_prepare_data()` method
 ```python
-self._ma_trend = get_ma(df['Close'], self.params['ma_type'], self.params['ma_length']).to_numpy()
-self._atr = atr(df['High'], df['Low'], df['Close'], self.params['atr_period']).to_numpy()
+self._ma_trend = get_ma(df['Close'], self.params['maType'], self.params['maLength']).to_numpy()
+self._atr = atr(df['High'], df['Low'], df['Close'], self.params['atrPeriod']).to_numpy()
 ```
 
 ---
