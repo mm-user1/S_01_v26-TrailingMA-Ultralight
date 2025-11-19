@@ -143,9 +143,10 @@ class BaseStrategy(ABC):
 
         Returns dict with structure:
         {
-            'ma_specs': [('SMA', 50), ('EMA', 45), ...],
-            'atr_period': 14,
-            'lookback_periods': [2, 5, 10]
+            'ma_types_and_lengths': [('SMA', 50), ('EMA', 45), ...],
+            'needs_atr': True,
+            'long_lp_values': [2, 5, 10],
+            'short_lp_values': [2, 5, 10]
         }
         """
         return {}  # Default: no caching needed
@@ -926,8 +927,8 @@ Example: Genetic Algorithm optimizer
 
 **How:**
 1. Optimizer calls `strategy.get_cache_requirements(combinations)`
-2. Strategy returns: `{'ma_specs': [('SMA', 50), ('EMA', 30), ...], 'atr_period': 14}`
-3. Optimizer pre-computes all and stores in dict
+2. Strategy returns: `{'ma_types_and_lengths': [('SMA', 50), ('EMA', 30), ...], 'needs_atr': True}`
+3. Optimizer pre-computes all and stores in dict (keys: 'ma_cache', 'atr', 'lowest', 'highest')
 4. Each worker process receives cached_data
 5. Strategy uses cached values instead of recomputing
 
