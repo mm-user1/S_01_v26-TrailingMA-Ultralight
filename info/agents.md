@@ -8,7 +8,7 @@ This document provides **critical instructions** for AI agents working on this c
 
 ## Core Principles
 
-###1. **Preserve Exact Behavior**
+### 1. **Preserve Exact Behavior**
 
 When refactoring or migrating code:
 - **NEVER** change logic unless explicitly requested
@@ -54,26 +54,38 @@ When refactoring or migrating code:
 ### Frontend/API (JavaScript/JSON)
 
 **API Parameters:**
-- Use `camelCase` for API parameters: `maLength`, `stopLongX`, `closeCountLong`
+- Use `camelCase` for API parameters and as keys in `get_param_definitions()`
+- Examples: `maLength`, `stopLongX`, `closeCountLong`
 
-**Mapping:**
+**Strategy `get_param_definitions()` format:**
 ```python
-# Frontend → Python mapping
-{
-    'maLength': 'ma_length',
-    'stopLongX': 'stop_long_atr',
-    'closeCountLong': 'close_count_long'
-}
-```
-
-**Strategy `get_param_definitions()` must include both:**
-```python
-{
-    'ma_length': {  # Python name (internal)
-        'frontend_name': 'maLength',  # API name (external)
+@staticmethod
+def get_param_definitions() -> Dict[str, Dict[str, Any]]:
+    return {
+        'maLength': {  # camelCase key (matches frontend/API)
+            'default': 45,
+            'type': 'int',
+            'min': 1,
+            'max': 500,
+            'description': 'Moving average period'
+        },
+        'stopLongX': {
+            'default': 2.0,
+            'type': 'float',
+            'min': 0.5,
+            'max': 5.0,
+            'description': 'Long stop ATR multiplier'
+        }
         # ...
     }
-}
+```
+
+**Note:** Keys in `get_param_definitions()` use camelCase for consistency with API. Inside strategy class, you can convert to snake_case if preferred:
+```python
+def __init__(self, params: Dict[str, Any]):
+    super().__init__(params)
+    self.ma_length = params['maLength']  # Convert to snake_case internally
+    self.stop_long_x = params['stopLongX']
 ```
 
 ---
@@ -171,21 +183,21 @@ When refactoring or migrating code:
 
        if cached_data:
            # Use pre-computed (optimization mode)
-           self._ma = cached_data['ma_specs'][(self.params['ma_type'], self.params['ma_length'])]
+           self._ma = cached_data['ma_cache'][(self.params['maType'], self.params['maLength'])]
        else:
            # Compute on-the-fly (single backtest mode)
            from indicators import get_ma
-           self._ma = get_ma(df['Close'], self.params['ma_type'], self.params['ma_length']).to_numpy()
+           self._ma = get_ma(df['Close'], self.params['maType'], self.params['maLength']).to_numpy()
    ```
 
 7. **Define Cache Requirements:**
    ```python
    @classmethod
    def get_cache_requirements(cls, param_combinations):
-       ma_specs = set()
+       ma_configs = set()
        for combo in param_combinations:
-           ma_specs.add((combo['ma_type'], combo['ma_length']))
-       return {'ma_specs': list(ma_specs)}
+           ma_configs.add((combo['maType'], combo['maLength']))
+       return {'ma_types_and_lengths': list(ma_configs), 'needs_atr': False}
    ```
 
 8. **Register in StrategyRegistry:**
@@ -338,17 +350,17 @@ When implementing a new strategy:
 1. **Test parameter definitions:**
    ```python
    param_defs = Strategy.get_param_definitions()
-   assert 'ma_length' in param_defs
-   assert param_defs['ma_length']['type'] == 'int'
-   assert param_defs['ma_length']['default'] == 45
+   assert 'maLength' in param_defs
+   assert param_defs['maLength']['type'] == 'int'
+   assert param_defs['maLength']['default'] == 45
    ```
 
 2. **Test cache requirements:**
    ```python
-   combos = [{'ma_type': 'SMA', 'ma_length': 50}, {'ma_type': 'EMA', 'ma_length': 30}]
+   combos = [{'maType': 'SMA', 'maLength': 50}, {'maType': 'EMA', 'maLength': 30}]
    cache_req = Strategy.get_cache_requirements(combos)
-   assert ('SMA', 50) in cache_req['ma_specs']
-   assert ('EMA', 30) in cache_req['ma_specs']
+   assert ('SMA', 50) in cache_req['ma_types_and_lengths']
+   assert ('EMA', 30) in cache_req['ma_types_and_lengths']
    ```
 
 3. **Test with known data:**
@@ -418,18 +430,18 @@ def should_long(self, idx):
 
 ```python
 def _validate_params(self):
-    required = ['ma_length', 'stop_atr', 'risk_pct']
+    required = ['maLength', 'stopAtr', 'riskPct']
     for param in required:
         if param not in self.params:
             raise ValueError(f"Missing required parameter: {param}")
 
     # Type checks
-    if not isinstance(self.params['ma_length'], int):
-        raise TypeError(f"ma_length must be int, got {type(self.params['ma_length'])}")
+    if not isinstance(self.params['maLength'], int):
+        raise TypeError(f"maLength must be int, got {type(self.params['maLength'])}")
 
     # Range checks
-    if self.params['ma_length'] < 1 or self.params['ma_length'] > 500:
-        raise ValueError(f"ma_length must be in [1, 500], got {self.params['ma_length']}")
+    if self.params['maLength'] < 1 or self.params['maLength'] > 500:
+        raise ValueError(f"maLength must be in [1, 500], got {self.params['maLength']}")
 ```
 
 ### Simulation Errors
