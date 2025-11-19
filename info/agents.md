@@ -316,7 +316,7 @@ def calculate_position_size(self, idx, direction, entry, stop, equity):
 **Example:**
 ```python
 # Get lowest low over lookback period
-lp = self.params['stop_long_lp']
+lp = self.params['stopLongLp']  # camelCase API key
 start_idx = max(0, idx - lp + 1)
 lowest = self.low[start_idx:idx+1].min()
 ```

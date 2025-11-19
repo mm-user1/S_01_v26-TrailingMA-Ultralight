@@ -113,7 +113,7 @@ class BaseStrategy(ABC):
         or has invalid value.
 
         Example:
-            required = ['ma_length', 'stop_atr', 'risk_pct']
+            required = ['maLength', 'stopAtr', 'riskPct']
             for param in required:
                 if param not in self.params:
                     raise ValueError(f"Missing parameter: {param}")
@@ -253,11 +253,11 @@ class BaseStrategy(ABC):
         Example:
             if cached_data:
                 # Use pre-computed values from optimizer
-                self._ma = cached_data['ma_cache'][(self.params['ma_type'], self.params['ma_length'])]
+                self._ma = cached_data['ma_cache'][(self.params['maType'], self.params['maLength'])]
             else:
                 # Compute on-the-fly
                 from indicators import get_ma
-                self._ma = get_ma(df['Close'], self.params['ma_type'], self.params['ma_length']).to_numpy()
+                self._ma = get_ma(df['Close'], self.params['maType'], self.params['maLength']).to_numpy()
         """
         pass
 
