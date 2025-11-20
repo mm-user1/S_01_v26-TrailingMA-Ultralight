@@ -788,7 +788,7 @@ def run_walkforward_optimization() -> object:
             {
                 "rank": rank,
                 "param_id": agg.param_id,
-                "appearances": f"{agg.appearances}/{len(result.windows)}",
+                "appearances": agg.appearances,
                 "avg_oos_profit": round(agg.avg_oos_profit, 2),
                 "oos_win_rate": round(agg.oos_win_rate * 100, 1),
                 "forward_profit": round(forward_profit, 2) if isinstance(forward_profit, (int, float)) else None,

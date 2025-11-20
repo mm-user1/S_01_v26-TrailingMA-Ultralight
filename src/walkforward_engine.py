@@ -105,7 +105,7 @@ class AggregatedResult:
 
     param_id: str  # "EMA 45_abc123"
     params: Dict[str, Any]
-    appearances: int  # How many windows
+    appearances: str  # Window number in format "N/M" (e.g., "2/5")
     window_ids: List[int]  # Which windows this combo appeared in (sorted)
     avg_oos_profit: float
     avg_is_profit: float  # Average IS profit across windows
@@ -618,18 +618,18 @@ class WalkForwardEngine:
                 if param_id not in param_map:
                     param_map[param_id] = {
                         "params": params,
-                        "appearances": 0,
                         "window_ids": [],
                         "oos_profits": [],
                         "is_profits": [],
                     }
 
-                param_map[param_id]["appearances"] += 1
                 param_map[param_id]["window_ids"].append(window_id)
                 param_map[param_id]["oos_profits"].append(oos_profit)
                 param_map[param_id]["is_profits"].append(is_profit)
 
         aggregated: List[AggregatedResult] = []
+        total_windows = self.config.num_windows
+
         for param_id, data in param_map.items():
             oos_profits = data["oos_profits"]
             is_profits = data["is_profits"]
@@ -642,11 +642,18 @@ class WalkForwardEngine:
                 else 0.0
             )
 
+            # Format appearances as "N/M" or "N1,N2/M" if multiple windows
+            if len(window_ids) == 1:
+                appearances_str = f"{window_ids[0]}/{total_windows}"
+            else:
+                windows_str = ",".join(str(wid) for wid in window_ids)
+                appearances_str = f"{windows_str}/{total_windows}"
+
             aggregated.append(
                 AggregatedResult(
                     param_id=param_id,
                     params=data["params"],
-                    appearances=data["appearances"],
+                    appearances=appearances_str,
                     window_ids=window_ids,
                     avg_oos_profit=avg_oos_profit,
                     avg_is_profit=avg_is_profit,
@@ -1006,7 +1013,7 @@ def export_wf_results_csv(result: WFResult, df: Optional[pd.DataFrame] = None) -
         [
             "Rank",
             "Param ID",
-            "Appearances",
+            "Appearance",
             "OOS Win Rate",
             "Avg IS Profit %",
             "Avg OOS Profit %",
@@ -1025,7 +1032,7 @@ def export_wf_results_csv(result: WFResult, df: Optional[pd.DataFrame] = None) -
             [
                 rank,
                 agg.param_id,
-                f"{agg.appearances}/{len(result.windows)}",
+                agg.appearances,
                 f"{agg.oos_win_rate * 100:.1f}%",
                 f"{agg.avg_is_profit:.2f}%",
                 f"{agg.avg_oos_profit:.2f}%",
@@ -1124,7 +1131,7 @@ def export_wf_results_csv(result: WFResult, df: Optional[pd.DataFrame] = None) -
 
         writer.writerow([])
         writer.writerow(["Performance Metrics", ""])
-        writer.writerow(["Appearances", f"{agg.appearances}/{len(result.windows)}"])
+        writer.writerow(["Appearance", agg.appearances])
         writer.writerow(["Avg IS Profit %", f"{agg.avg_is_profit:.2f}%"])
         writer.writerow(
             [
