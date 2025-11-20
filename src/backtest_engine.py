@@ -385,7 +385,88 @@ def compute_max_drawdown(equity_curve: pd.Series) -> float:
     return peak_dd.max() * 100
 
 
-def run_strategy(df: pd.DataFrame, params: StrategyParams) -> StrategyResult:
+def prepare_dataset_with_warmup(
+    df: pd.DataFrame,
+    start: Optional[pd.Timestamp],
+    end: Optional[pd.Timestamp],
+    params: StrategyParams
+) -> tuple[pd.DataFrame, int]:
+    """
+    Trim dataset with warmup period for MA calculations.
+
+    Args:
+        df: Full OHLCV DataFrame with datetime index
+        start: Start date for trading (None = use all data)
+        end: End date for trading (None = use all data)
+        params: Strategy parameters to calculate required warmup
+
+    Returns:
+        Tuple of (trimmed_df, trade_start_idx)
+        - trimmed_df: DataFrame with warmup + trading period
+        - trade_start_idx: Index where trading should begin (warmup ends)
+    """
+    # Calculate required warmup based on largest MA length
+    max_ma_length = max(
+        params.ma_length,
+        params.trail_ma_long_length,
+        params.trail_ma_short_length
+    )
+
+    # Dynamic warmup: at least 500 bars or 1.5x the longest MA
+    required_warmup = max(500, int(max_ma_length * 1.5))
+
+    # If no date filtering, use entire dataset
+    if start is None and end is None:
+        return df.copy(), 0
+
+    # Find indices for start and end dates
+    times = df.index
+
+    # Determine start index
+    if start is not None:
+        # Find first index >= start
+        start_mask = times >= start
+        if not start_mask.any():
+            # Start date is after all data
+            print(f"Warning: Start date {start} is after all available data")
+            return df.iloc[0:0].copy(), 0  # Return empty df
+        start_idx = int(start_mask.argmax())
+    else:
+        start_idx = 0
+
+    # Determine end index
+    if end is not None:
+        # Find last index <= end
+        end_mask = times <= end
+        if not end_mask.any():
+            # End date is before all data
+            print(f"Warning: End date {end} is before all available data")
+            return df.iloc[0:0].copy(), 0  # Return empty df
+        # Get the last True value
+        end_idx = len(end_mask) - 1 - int(end_mask[::-1].argmax())
+        end_idx += 1  # Include the end bar
+    else:
+        end_idx = len(df)
+
+    # Calculate warmup start (go back from start_idx)
+    warmup_start_idx = max(0, start_idx - required_warmup)
+
+    # Check if we have enough data
+    actual_warmup = start_idx - warmup_start_idx
+    if actual_warmup < required_warmup:
+        print(f"Warning: Insufficient warmup data. Need {required_warmup} bars, "
+              f"only have {actual_warmup} bars available")
+
+    # Trim the dataframe
+    trimmed_df = df.iloc[warmup_start_idx:end_idx].copy()
+
+    # Trade start index is where actual trading begins (after warmup)
+    trade_start_idx = start_idx - warmup_start_idx
+
+    return trimmed_df, trade_start_idx
+
+
+def run_strategy(df: pd.DataFrame, params: StrategyParams, trade_start_idx: int = 0) -> StrategyResult:
     if params.use_backtester is False:
         raise ValueError("Backtester is disabled in the provided parameters")
 
@@ -408,12 +489,9 @@ def run_strategy(df: pd.DataFrame, params: StrategyParams) -> StrategyResult:
 
     times = df.index
     if params.use_date_filter:
-        mask = np.ones(len(times), dtype=bool)
-        if params.start is not None:
-            mask &= times >= params.start
-        if params.end is not None:
-            mask &= times <= params.end
-        time_in_range = mask
+        # Use trade_start_idx to define trading zone
+        time_in_range = np.zeros(len(times), dtype=bool)
+        time_in_range[trade_start_idx:] = True
     else:
         time_in_range = np.ones(len(times), dtype=bool)
 

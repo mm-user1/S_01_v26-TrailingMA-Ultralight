@@ -13,9 +13,49 @@ import json
 import numpy as np
 import pandas as pd
 
-from backtest_engine import StrategyParams, run_strategy
+from backtest_engine import StrategyParams, run_strategy, TradeRecord
 from optimizer_engine import OptimizationConfig
 from optuna_engine import OptunaConfig, run_optuna_optimization
+
+
+def _compute_segment_metrics(
+    trades: List[TradeRecord],
+    initial_equity: float = 100.0
+) -> Tuple[float, float, int]:
+    """
+    Compute performance metrics for a specific trade segment.
+
+    Args:
+        trades: List of trades in the segment
+        initial_equity: Starting equity for the segment
+
+    Returns:
+        Tuple of (profit_pct, max_drawdown_pct, trade_count)
+    """
+    if not trades:
+        return 0.0, 0.0, 0
+
+    # Calculate profit
+    total_pnl = sum(trade.net_pnl for trade in trades)
+    profit_pct = (total_pnl / initial_equity) * 100.0
+
+    # Calculate drawdown
+    equity_curve = [initial_equity]
+    running_equity = initial_equity
+    for trade in trades:
+        running_equity += trade.net_pnl
+        equity_curve.append(running_equity)
+
+    peak = equity_curve[0]
+    max_dd = 0.0
+    for equity in equity_curve:
+        if equity > peak:
+            peak = equity
+        drawdown = ((equity - peak) / peak) * 100.0
+        if drawdown < max_dd:
+            max_dd = drawdown
+
+    return profit_pct, max_dd, len(trades)
 
 
 @dataclass
@@ -53,6 +93,7 @@ class WindowResult:
 
     window_id: int
     top_params: List[Dict[str, Any]]  # Top-K from IS optimization
+    is_profits: List[float]  # IS profit for each param
     oos_profits: List[float]  # OOS profit for each param
     oos_drawdowns: List[float]
     oos_trades: List[int]
@@ -64,10 +105,13 @@ class AggregatedResult:
 
     param_id: str  # "EMA 45_abc123"
     params: Dict[str, Any]
-    appearances: int  # How many windows
+    appearances: str  # Window number in format "N/M" (e.g., "2/5")
+    window_ids: List[int]  # Which windows this combo appeared in (sorted)
     avg_oos_profit: float
+    avg_is_profit: float  # Average IS profit across windows
     oos_win_rate: float  # % windows profitable
     oos_profits: List[float]  # All OOS profits
+    is_profits: List[float]  # All IS profits
 
 
 @dataclass
@@ -98,32 +142,74 @@ class WalkForwardEngine:
         """
         Split data into WF windows + Forward Reserve
 
+        IMPORTANT: If dateFilter is enabled in base_config_template, the dataframe
+        may include a warmup period before the actual trading period. This method
+        will detect the trading period boundaries and calculate WF zones correctly.
+
         Returns:
             windows: List of WindowSplit objects
             forward_start: Start index of forward period
             forward_end: End index of forward period
         """
         total_bars = len(df)
-        warmup = self.config.warmup_bars
 
-        if total_bars <= warmup:
-            raise ValueError("Dataset is too small for walk-forward analysis (insufficient warmup data).")
+        # Check if date filtering is enabled and find trading period boundaries
+        fixed_params = self.base_config_template.get('fixed_params', {})
+        use_date_filter = fixed_params.get('dateFilter', False)
+        start_date = fixed_params.get('start')
+        end_date = fixed_params.get('end')
 
-        # Calculate zones
-        wf_zone_end = int(total_bars * (self.config.wf_zone_pct / 100))
-        forward_start = wf_zone_end
-        forward_end = total_bars
+        trading_start_idx = 0
+        trading_end_idx = total_bars
 
-        if forward_start <= warmup:
-            raise ValueError("Dataset is too small to allocate forward reserve.")
+        if use_date_filter and start_date is not None and end_date is not None:
+            # Find indices corresponding to user-specified date range
+            # The df may include warmup data before start_date
+            try:
+                start_ts = pd.Timestamp(start_date) if not isinstance(start_date, pd.Timestamp) else start_date
+                end_ts = pd.Timestamp(end_date) if not isinstance(end_date, pd.Timestamp) else end_date
 
-        # Available bars for WF (after warmup)
-        wf_available_start = warmup
-        wf_available_end = wf_zone_end
+                # Ensure timezone awareness
+                if start_ts.tzinfo is None:
+                    start_ts = start_ts.tz_localize('UTC')
+                if end_ts.tzinfo is None:
+                    end_ts = end_ts.tz_localize('UTC')
+
+                # Find trading period boundaries in the dataframe
+                trading_start_idx = df.index.searchsorted(start_ts)
+                trading_end_idx = min(df.index.searchsorted(end_ts, side='right'), total_bars)
+
+                print(f"Date filter detected: trading period from index {trading_start_idx} to {trading_end_idx}")
+                print(f"  Warmup bars available: {trading_start_idx}")
+                print(f"  Trading bars: {trading_end_idx - trading_start_idx}")
+
+            except Exception as e:
+                print(f"Warning: Failed to parse date filter, using full dataset: {e}")
+                trading_start_idx = 0
+                trading_end_idx = total_bars
+
+        # Calculate trading period length
+        trading_period_bars = trading_end_idx - trading_start_idx
+
+        # Minimum dataset size check
+        min_required_bars = 1000
+        if trading_period_bars < min_required_bars:
+            raise ValueError(f"Trading period is too small for walk-forward analysis. "
+                           f"Need at least {min_required_bars} bars, have {trading_period_bars}.")
+
+        # Calculate zones WITHIN the trading period
+        # WF Zone: 80% of trading period, Forward Reserve: 20% of trading period
+        wf_zone_bars = int(trading_period_bars * (self.config.wf_zone_pct / 100))
+        forward_start = trading_start_idx + wf_zone_bars
+        forward_end = trading_end_idx
+
+        # Available bars for WF windows
+        wf_available_start = trading_start_idx
+        wf_available_end = forward_start
         wf_available_bars = wf_available_end - wf_available_start
 
         if wf_available_bars <= 0:
-            raise ValueError("No data available for walk-forward windows after warmup.")
+            raise ValueError("No data available for walk-forward windows.")
 
         total_gap = self.config.gap_bars * self.config.num_windows
         effective_bars = wf_available_bars - total_gap
@@ -193,12 +279,22 @@ class WalkForwardEngine:
         for window in windows:
             print(f"\n--- Window {window.window_id}/{len(windows)} ---")
 
-            warmup_start = max(0, window.is_start - self.config.warmup_bars)
-            is_df_with_warmup = df.iloc[warmup_start:window.is_end].copy()
+            # Prepare IS dataset with warmup using timestamps
+            is_start_time = df.index[window.is_start]
+            is_end_time = df.index[window.is_end - 1]
 
-            print(f"IS optimization: bars {window.is_start} to {window.is_end}")
+            print(f"IS optimization: bars {window.is_start} to {window.is_end} "
+                  f"(dates {is_start_time.date()} to {is_end_time.date()})")
 
-            optimization_results = self._run_optuna_on_window(is_df_with_warmup)
+            # IMPORTANT: Run Optuna optimization on IS window
+            # The optimization engine will:
+            # 1. Call prepare_dataset_with_warmup(df, is_start_time, is_end_time, params)
+            # 2. Get trimmed df with warmup + IS period and trade_start_idx
+            # 3. Use trade_start_idx to ensure trades open only in IS period (not in warmup)
+            # This ensures IS-only optimization: warmup for MAs, but trades/metrics only from IS
+            optimization_results = self._run_optuna_on_window(
+                df, is_start_time, is_end_time
+            )
 
             topk = min(self.config.topk_per_window, len(optimization_results))
             top_results = optimization_results[:topk]
@@ -206,57 +302,92 @@ class WalkForwardEngine:
 
             print(f"Got {len(top_params)} top parameter sets")
 
-            print(f"OOS validation: bars {window.oos_start} to {window.oos_end}")
-            oos_df_with_history = df.iloc[warmup_start:window.oos_end].copy()
+            # Collect IS profits for each top param
+            print(f"IS validation: collecting metrics for top {len(top_params)} params")
+            is_profits: List[float] = []
+
+            for params in top_params:
+                from backtest_engine import prepare_dataset_with_warmup
+
+                # Create params object for warmup calculation
+                strategy_params = StrategyParams.from_dict(params)
+
+                # Prepare dataset with warmup for IS period
+                # This ensures MAs are properly warmed up before IS trading begins
+                is_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
+                    df, is_start_time, is_end_time, strategy_params
+                )
+
+                # Run strategy with trade_start_idx
+                # All trades will be opened from trade_start_idx onwards (IS period only)
+                strategy_params.use_date_filter = True
+                result = run_strategy(is_df_prepared, strategy_params, trade_start_idx)
+
+                # Filter trades by entry time to ensure only IS period trades are counted
+                is_period_trades = [
+                    trade
+                    for trade in result.trades
+                    if is_start_time <= trade.entry_time <= is_end_time
+                ]
+
+                # Compute IS metrics using only IS-period trades
+                is_profit_pct, _, _ = _compute_segment_metrics(
+                    is_period_trades, initial_equity=100.0
+                )
+
+                is_profits.append(is_profit_pct)
+
+            # Prepare OOS dataset with accumulated history (IS + gap for warmup)
+            oos_start_time = df.index[window.oos_start]
+            oos_end_time = df.index[window.oos_end - 1]
+
+            print(f"OOS validation: bars {window.oos_start} to {window.oos_end} "
+                  f"(dates {oos_start_time.date()} to {oos_end_time.date()})")
 
             oos_profits: List[float] = []
             oos_drawdowns: List[float] = []
             oos_trades: List[int] = []
 
-            oos_start_time = df.index[window.oos_start]
-            oos_end_time = df.index[window.oos_end - 1]
-
             for params in top_params:
-                result = run_strategy(oos_df_with_history, StrategyParams.from_dict(params))
+                from backtest_engine import prepare_dataset_with_warmup
 
+                # Create params object for warmup calculation
+                strategy_params = StrategyParams.from_dict(params)
+
+                # IMPORTANT: For OOS validation, we use prepare_dataset_with_warmup to:
+                # 1. Add warmup period before oos_start for proper MA calculation
+                # 2. Set trade_start_idx to oos_start, ensuring trades open only in OOS
+                oos_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
+                    df, oos_start_time, oos_end_time, strategy_params
+                )
+
+                # Run strategy with trade_start_idx
+                # All trades will be opened from trade_start_idx onwards (OOS period only)
+                strategy_params.use_date_filter = True
+                result = run_strategy(oos_df_prepared, strategy_params, trade_start_idx)
+
+                # Filter trades by entry time to ensure only OOS period trades are counted
+                # (trades opened in [oos_start, oos_end] even if they close later)
                 oos_period_trades = [
                     trade
                     for trade in result.trades
                     if oos_start_time <= trade.entry_time <= oos_end_time
                 ]
 
-                if oos_period_trades:
-                    oos_pnl = sum(trade.net_pnl for trade in oos_period_trades)
-                    initial_equity = 10000
-                    oos_profit_pct = (oos_pnl / initial_equity) * 100
+                # Compute OOS metrics using only OOS-period trades
+                oos_profit_pct, oos_dd_pct, oos_trade_count = _compute_segment_metrics(
+                    oos_period_trades, initial_equity=100.0
+                )
 
-                    equity_curve = [initial_equity]
-                    running_equity = initial_equity
-                    for trade in oos_period_trades:
-                        running_equity += trade.net_pnl
-                        equity_curve.append(running_equity)
-
-                    peak = equity_curve[0]
-                    max_dd = 0.0
-                    for equity in equity_curve:
-                        if equity > peak:
-                            peak = equity
-                        drawdown = ((equity - peak) / peak) * 100
-                        if drawdown < max_dd:
-                            max_dd = drawdown
-
-                    oos_profits.append(oos_profit_pct)
-                    oos_drawdowns.append(max_dd)
-                    oos_trades.append(len(oos_period_trades))
-                else:
-                    oos_profits.append(0.0)
-                    oos_drawdowns.append(0.0)
-                    oos_trades.append(0)
+                oos_profits.append(oos_profit_pct)
+                oos_drawdowns.append(oos_dd_pct)
+                oos_trades.append(oos_trade_count)
 
             window_results.append(
                 WindowResult(
                     window_id=window.window_id,
                     top_params=top_params,
+                    is_profits=is_profits,
                     oos_profits=oos_profits,
                     oos_drawdowns=oos_drawdowns,
                     oos_trades=oos_trades,
@@ -274,17 +405,49 @@ class WalkForwardEngine:
 
         # Step 4: Forward Test
         print("\n--- Forward Test ---")
-        forward_df = df.iloc[fwd_start:fwd_end].copy()
+        from backtest_engine import prepare_dataset_with_warmup
+
+        forward_start_time = df.index[fwd_start]
+        forward_end_time = df.index[fwd_end - 1]
+        print(f"Forward test period: {forward_start_time.date()} to {forward_end_time.date()}")
+
         top10 = aggregated[:10]
         forward_profits: List[float] = []
         forward_params: List[Dict[str, Any]] = []
 
         for agg in top10:
-            if not forward_df.empty:
-                result = run_strategy(forward_df, StrategyParams.from_dict(agg.params))
-                forward_profits.append(result.net_profit_pct)
+            # Create params object for warmup calculation
+            strategy_params = StrategyParams.from_dict(agg.params)
+
+            # CRITICAL: Prepare dataset with warmup for forward test
+            # This adds warmup period before forward_start to properly warm up MAs
+            # trade_start_idx will point to the beginning of forward period
+            forward_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
+                df, forward_start_time, forward_end_time, strategy_params
+            )
+
+            if not forward_df_prepared.empty:
+                # Run strategy with trade_start_idx
+                # All trades will be opened from trade_start_idx onwards (forward period only)
+                strategy_params.use_date_filter = True
+                result = run_strategy(forward_df_prepared, strategy_params, trade_start_idx)
+
+                # Filter trades by entry time to ensure only Forward period trades are counted
+                # This is the same approach as OOS for consistency
+                forward_period_trades = [
+                    trade
+                    for trade in result.trades
+                    if forward_start_time <= trade.entry_time <= forward_end_time
+                ]
+
+                # Compute Forward metrics using only Forward-period trades
+                forward_profit_pct, _, _ = _compute_segment_metrics(
+                    forward_period_trades, initial_equity=100.0
+                )
+                forward_profits.append(forward_profit_pct)
             else:
                 forward_profits.append(0.0)
+
             forward_params.append(agg.params)
 
         print(
@@ -310,13 +473,45 @@ class WalkForwardEngine:
 
         return wf_result
 
-    def _run_optuna_on_window(self, df_window: pd.DataFrame):
-        csv_buffer = self._dataframe_to_csv_buffer(df_window)
+    def _run_optuna_on_window(self, df: pd.DataFrame, start_time: pd.Timestamp, end_time: pd.Timestamp):
+        """
+        Run Optuna optimization for a single WFA window.
+
+        This method passes the full dataframe along with start/end dates to Optuna.
+        The Optuna engine will internally:
+        1. Call prepare_dataset_with_warmup() to add warmup period before start_time
+        2. Calculate trade_start_idx pointing to start_time in the trimmed dataframe
+        3. Pass trade_start_idx to worker processes
+        4. Workers use trade_start_idx to ensure trades open only from start_time onwards
+
+        This ensures that:
+        - MAs are properly warmed up using data before start_time
+        - Optimization metrics are calculated only for trades in [start_time, end_time]
+        - No lookahead bias from warmup period
+
+        Args:
+            df: Full dataframe with all available data
+            start_time: Start of the optimization period (IS window)
+            end_time: End of the optimization period (IS window)
+
+        Returns:
+            List of OptimizationResult objects sorted by target metric
+        """
+        # Create CSV buffer from full dataframe
+        csv_buffer = self._dataframe_to_csv_buffer(df)
+
+        # Update fixed params with date filter and start/end dates
+        # These will be used by prepare_dataset_with_warmup() in the optimization engine
+        fixed_params = deepcopy(self.base_config_template["fixed_params"])
+        fixed_params["dateFilter"] = True
+        fixed_params["start"] = start_time.isoformat()
+        fixed_params["end"] = end_time.isoformat()
+
         base_config = OptimizationConfig(
             csv_file=csv_buffer,
             enabled_params=deepcopy(self.base_config_template["enabled_params"]),
             param_ranges=deepcopy(self.base_config_template["param_ranges"]),
-            fixed_params=deepcopy(self.base_config_template["fixed_params"]),
+            fixed_params=fixed_params,
             ma_types_trend=list(self.base_config_template["ma_types_trend"]),
             ma_types_trail_long=list(self.base_config_template["ma_types_trail_long"]),
             ma_types_trail_short=list(self.base_config_template["ma_types_trail_short"]),
@@ -406,6 +601,8 @@ class WalkForwardEngine:
         param_map: Dict[str, Dict[str, Any]] = {}
 
         for window_result in window_results:
+            window_id = window_result.window_id
+
             for index, params in enumerate(window_result.top_params):
                 if index >= len(window_result.oos_profits):
                     continue
@@ -413,36 +610,56 @@ class WalkForwardEngine:
                 if oos_profit <= 0:
                     continue
 
+                # Get corresponding IS profit
+                is_profit = window_result.is_profits[index] if index < len(window_result.is_profits) else 0.0
+
                 param_id = self._create_param_id(params)
 
                 if param_id not in param_map:
                     param_map[param_id] = {
                         "params": params,
-                        "appearances": 0,
+                        "window_ids": [],
                         "oos_profits": [],
+                        "is_profits": [],
                     }
 
-                param_map[param_id]["appearances"] += 1
+                param_map[param_id]["window_ids"].append(window_id)
                 param_map[param_id]["oos_profits"].append(oos_profit)
+                param_map[param_id]["is_profits"].append(is_profit)
 
         aggregated: List[AggregatedResult] = []
+        total_windows = self.config.num_windows
+
         for param_id, data in param_map.items():
             oos_profits = data["oos_profits"]
-            avg_profit = float(np.mean(oos_profits)) if oos_profits else 0.0
+            is_profits = data["is_profits"]
+            window_ids = sorted(data["window_ids"])
+            avg_oos_profit = float(np.mean(oos_profits)) if oos_profits else 0.0
+            avg_is_profit = float(np.mean(is_profits)) if is_profits else 0.0
             win_rate = (
                 len([profit for profit in oos_profits if profit > 0]) / len(oos_profits)
                 if oos_profits
                 else 0.0
             )
 
+            # Format appearances as "N/M" or "N1,N2/M" if multiple windows
+            if len(window_ids) == 1:
+                appearances_str = f"{window_ids[0]}/{total_windows}"
+            else:
+                windows_str = ",".join(str(wid) for wid in window_ids)
+                appearances_str = f"{windows_str}/{total_windows}"
+
             aggregated.append(
                 AggregatedResult(
                     param_id=param_id,
                     params=data["params"],
-                    appearances=data["appearances"],
-                    avg_oos_profit=avg_profit,
+                    appearances=appearances_str,
+                    window_ids=window_ids,
+                    avg_oos_profit=avg_oos_profit,
+                    avg_is_profit=avg_is_profit,
                     oos_win_rate=win_rate,
                     oos_profits=oos_profits,
+                    is_profits=is_profits,
                 )
             )
 
@@ -464,6 +681,292 @@ class WalkForwardEngine:
         return f"{ma_type} {ma_length}_{param_hash}"
 
 
+def _extract_file_prefix(csv_filename: str) -> str:
+    """
+    Extract file prefix (exchange, ticker, timeframe) from CSV filename.
+
+    Examples:
+        "OKX_LINKUSDT.P, 15 2025.02.01-2025.09.09.csv" -> "OKX_LINKUSDT.P, 15"
+        "BINANCE_BTCUSDT, 1h.csv" -> "BINANCE_BTCUSDT, 1h"
+
+    Returns original filename stem if date pattern not found.
+    """
+    from pathlib import Path
+    import re
+
+    name = Path(csv_filename).stem
+
+    # Remove date pattern if exists (YYYY.MM.DD-YYYY.MM.DD or YYYY-MM-DD--YYYY-MM-DD)
+    date_pattern = re.compile(r"\b\d{4}[.\-/]\d{2}[.\-/]\d{2}\b")
+    match = date_pattern.search(name)
+    if match:
+        prefix = name[:match.start()].rstrip()
+        return prefix if prefix else name
+
+    return name
+
+
+def _extract_symbol_from_csv_filename(csv_filename: str) -> str:
+    """
+    Extract trading symbol from CSV filename in format: EXCHANGE:TICKER
+
+    Format: PREFIX_TICKER,...
+    Example: "OKX_LINKUSDT.P, 15 2025.02.01-2025.09.09.csv" -> "OKX:LINKUSDT.P"
+
+    Rules:
+    - Prefix (exchange): everything before first "_"
+    - Ticker: everything after first "_" until first ","
+
+    Args:
+        csv_filename: Name of the CSV file
+
+    Returns:
+        Symbol in format "EXCHANGE:TICKER" (e.g., "OKX:LINKUSDT.P")
+    """
+    from pathlib import Path
+
+    # Get filename without path
+    name = Path(csv_filename).name
+
+    # Find prefix (exchange) - before first "_"
+    if "_" not in name:
+        return "UNKNOWN:UNKNOWN"
+
+    prefix = name.split("_")[0]  # e.g., "OKX"
+
+    # Find ticker - after first "_" until first ","
+    remainder = name.split("_", 1)[1]  # e.g., "LINKUSDT.P, 15 2025..."
+
+    if "," in remainder:
+        ticker = remainder.split(",")[0].strip()  # e.g., "LINKUSDT.P"
+    else:
+        # Fallback: take first word
+        ticker = remainder.split()[0] if remainder.split() else "UNKNOWN"
+
+    return f"{prefix}:{ticker}"
+
+
+def generate_wfa_output_filename(
+    csv_filename: str,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    include_trades: bool = False
+) -> str:
+    """
+    Generate filename for WFA results.
+
+    Format: EXCHANGE_TICKER TF START-END_Optuna+WFA.csv
+    Or:     EXCHANGE_TICKER TF START-END_Optuna+WFA_TRADES.zip
+
+    Args:
+        csv_filename: Input CSV filename
+        start_date: Start date of analysis period
+        end_date: End date of analysis period
+        include_trades: If True, generate ZIP filename for trades export
+
+    Returns:
+        Formatted filename string
+
+    Examples:
+        >>> generate_wfa_output_filename("OKX_LINKUSDT.P, 15.csv", pd.Timestamp("2025-05-01"), pd.Timestamp("2025-09-01"))
+        "OKX_LINKUSDT.P, 15 2025.05.01-2025.09.01_Optuna+WFA.csv"
+        >>> generate_wfa_output_filename("OKX_LINKUSDT.P, 15.csv", pd.Timestamp("2025-05-01"), pd.Timestamp("2025-09-01"), True)
+        "OKX_LINKUSDT.P, 15 2025.05.01-2025.09.01_Optuna+WFA_TRADES.zip"
+    """
+    # Extract prefix
+    prefix = _extract_file_prefix(csv_filename)
+    if not prefix:
+        prefix = "wfa"
+
+    # Format dates
+    start_str = start_date.strftime("%Y.%m.%d")
+    end_str = end_date.strftime("%Y.%m.%d")
+
+    # Build filename
+    mode = "Optuna+WFA_TRADES" if include_trades else "Optuna+WFA"
+    ext = "zip" if include_trades else "csv"
+
+    return f"{prefix} {start_str}-{end_str}_{mode}.{ext}"
+
+
+def _export_trades_to_csv(
+    trades: List[TradeRecord],
+    symbol: str,
+    output_path: str
+) -> None:
+    """
+    Export trades to TradingView CSV format.
+
+    Each trade generates TWO rows: entry and exit.
+
+    Format:
+        Symbol,Side,Qty,Fill Price,Closing Time
+        OKX:LINKUSDT.P,Buy,10,16.30,2025-11-15 00:00:00   (entry)
+        OKX:LINKUSDT.P,Sell,10,16.50,2025-11-15 01:00:00  (exit)
+
+    Args:
+        trades: List of TradeRecord objects
+        symbol: Trading symbol (e.g., "OKX:LINKUSDT.P")
+        output_path: Path to save CSV file
+    """
+    import pandas as pd
+
+    if not trades:
+        # Create empty CSV with headers
+        df = pd.DataFrame(columns=["Symbol", "Side", "Qty", "Fill Price", "Closing Time"])
+        df.to_csv(output_path, index=False, encoding='utf-8')
+        return
+
+    rows = []
+    for trade in trades:
+        qty = trade.size  # Preserve fractional contract sizes (e.g., 0.01, 0.5, etc.)
+
+        # Entry (open position)
+        entry_side = "Buy" if trade.direction == "long" else "Sell"
+        rows.append({
+            "Symbol": symbol,
+            "Side": entry_side,
+            "Qty": qty,
+            "Fill Price": trade.entry_price,
+            "Closing Time": trade.entry_time.strftime("%Y-%m-%d %H:%M:%S")
+        })
+
+        # Exit (close position)
+        exit_side = "Sell" if trade.direction == "long" else "Buy"
+        rows.append({
+            "Symbol": symbol,
+            "Side": exit_side,
+            "Qty": qty,
+            "Fill Price": trade.exit_price,
+            "Closing Time": trade.exit_time.strftime("%Y-%m-%d %H:%M:%S")
+        })
+
+    df = pd.DataFrame(rows)
+    df.to_csv(output_path, index=False, encoding='utf-8')
+
+
+def export_wfa_trades_history(
+    wf_result: WFResult,
+    df: pd.DataFrame,
+    symbol: str,
+    top_k: int,
+    output_dir
+) -> List[str]:
+    """
+    Export trade history for top-K parameter combinations with exact WFA replication.
+
+    This function re-runs the strategy for each top-K combination on:
+    1. IS periods for windows where the combo appeared
+    2. OOS periods for windows where the combo appeared
+    3. Forward period (same for all combos)
+
+    All trades are combined into a single CSV per combination, sorted by entry time.
+
+    Args:
+        wf_result: WFResult object from walk-forward analysis
+        df: Original dataframe with all market data
+        symbol: Trading symbol (e.g., "OKX:LINKUSDT.P")
+        top_k: Number of top combinations to export (max 100)
+        output_dir: Directory to save trade CSV files
+
+    Returns:
+        List of generated CSV filenames
+    """
+    from pathlib import Path
+    from backtest_engine import StrategyParams, run_strategy, prepare_dataset_with_warmup
+
+    trade_files = []
+    actual_top_k = min(top_k, len(wf_result.aggregated))
+
+    for rank, agg in enumerate(wf_result.aggregated[:actual_top_k], 1):
+        # Convert aggregated params to StrategyParams
+        params = StrategyParams.from_dict(agg.params)
+        all_trades = []
+
+        # ============================================================
+        # Part 1: Re-run for each window where combo appeared in top-K
+        # ============================================================
+        for window_id in agg.window_ids:  # Already sorted
+            window = wf_result.windows[window_id - 1]  # window_id starts from 1
+
+            # --- IS period ---
+            is_start_time = df.index[window.is_start]
+            is_end_time = df.index[window.is_end - 1]
+
+            # Exact WFA replication: prepare_dataset_with_warmup + run_strategy
+            is_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
+                df, is_start_time, is_end_time, params
+            )
+
+            params.use_date_filter = True
+            is_result = run_strategy(is_df_prepared, params, trade_start_idx)
+
+            # Filter trades by IS period (same as in WFA)
+            is_trades = [
+                trade for trade in is_result.trades
+                if is_start_time <= trade.entry_time <= is_end_time
+            ]
+            all_trades.extend(is_trades)
+
+            # --- OOS period ---
+            oos_start_time = df.index[window.oos_start]
+            oos_end_time = df.index[window.oos_end - 1]
+
+            oos_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
+                df, oos_start_time, oos_end_time, params
+            )
+
+            params.use_date_filter = True
+            oos_result = run_strategy(oos_df_prepared, params, trade_start_idx)
+
+            # Filter trades by OOS period
+            oos_trades = [
+                trade for trade in oos_result.trades
+                if oos_start_time <= trade.entry_time <= oos_end_time
+            ]
+            all_trades.extend(oos_trades)
+
+        # ============================================================
+        # Part 2: Forward period (same for all combinations)
+        # ============================================================
+        forward_start_time = df.index[wf_result.forward_start]
+        forward_end_time = df.index[wf_result.forward_end - 1]
+
+        fwd_df_prepared, trade_start_idx = prepare_dataset_with_warmup(
+            df, forward_start_time, forward_end_time, params
+        )
+
+        params.use_date_filter = True
+        fwd_result = run_strategy(fwd_df_prepared, params, trade_start_idx)
+
+        # Filter trades by Forward period
+        fwd_trades = [
+            trade for trade in fwd_result.trades
+            if forward_start_time <= trade.entry_time <= forward_end_time
+        ]
+        all_trades.extend(fwd_trades)
+
+        # ============================================================
+        # Part 3: Sort and export
+        # ============================================================
+        # Sort by entry time for chronological order
+        all_trades.sort(key=lambda t: t.entry_time)
+
+        # Calculate forward profit for filename
+        fwd_profit_pct = _compute_segment_metrics(fwd_trades)[0] if fwd_trades else 0.0
+
+        # Generate filename: rank1_fwd+16.29.csv
+        filename = f"rank{rank}_fwd{fwd_profit_pct:+.2f}.csv"
+        filepath = Path(output_dir) / filename
+
+        # Export to CSV
+        _export_trades_to_csv(all_trades, symbol, str(filepath))
+
+        trade_files.append(filename)
+
+    return trade_files
+
+
 def export_wf_results_csv(result: WFResult, df: Optional[pd.DataFrame] = None) -> str:
     """Export Walk-Forward results to CSV string
 
@@ -475,7 +978,7 @@ def export_wf_results_csv(result: WFResult, df: Optional[pd.DataFrame] = None) -
     from io import StringIO
 
     output = StringIO()
-    writer = csv.writer(output)
+    writer = csv.writer(output, lineterminator='\n')
 
     def bar_to_date(bar_idx: int) -> str:
         """Convert bar index to date string (YYYY-MM-DD)"""
@@ -510,9 +1013,10 @@ def export_wf_results_csv(result: WFResult, df: Optional[pd.DataFrame] = None) -
         [
             "Rank",
             "Param ID",
-            "Appearances",
-            "Avg OOS Profit %",
+            "Appearance",
             "OOS Win Rate",
+            "Avg IS Profit %",
+            "Avg OOS Profit %",
             "Forward Profit %",
         ]
     )
@@ -528,9 +1032,10 @@ def export_wf_results_csv(result: WFResult, df: Optional[pd.DataFrame] = None) -
             [
                 rank,
                 agg.param_id,
-                f"{agg.appearances}/{len(result.windows)}",
-                f"{agg.avg_oos_profit:.2f}%",
+                agg.appearances,
                 f"{agg.oos_win_rate * 100:.1f}%",
+                f"{agg.avg_is_profit:.2f}%",
+                f"{agg.avg_oos_profit:.2f}%",
                 f"{forward_profit:.2f}%"
                 if isinstance(forward_profit, float)
                 else forward_profit,
@@ -626,7 +1131,14 @@ def export_wf_results_csv(result: WFResult, df: Optional[pd.DataFrame] = None) -
 
         writer.writerow([])
         writer.writerow(["Performance Metrics", ""])
-        writer.writerow(["Appearances", f"{agg.appearances}/{len(result.windows)}"])
+        writer.writerow(["Appearance", agg.appearances])
+        writer.writerow(["Avg IS Profit %", f"{agg.avg_is_profit:.2f}%"])
+        writer.writerow(
+            [
+                "IS Profits by Window",
+                ", ".join([f"{profit:.2f}%" for profit in agg.is_profits]),
+            ]
+        )
         writer.writerow(["Avg OOS Profit %", f"{agg.avg_oos_profit:.2f}%"])
         writer.writerow(["OOS Win Rate", f"{agg.oos_win_rate * 100:.1f}%"])
         writer.writerow(

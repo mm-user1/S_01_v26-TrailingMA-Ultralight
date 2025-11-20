@@ -176,6 +176,8 @@ class OptunaOptimizer:
         return [int(round(val)) for val in sequence]
 
     def _setup_worker_pool(self, df: pd.DataFrame) -> None:
+        from backtest_engine import prepare_dataset_with_warmup, StrategyParams
+
         ma_specs: Set[Tuple[str, int]] = set()
 
         trend_lengths = self._collect_lengths("maLength")
@@ -226,6 +228,52 @@ class OptunaOptimizer:
         start = _parse_timestamp(self.base_config.fixed_params.get("start"))
         end = _parse_timestamp(self.base_config.fixed_params.get("end"))
 
+        # Prepare dataset with warmup if date filtering is enabled
+        trade_start_idx = 0
+        if use_date_filter and (start is not None or end is not None):
+            # Find the maximum MA length from all possible values
+            max_ma_length = max(
+                max(trend_lengths, default=1),
+                max(trail_long_lengths, default=0),
+                max(trail_short_lengths, default=0)
+            )
+
+            # Create a dummy StrategyParams with max MA lengths for warmup calculation
+            dummy_params = StrategyParams(
+                use_backtester=True,
+                use_date_filter=use_date_filter,
+                start=start,
+                end=end,
+                ma_type="SMA",
+                ma_length=max_ma_length,
+                trail_ma_long_type="SMA",
+                trail_ma_long_length=max_ma_length,
+                trail_ma_short_type="SMA",
+                trail_ma_short_length=max_ma_length,
+                close_count_long=1,
+                close_count_short=1,
+                stop_long_atr=1.0,
+                stop_long_rr=1.0,
+                stop_long_lp=1,
+                stop_short_atr=1.0,
+                stop_short_rr=1.0,
+                stop_short_lp=1,
+                stop_long_max_pct=0.0,
+                stop_short_max_pct=0.0,
+                stop_long_max_days=0,
+                stop_short_max_days=0,
+                trail_rr_long=1.0,
+                trail_rr_short=1.0,
+                trail_ma_long_offset=0.0,
+                trail_ma_short_offset=0.0,
+                risk_per_trade_pct=self.base_config.risk_per_trade_pct,
+                contract_size=self.base_config.contract_size,
+                commission_rate=self.base_config.commission_rate,
+                atr_period=self.base_config.atr_period
+            )
+
+            df, trade_start_idx = prepare_dataset_with_warmup(df, start, end, dummy_params)
+
         pool_args = (
             df,
             float(self.base_config.risk_per_trade_pct),
@@ -236,8 +284,7 @@ class OptunaOptimizer:
             list(long_lp_values),
             list(short_lp_values),
             use_date_filter,
-            start,
-            end,
+            trade_start_idx,
         )
 
         processes = min(32, max(1, int(self.base_config.worker_processes)))

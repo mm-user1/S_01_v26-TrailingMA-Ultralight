@@ -775,6 +775,26 @@
                     <ul id="selectedFilesList" class="selected-files-list"></ul>
                   </div>
                 </div>
+
+                <div class="form-group">
+                  <div class="filter-group" id="exportTradesFilterGroup">
+                    <div class="checkbox-group">
+                      <input type="checkbox" id="wfExportTrades" />
+                      <label for="wfExportTrades">Export Trades</label>
+                    </div>
+                    <div class="filter-input-group">
+                      <label for="wfExportTopK">Top</label>
+                      <input
+                        type="number"
+                        id="wfExportTopK"
+                        min="1"
+                        max="100"
+                        step="1"
+                        value="10"
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div class="section">
@@ -1699,7 +1719,7 @@
                   <tr style="background-color: #3498db; color: white;">
                     <th style="padding: 10px; border: 1px solid #ddd;">Rank</th>
                     <th style="padding: 10px; border: 1px solid #ddd;">Param ID</th>
-                    <th style="padding: 10px; border: 1px solid #ddd;">Appearances</th>
+                    <th style="padding: 10px; border: 1px solid #ddd;">Appearance</th>
                     <th style="padding: 10px; border: 1px solid #ddd;">Avg OOS Profit %</th>
                     <th style="padding: 10px; border: 1px solid #ddd;">OOS Win Rate</th>
                     <th style="padding: 10px; border: 1px solid #ddd;">Forward Profit %</th>
@@ -3564,7 +3584,7 @@
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
-            link.download = `wf_results_${new Date().getTime()}.csv`;
+            link.download = data.csv_filename || `wf_results_${new Date().getTime()}.csv`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -3581,27 +3601,31 @@
           return;
         }
 
-        const source = sources[0];
-        const isFileObject = typeof File !== 'undefined' && source instanceof File;
-        const formData = new FormData();
-        if (isFileObject) {
-          formData.append('file', source, source.name);
-        } else if (source && source.path) {
-          formData.append('csvPath', source.path);
-        }
-
+        const totalSources = sources.length;
         const config = buildOptunaConfig(state);
-        formData.append('config', JSON.stringify(config));
-        formData.append('wf_num_windows', document.getElementById('wfNumWindows').value);
-        formData.append('wf_gap_bars', document.getElementById('wfGapBars').value);
-        formData.append('wf_topk', document.getElementById('wfTopK').value);
 
+        // Get WFA parameters
+        const wfNumWindows = document.getElementById('wfNumWindows').value;
+        const wfGapBars = document.getElementById('wfGapBars').value;
+        const wfTopK = document.getElementById('wfTopK').value;
+        const exportTrades = document.getElementById('wfExportTrades').checked;
+        const exportTopK = document.getElementById('wfExportTopK').value;
+
+        // Prepare status tracking
+        const statusMessages = new Array(totalSources).fill('');
+        const updateStatus = (index, message) => {
+          statusMessages[index] = message;
+          if (wfStatusEl) {
+            wfStatusEl.textContent = statusMessages.filter(Boolean).join('\n');
+          }
+        };
+
+        // Clear previous results
         if (wfResultsContainer) {
           wfResultsContainer.style.display = 'block';
         }
         if (wfStatusEl) {
-          const sourceName = isFileObject ? source.name : (source && source.path) || 'Saved path';
-          wfStatusEl.textContent = `Running Walk-Forward on ${sourceName}…`;
+          wfStatusEl.textContent = '';
         }
         if (wfSummaryEl) {
           wfSummaryEl.textContent = '';
@@ -3610,26 +3634,141 @@
           wfTableBody.innerHTML = '';
         }
 
-        try {
-          const response = await fetch('/api/walkforward', {
-            method: 'POST',
-            body: formData
-          });
-          const data = await response.json();
+        const errors = [];
+        let successCount = 0;
+        let lastSuccessfulData = null;
 
-          if (!response.ok || data.status !== 'success') {
-            const message = data && data.error ? data.error : 'Walk-Forward request failed.';
-            if (wfStatusEl) {
-              wfStatusEl.textContent = `❌ ${message}`;
-            }
-            return;
+        // Process each source sequentially
+        for (let index = 0; index < totalSources; index += 1) {
+          const source = sources[index];
+          const isFileObject = typeof File !== 'undefined' && source instanceof File;
+          const rawSourceName = isFileObject ? source.name : source && source.path;
+          const sourceName = rawSourceName || (isFileObject ? 'Unnamed file' : 'Saved path');
+          const sourceNumber = index + 1;
+          const fileLabel = `Processing source ${sourceNumber} of ${totalSources}: ${sourceName}`;
+
+          updateStatus(index, `${fileLabel} — running Walk-Forward…`);
+
+          const formData = new FormData();
+          if (isFileObject) {
+            formData.append('file', source, source.name);
+          } else if (source && source.path) {
+            formData.append('csvPath', source.path);
           }
 
-          wfStatusEl.textContent = '✅ Walk-Forward completed successfully.';
-          displayWFResults(data);
-        } catch (error) {
+          formData.append('config', JSON.stringify(config));
+          formData.append('wf_num_windows', wfNumWindows);
+          formData.append('wf_gap_bars', wfGapBars);
+          formData.append('wf_topk', wfTopK);
+          formData.append('exportTrades', exportTrades ? 'true' : 'false');
+          formData.append('topK', exportTopK);
+
+          try {
+            const response = await fetch('/api/walkforward', {
+              method: 'POST',
+              body: formData
+            });
+
+            // Always expect JSON response
+            const data = await response.json();
+
+            if (!response.ok || data.status !== 'success') {
+              const message = data && data.error ? data.error : 'Walk-Forward request failed.';
+              throw new Error(message);
+            }
+
+            // Download CSV if present (no trades export)
+            // Skip download if single file - displayWFResults will handle it
+            if (data.csv_content && totalSources > 1) {
+              try {
+                const blob = new Blob([data.csv_content], { type: 'text/csv;charset=utf-8;' });
+                const url = window.URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = data.csv_filename || `wf_results_${Date.now()}.csv`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                window.URL.revokeObjectURL(url);
+              } catch (csvError) {
+                console.error('Failed to download CSV:', csvError);
+              }
+            }
+
+            // Download ZIP if trades were exported
+            if (data.export_trades && data.zip_base64) {
+              try {
+                // Decode base64 to binary
+                const binaryString = atob(data.zip_base64);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                  bytes[i] = binaryString.charCodeAt(i);
+                }
+                const blob = new Blob([bytes], { type: 'application/zip' });
+
+                // Trigger download
+                const url = window.URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = data.zip_filename || `wf_results_${Date.now()}.zip`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                window.URL.revokeObjectURL(url);
+              } catch (zipError) {
+                console.error('Failed to download ZIP:', zipError);
+              }
+            }
+
+            updateStatus(index, `✅ Source ${sourceNumber} of ${totalSources} (${sourceName}) completed successfully.`);
+            successCount += 1;
+            lastSuccessfulData = data;
+
+          } catch (err) {
+            const message = err && err.message ? err.message : 'Walk-Forward failed.';
+            console.error(`Walk-Forward failed for source ${sourceName}`, err);
+            errors.push({ file: sourceName, message });
+            updateStatus(index, `❌ Source ${sourceNumber} of ${totalSources} (${sourceName}) failed: ${message}`);
+          }
+        }
+
+        // Display summary
+        if (successCount === totalSources) {
+          const summaryMsg = totalSources === 1
+            ? '✅ Walk-Forward completed successfully.'
+            : `✅ All ${totalSources} files processed successfully.`;
+
           if (wfStatusEl) {
-            wfStatusEl.textContent = `❌ ${error.message || 'Walk-Forward request failed.'}`;
+            wfStatusEl.textContent = summaryMsg + '\n\n' + statusMessages.filter(Boolean).join('\n');
+          }
+
+          // Display results table only if single file was processed
+          if (totalSources === 1 && lastSuccessfulData) {
+            displayWFResults(lastSuccessfulData);
+
+            // Add trade export notice if applicable
+            if (lastSuccessfulData.export_trades && wfSummaryEl) {
+              const currentSummary = wfSummaryEl.innerHTML;
+              wfSummaryEl.innerHTML = currentSummary + '<br><strong>Trade history exported!</strong> Downloaded ZIP contains WFA results CSV and individual trade history files.';
+            }
+          } else if (totalSources > 1 && wfSummaryEl) {
+            // For multiple files, show a summary instead of individual results
+            wfSummaryEl.innerHTML = `<strong>Multi-file Walk-Forward Analysis completed!</strong><br>Processed ${totalSources} files. Check downloaded CSV/ZIP files for detailed results.`;
+          }
+        } else if (successCount > 0) {
+          const summaryMsg = `⚠️ ${successCount} of ${totalSources} files processed successfully, ${errors.length} failed.`;
+          if (wfStatusEl) {
+            wfStatusEl.textContent = summaryMsg + '\n\n' + statusMessages.filter(Boolean).join('\n');
+          }
+
+          // Show results for last successful file if only one succeeded
+          if (successCount === 1 && lastSuccessfulData) {
+            displayWFResults(lastSuccessfulData);
+          }
+        } else {
+          const summaryMsg = `❌ All ${totalSources} files failed.`;
+          if (wfStatusEl) {
+            wfStatusEl.textContent = summaryMsg + '\n\n' + statusMessages.filter(Boolean).join('\n');
           }
         }
       }

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
-from backtest_engine import StrategyParams, load_data, run_strategy
+from backtest_engine import StrategyParams, load_data, run_strategy, prepare_dataset_with_warmup
 from optimizer_engine import (
     CSV_COLUMN_SPECS,
     OptimizationResult,
@@ -655,18 +655,61 @@ def run_walkforward_optimization() -> object:
             else:
                 end_ts = end_date if end_date.tzinfo else end_date.tz_localize('UTC')
 
-            # Filter dataframe by date range
-            df_filtered = df[(df.index >= start_ts) & (df.index <= end_ts)].copy()
+            # IMPORTANT: Add warmup period before start_ts for Walk-Forward Analysis
+            # The first WFA window will start from start_ts, so it needs historical data for MA warmup
+            # Calculate warmup dynamically based on maximum MA lengths
+            max_ma_length = 1
 
-            if len(df_filtered) < 1000:
+            # Check parameter ranges (varied parameters) - using camelCase keys
+            param_ranges = optimization_config.param_ranges
+            if "maLength" in param_ranges:
+                # param_ranges format: (min, max, step)
+                max_ma_length = max(max_ma_length, int(param_ranges["maLength"][1]))
+            if "trailLongLength" in param_ranges:
+                max_ma_length = max(max_ma_length, int(param_ranges["trailLongLength"][1]))
+            if "trailShortLength" in param_ranges:
+                max_ma_length = max(max_ma_length, int(param_ranges["trailShortLength"][1]))
+
+            # Check fixed params (locked parameters)
+            fixed_params = optimization_config.fixed_params
+            if "maLength" in fixed_params and fixed_params["maLength"]:
+                max_ma_length = max(max_ma_length, int(fixed_params["maLength"]))
+            if "trailLongLength" in fixed_params and fixed_params["trailLongLength"]:
+                max_ma_length = max(max_ma_length, int(fixed_params["trailLongLength"]))
+            if "trailShortLength" in fixed_params and fixed_params["trailShortLength"]:
+                max_ma_length = max(max_ma_length, int(fixed_params["trailShortLength"]))
+
+            # Use same formula as prepare_dataset_with_warmup(): max(500, max_ma_length * 1.5)
+            warmup_bars = max(500, int(max_ma_length * 1.5))
+
+            print(f"Dynamic warmup calculation: max_ma_length={max_ma_length}, warmup_bars={warmup_bars}")
+
+            # Find the index of start_ts in the dataframe
+            start_idx = df.index.searchsorted(start_ts)
+
+            # Calculate warmup_start_idx (go back warmup_bars, but not before 0)
+            warmup_start_idx = max(0, start_idx - warmup_bars)
+
+            # Get the actual warmup start timestamp
+            warmup_start_ts = df.index[warmup_start_idx]
+
+            # Filter dataframe: include warmup period before start_ts
+            df_filtered = df[(df.index >= warmup_start_ts) & (df.index <= end_ts)].copy()
+
+            # Check that we have enough data in the ACTUAL trading period (start_ts to end_ts)
+            df_trading_period = df[(df.index >= start_ts) & (df.index <= end_ts)]
+            if len(df_trading_period) < 1000:
                 if opened_file:
                     opened_file.close()
                 return jsonify({
-                    "error": f"Selected date range contains only {len(df_filtered)} bars. Need at least 1000 bars for Walk-Forward Analysis."
+                    "error": f"Selected date range contains only {len(df_trading_period)} bars. Need at least 1000 bars for Walk-Forward Analysis."
                 }), HTTPStatus.BAD_REQUEST
 
             df = df_filtered
-            print(f"Walk-Forward: Using date-filtered data: {len(df)} bars from {df.index[0]} to {df.index[-1]}")
+            actual_warmup_bars = start_idx - warmup_start_idx
+            print(f"Walk-Forward: Using date-filtered data with warmup: {len(df)} bars total")
+            print(f"  Warmup period: {actual_warmup_bars} bars from {warmup_start_ts} to {start_ts}")
+            print(f"  Trading period: {len(df_trading_period)} bars from {start_ts} to {end_ts}")
 
         except Exception as e:
             if opened_file:
@@ -737,6 +780,7 @@ def run_walkforward_optimization() -> object:
     # Generate CSV content without saving to disk
     csv_content = export_wf_results_csv(result, df)
 
+    # Build top10 summary (common for both modes)
     top10: List[Dict[str, Any]] = []
     for rank, agg in enumerate(result.aggregated[:10], 1):
         forward_profit = result.forward_profits[rank - 1] if rank <= len(result.forward_profits) else None
@@ -744,28 +788,136 @@ def run_walkforward_optimization() -> object:
             {
                 "rank": rank,
                 "param_id": agg.param_id,
-                "appearances": f"{agg.appearances}/{len(result.windows)}",
+                "appearances": agg.appearances,
                 "avg_oos_profit": round(agg.avg_oos_profit, 2),
                 "oos_win_rate": round(agg.oos_win_rate * 100, 1),
                 "forward_profit": round(forward_profit, 2) if isinstance(forward_profit, (int, float)) else None,
             }
         )
 
-    response_payload = {
-        "status": "success",
-        "summary": {
-            "total_windows": len(result.windows),
-            "top_param_id": result.aggregated[0].param_id if result.aggregated else "N/A",
-            "top_avg_oos_profit": round(result.aggregated[0].avg_oos_profit, 2) if result.aggregated else 0.0,
-        },
-        "top10": top10,
-        "csv_content": csv_content,
-    }
+    # Get export trades settings from request
+    export_trades = data.get("exportTrades") == "true"
+    top_k_str = data.get("topK", "10")
+    try:
+        top_k = min(100, max(1, int(top_k_str)))
+    except (ValueError, TypeError):
+        top_k = 10
 
-    if opened_file:
-        opened_file.close()
+    # Get dates for filename generation
+    start_date = df.index[0]
+    end_date = df.index[-1]
 
-    return jsonify(response_payload)
+    # Get original CSV filename
+    original_csv_name = csv_file.filename if csv_file and hasattr(csv_file, 'filename') else ""
+    if not original_csv_name and csv_path_raw:
+        original_csv_name = csv_path_raw
+
+    # Generate filenames
+    from walkforward_engine import generate_wfa_output_filename, export_wfa_trades_history, _extract_symbol_from_csv_filename
+
+    csv_filename = generate_wfa_output_filename(
+        original_csv_name,
+        start_date,
+        end_date,
+        include_trades=False
+    )
+
+    if export_trades:
+        # Export trades history for top-K combinations
+        import tempfile
+        import zipfile
+        import shutil
+        import base64
+        from pathlib import Path
+
+        # Extract symbol from CSV filename
+        symbol = _extract_symbol_from_csv_filename(original_csv_name)
+
+        # Create temporary directory for all files
+        temp_dir = Path(tempfile.mkdtemp())
+
+        try:
+            # Export trades to CSVs
+            trade_files = export_wfa_trades_history(
+                wf_result=result,
+                df=df,
+                symbol=symbol,
+                top_k=top_k,
+                output_dir=temp_dir
+            )
+
+            # Create ZIP with trade CSVs only
+            zip_filename = generate_wfa_output_filename(
+                original_csv_name,
+                start_date,
+                end_date,
+                include_trades=True
+            )
+            zip_path = temp_dir / zip_filename
+
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                # Add all trade CSVs
+                for trade_file in trade_files:
+                    trade_path = temp_dir / trade_file
+                    zf.write(trade_path, trade_file)
+
+            # Read ZIP into base64
+            with open(zip_path, 'rb') as f:
+                zip_bytes = f.read()
+            zip_base64 = base64.b64encode(zip_bytes).decode('utf-8')
+
+            # Cleanup temporary directory
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+            # Close opened file before sending response
+            if opened_file:
+                opened_file.close()
+
+            # Return JSON with embedded ZIP
+            response_payload = {
+                "status": "success",
+                "summary": {
+                    "total_windows": len(result.windows),
+                    "top_param_id": result.aggregated[0].param_id if result.aggregated else "N/A",
+                    "top_avg_oos_profit": round(result.aggregated[0].avg_oos_profit, 2) if result.aggregated else 0.0,
+                },
+                "top10": top10,
+                "csv_content": csv_content,
+                "csv_filename": csv_filename,
+                "export_trades": True,
+                "zip_filename": zip_filename,
+                "zip_base64": zip_base64,
+            }
+
+            return jsonify(response_payload)
+
+        except Exception as e:
+            # Cleanup on error
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            if opened_file:
+                opened_file.close()
+            app.logger.exception("Failed to export trades history")
+            return jsonify({"error": f"Failed to export trades: {str(e)}"}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    else:
+        # No trades export - return JSON response (existing behavior)
+        response_payload = {
+            "status": "success",
+            "summary": {
+                "total_windows": len(result.windows),
+                "top_param_id": result.aggregated[0].param_id if result.aggregated else "N/A",
+                "top_avg_oos_profit": round(result.aggregated[0].avg_oos_profit, 2) if result.aggregated else 0.0,
+            },
+            "top10": top10,
+            "csv_content": csv_content,
+            "csv_filename": csv_filename,
+        }
+
+        if opened_file:
+            opened_file.close()
+
+        return jsonify(response_payload)
 
 
 @app.post("/api/backtest")
@@ -828,8 +980,17 @@ def run_backtest() -> object:
                 pass
             opened_file = None
 
+    # Prepare dataset with warmup if date filtering is enabled
+    trade_start_idx = 0
+    if params.use_date_filter and (params.start is not None or params.end is not None):
+        try:
+            df, trade_start_idx = prepare_dataset_with_warmup(df, params.start, params.end, params)
+        except Exception as exc:  # pragma: no cover - defensive
+            app.logger.exception("Failed to prepare dataset with warmup")
+            return ("Failed to prepare dataset for backtest.", HTTPStatus.INTERNAL_SERVER_ERROR)
+
     try:
-        result = run_strategy(df, params)
+        result = run_strategy(df, params, trade_start_idx)
     except ValueError as exc:
         return (str(exc), HTTPStatus.BAD_REQUEST)
     except Exception as exc:  # pragma: no cover - defensive
@@ -1111,6 +1272,27 @@ _DATE_PREFIX_RE = re.compile(r"\b\d{4}[.\-/]\d{2}[.\-/]\d{2}\b")
 _DATE_VALUE_RE = re.compile(r"(\d{4})[.\-/]?(\d{2})[.\-/]?(\d{2})")
 
 
+def _extract_file_prefix(csv_filename: str) -> str:
+    """
+    Extract file prefix (exchange, ticker, timeframe) from CSV filename.
+
+    Examples:
+        "OKX_LINKUSDT.P, 15 2025.02.01-2025.09.09.csv" -> "OKX_LINKUSDT.P, 15"
+        "BINANCE_BTCUSDT, 1h.csv" -> "BINANCE_BTCUSDT, 1h"
+
+    Returns original filename stem if pattern not found.
+    """
+    name = Path(csv_filename).stem
+
+    # Remove date pattern if exists (YYYY.MM.DD-YYYY.MM.DD)
+    match = _DATE_PREFIX_RE.search(name)
+    if match:
+        prefix = name[:match.start()].rstrip()
+        return prefix if prefix else name
+
+    return name
+
+
 def _format_date_component(value: object) -> str:
     if value in (None, ""):
         return "0000.00.00"
@@ -1147,42 +1329,48 @@ _PARAMETER_FRONTEND_ORDER = [
 ]
 
 
-def _format_ma_segment(config: OptimizationConfig) -> str:
-    ma_types = _unique_preserve_order([ma.upper() for ma in config.ma_types_trend])
-    if not ma_types:
-        return ""
-    if len(ma_types) == 11:
-        return "_ALL"
-    is_ma_length_optimized = bool(config.enabled_params.get("maLength"))
-    if len(ma_types) == 1 and not is_ma_length_optimized:
-        ma_length_value = config.fixed_params.get("maLength")
-        if ma_length_value is not None:
-            try:
-                ma_length_int = int(round(float(ma_length_value)))
-                ma_length_str = str(ma_length_int)
-            except (TypeError, ValueError):  # pragma: no cover - defensive
-                ma_length_str = str(ma_length_value)
-            return f"_{ma_types[0]} {ma_length_str}"
-        return f"_{ma_types[0]}"
-    return "_" + "+".join(ma_types)
+def generate_output_filename(csv_filename: str, config: OptimizationConfig, mode: str = None) -> str:
+    """
+    Generate standardized output filename.
 
+    Format: EXCHANGE_TICKER TF START-END_MODE.csv
+    Example: "OKX_LINKUSDT.P, 15 2025.05.01-2025.09.01_Grid.csv"
 
-def generate_output_filename(csv_filename: str, config: OptimizationConfig) -> str:
-    original_name = Path(csv_filename or "").name
-    stem = Path(original_name).stem if original_name else ""
-    prefix = stem
-    if stem:
-        match = _DATE_PREFIX_RE.search(stem)
-        if match:
-            prefix = stem[: match.start()].rstrip()
-    prefix = prefix.strip() or "optimization"
+    Args:
+        csv_filename: Input CSV filename
+        config: Optimization configuration
+        mode: Output mode ("Grid", "Optuna", "Optuna+WFA")
 
+    Returns:
+        Formatted filename string
+    """
+    # Extract prefix (exchange, ticker, timeframe)
+    prefix = _extract_file_prefix(csv_filename or "")
+    if not prefix:
+        prefix = "optimization"
+
+    # Format dates
     start_formatted = _format_date_component(config.fixed_params.get("start"))
     end_formatted = _format_date_component(config.fixed_params.get("end"))
-    date_segment = f"{start_formatted}-{end_formatted}"
-    ma_segment = _format_ma_segment(config)
 
-    return f"{prefix} {date_segment}{ma_segment}.csv"
+    # Handle dateFilter=false: extract dates from input filename
+    if not config.fixed_params.get("dateFilter"):
+        original_name = Path(csv_filename or "").stem
+        match = _DATE_PREFIX_RE.search(original_name)
+        if match:
+            # Found dates in filename, use them
+            date_str = match.group()
+            parts = date_str.split("-")
+            if len(parts) == 2:
+                start_formatted = parts[0]
+                end_formatted = parts[1]
+
+    # Determine mode
+    if mode is None:
+        mode = "Optuna" if config.optimization_mode == "optuna" else "Grid"
+
+    # Build filename
+    return f"{prefix} {start_formatted}-{end_formatted}_{mode}.csv"
 
 
 @app.post("/api/optimize")
