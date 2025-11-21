@@ -80,33 +80,6 @@ var trailMAPriceLong  = 0.0      // Trailing MA price (or camelCase)
 - Optional: You can also use camelCase for state variables
 - Consistency within your codebase is more important
 
-### 3. Prefix Conventions
-
-| Prefix | Use Case | Example |
-|--------|----------|---------|
-| `calc_` | Computed values | `calc_ma_trend`, `calc_atr`, `calc_stop_long` |
-| `counter` | State counters | `counterCloseLong`, `counterTradeShort` |
-| `cond_` | Boolean conditions | `cond_up_trend`, `cond_can_open_long` |
-| `t_` | Trade state (optional) | `t_entry`, `t_stop`, `t_target` |
-
-**Example:**
-```pine
-// Calculated values
-calc_ma_trend = getMA(close, maType, maLength)
-calc_atr      = ta.atr(14)
-calc_lowest   = ta.lowest(low, stopLongLp)
-
-// Counters (persistent state)
-var int counterCloseLong  = 0
-var int counterCloseShort = 0
-
-// Conditions
-cond_up_trend       = counterCloseLong >= closeCountLong
-cond_can_open_long  = cond_up_trend and counterTradeLong == 0
-```
-
-**Benefit:** Agent immediately understands variable purpose.
-
 ---
 
 ## Code Structure
@@ -149,8 +122,8 @@ getMA(source, maType, length) =>
         => ta.ema(source, length)
 // @skip-translation-end
 
-calc_ma_trend = getMA(close, maType, maLength)
-calc_atr      = ta.atr(atrPeriod)
+ma3 = getMA(close, maType, maLength)
+atr = ta.atr(atrPeriod)
 
 
 // ═══════════════════════════════════════════════════════════
@@ -160,10 +133,10 @@ calc_atr      = ta.atr(atrPeriod)
 var int counterCloseLong  = 0
 var int counterCloseShort = 0
 
-if close > calc_ma_trend
+if close > ma3
     counterCloseLong += 1
     counterCloseShort := 0
-else if close < calc_ma_trend
+else if close < ma3
     counterCloseShort += 1
     counterCloseLong := 0
 
@@ -172,27 +145,29 @@ else if close < calc_ma_trend
 // SECTION 4: ENTRY CONDITIONS
 // ═══════════════════════════════════════════════════════════
 
-cond_up_trend       = counterCloseLong >= closeCountLong
-cond_can_open_long  = cond_up_trend and strategy.position_size == 0
-longCondition       = cond_can_open_long and barstate.isconfirmed  // @skip-in-python
+upTrend        = counterCloseLong >= closeCountLong
+canOpenLong    = upTrend and strategy.position_size == 0
+longConditions = canOpenLong and barstate.isconfirmed  // @skip-in-python
 
 
 // ═══════════════════════════════════════════════════════════
 // SECTION 5: TRADE EXECUTION
 // ═══════════════════════════════════════════════════════════
 
-if longCondition
-    calc_stop_long = calc_lowest - (calc_atr * stopLongAtr)
-    calc_target_long = close + ((close - calc_stop_long) * stopLongRr)
-    strategy.entry("Long", strategy.long, stop=calc_stop_long, limit=calc_target_long)
+if longConditions
+    lowestLong   = ta.lowest(low, stopLongLp)
+    stopLong     = lowestLong - (atr * stopLongAtr)
+    stopDistance = close - stopLong
+    targetLong   = close + (stopDistance * stopLongRr)
+    strategy.entry("Long", strategy.long, stop=stopLong, limit=targetLong)
 
 
 // ═══════════════════════════════════════════════════════════
 // SECTION 6: VISUALIZATION (TradingView Only)
 // ═══════════════════════════════════════════════════════════
 // @skip-translation-start
-plot(calc_ma_trend, "MA", color.blue)
-plotshape(longCondition, "Long", shape.triangleup)
+plot(ma3, "MA", color.blue)
+plotshape(longConditions, "Long", shape.triangleup)
 // @skip-translation-end
 ```
 
@@ -238,10 +213,10 @@ if longCondition and strategy.position_size == 0
 // @strategy-type: stops-based
 // @python-note: Uses stops, targets, and trailing exits
 
-if longCondition
-    calc_stop = lowest - (atr * stopAtr)
-    calc_target = close + ((close - calc_stop) * stopRr)
-    strategy.entry("Long", strategy.long, stop=calc_stop, limit=calc_target)
+if longConditions
+    stopLong   = lowestLong - (atr * stopAtr)
+    targetLong = close + ((close - stopLong) * stopRr)
+    strategy.entry("Long", strategy.long, stop=stopLong, limit=targetLong)
 ```
 
 **Python implementation:**
@@ -269,8 +244,9 @@ getMA(source, maType, length) =>
             => ta.ema(source, length)
 
 // Usage
-calc_ma1 = getMA(close, maType1, maLength1)
-calc_ma2 = getMA(close, maType2, maLength2)
+ma1 = getMA(close, maType1, maLength1)
+ma2 = getMA(close, maType2, maLength2)
+ma3 = getMA(close, maType3, maLength3)
 ```
 
 ### Pattern 2: Close Count
@@ -280,41 +256,41 @@ calc_ma2 = getMA(close, maType2, maLength2)
 var int counterCloseLong  = 0
 var int counterCloseShort = 0
 
-if close > calc_ma_trend
+if close > ma3
     counterCloseLong += 1
     counterCloseShort := 0
-else if close < calc_ma_trend
+else if close < ma3
     counterCloseShort += 1
     counterCloseLong := 0
 else
     counterCloseLong := 0
     counterCloseShort := 0
 
-cond_long  = counterCloseLong >= closeCountLong
-cond_short = counterCloseShort >= closeCountShort
+countLong  = counterCloseLong >= closeCountLong
+countShort = counterCloseShort >= closeCountShort
 ```
 
 ### Pattern 3: Stop Loss Calculation
 
 ```pine
 // @python-note: ATR-based stop with lookback period
-calc_atr     = ta.atr(atrPeriod)
-calc_lowest  = ta.lowest(low, stopLongLp)
-calc_highest = ta.highest(high, stopShortLp)
+atr         = ta.atr(atrPeriod)
+lowestLong  = ta.lowest(low, stopLongLp)
+highestShort = ta.highest(high, stopShortLp)
 
-calc_stop_long  = calc_lowest - (calc_atr * stopLongAtr)
-calc_stop_short = calc_highest + (calc_atr * stopShortAtr)
+stopLong  = lowestLong - (atr * stopLongAtr)
+stopShort = highestShort + (atr * stopShortAtr)
 
 // Stop distance and target
-calc_stop_dist_long = close - calc_stop_long
-calc_target_long    = close + (calc_stop_dist_long * stopLongRr)
+stopDistanceLong = close - stopLong
+targetLong       = close + (stopDistanceLong * stopLongRr)
 ```
 
 ### Pattern 4: Position Sizing
 
 ```pine
 // Risk-based (stops-based strategy)
-positionSize = math.floor(((strategy.equity * (riskPerTradePct/100)) / (close - calc_stop_long)) / contractSize) * contractSize
+positionSize = math.floor(((strategy.equity * (riskPerTradePct/100)) / (close - stopLong)) / contractSize) * contractSize
 
 // Equity-based (reversal strategy)
 positionSize = math.floor((strategy.equity / close) / contractSize) * contractSize
@@ -456,8 +432,7 @@ longCondition = upTrend and strategy.position_size == 0 and barstate.isconfirmed
 
 Before sending Pine code for translation:
 
-- [ ] **Naming:** Inputs and functions use camelCase
-- [ ] **Prefixes:** Use `calc_`, `counter`, `cond_` where appropriate
+- [ ] **Naming:** All variables use camelCase (snake_case only for `var` state variables like `t_entry`)
 - [ ] **Annotations:** `@strategy-type` specified at top
 - [ ] **Sections:** Code organized into clear sections (Inputs, Calculations, Counters, Conditions, Execution)
 - [ ] **Skip markers:** UI/plotting code marked with `@skip-translation-start/end`
