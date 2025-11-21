@@ -1,4 +1,5 @@
 import argparse
+
 import pandas as pd
 
 from backtest_engine import StrategyParams, load_data, prepare_dataset_with_warmup, run_strategy_v2
@@ -40,52 +41,58 @@ def main() -> None:
     param_defs = strategy_class.get_param_definitions()
     params_dict = {key: value["default"] for key, value in param_defs.items()}
 
-    # Warmup handling uses StrategyParams for compatibility
-    start = _parse_date(params_dict.get("startDate"))
-    end = _parse_date(params_dict.get("endDate"))
-    params_obj = StrategyParams(
-        use_backtester=params_dict.get("useBacktester", True),
-        use_date_filter=params_dict.get("dateFilter", True),
-        start=start,
-        end=end,
-        ma_type=str(params_dict.get("maType", "EMA")).upper(),
-        ma_length=int(params_dict.get("maLength", 0)),
-        close_count_long=int(params_dict.get("closeCountLong", 0)),
-        close_count_short=int(params_dict.get("closeCountShort", 0)),
-        stop_long_atr=float(params_dict.get("stopLongAtr", 0.0)),
-        stop_long_rr=float(params_dict.get("stopLongRr", 0.0)),
-        stop_long_lp=int(params_dict.get("stopLongLp", 0)),
-        stop_short_atr=float(params_dict.get("stopShortAtr", 0.0)),
-        stop_short_rr=float(params_dict.get("stopShortRr", 0.0)),
-        stop_short_lp=int(params_dict.get("stopShortLp", 0)),
-        stop_long_max_pct=float(params_dict.get("stopLongMaxPct", 0.0)),
-        stop_short_max_pct=float(params_dict.get("stopShortMaxPct", 0.0)),
-        stop_long_max_days=int(params_dict.get("stopLongMaxDays", 0)),
-        stop_short_max_days=int(params_dict.get("stopShortMaxDays", 0)),
-        trail_rr_long=float(params_dict.get("trailRrLong", 0.0)),
-        trail_rr_short=float(params_dict.get("trailRrShort", 0.0)),
-        trail_ma_long_type=str(params_dict.get("trailMaLongType", "SMA")).upper(),
-        trail_ma_long_length=int(params_dict.get("trailMaLongLength", 0)),
-        trail_ma_long_offset=float(params_dict.get("trailMaLongOffset", 0.0)),
-        trail_ma_short_type=str(params_dict.get("trailMaShortType", "SMA")).upper(),
-        trail_ma_short_length=int(params_dict.get("trailMaShortLength", 0)),
-        trail_ma_short_offset=float(params_dict.get("trailMaShortOffset", 0.0)),
-        risk_per_trade_pct=float(params_dict.get("riskPerTradePct", 0.0)),
-        contract_size=float(params_dict.get("contractSize", 0.0)),
-        commission_rate=float(params_dict.get("commissionRate", 0.0)),
-        atr_period=int(params_dict.get("atrPeriod", 0)),
-    )
+    if "startDate" in params_dict:
+        params_dict["startDate"] = _parse_date(params_dict.get("startDate"))
+    if "endDate" in params_dict:
+        params_dict["endDate"] = _parse_date(params_dict.get("endDate"))
 
-    if params_obj.use_date_filter and (params_obj.start is not None or params_obj.end is not None):
-        df_prepared, trade_start_idx = prepare_dataset_with_warmup(
-            df, params_obj.start, params_obj.end, params_obj
+    if args.strategy == "s01_trailing_ma":
+        params_obj = StrategyParams(
+            use_backtester=params_dict.get("useBacktester", True),
+            use_date_filter=params_dict.get("dateFilter", True),
+            start=params_dict.get("startDate"),
+            end=params_dict.get("endDate"),
+            ma_type=str(params_dict.get("maType", "EMA")).upper(),
+            ma_length=int(params_dict.get("maLength", 0)),
+            close_count_long=int(params_dict.get("closeCountLong", 0)),
+            close_count_short=int(params_dict.get("closeCountShort", 0)),
+            stop_long_atr=float(params_dict.get("stopLongAtr", 0.0)),
+            stop_long_rr=float(params_dict.get("stopLongRr", 0.0)),
+            stop_long_lp=int(params_dict.get("stopLongLp", 0)),
+            stop_short_atr=float(params_dict.get("stopShortAtr", 0.0)),
+            stop_short_rr=float(params_dict.get("stopShortRr", 0.0)),
+            stop_short_lp=int(params_dict.get("stopShortLp", 0)),
+            stop_long_max_pct=float(params_dict.get("stopLongMaxPct", 0.0)),
+            stop_short_max_pct=float(params_dict.get("stopShortMaxPct", 0.0)),
+            stop_long_max_days=int(params_dict.get("stopLongMaxDays", 0)),
+            stop_short_max_days=int(params_dict.get("stopShortMaxDays", 0)),
+            trail_rr_long=float(params_dict.get("trailRrLong", 0.0)),
+            trail_rr_short=float(params_dict.get("trailRrShort", 0.0)),
+            trail_ma_long_type=str(params_dict.get("trailMaLongType", "SMA")).upper(),
+            trail_ma_long_length=int(params_dict.get("trailMaLongLength", 0)),
+            trail_ma_long_offset=float(params_dict.get("trailMaLongOffset", 0.0)),
+            trail_ma_short_type=str(params_dict.get("trailMaShortType", "SMA")).upper(),
+            trail_ma_short_length=int(params_dict.get("trailMaShortLength", 0)),
+            trail_ma_short_offset=float(params_dict.get("trailMaShortOffset", 0.0)),
+            risk_per_trade_pct=float(params_dict.get("riskPerTradePct", 0.0)),
+            contract_size=float(params_dict.get("contractSize", 0.0)),
+            commission_rate=float(params_dict.get("commissionRate", 0.0)),
+            atr_period=int(params_dict.get("atrPeriod", 0)),
         )
+
+        if params_obj.use_date_filter and (
+            params_obj.start is not None or params_obj.end is not None
+        ):
+            df_prepared, trade_start_idx = prepare_dataset_with_warmup(
+                df, params_obj.start, params_obj.end, params_obj
+            )
+        else:
+            df_prepared = df
+            trade_start_idx = 0
     else:
         df_prepared = df
         trade_start_idx = 0
 
-    params_dict["startDate"] = start
-    params_dict["endDate"] = end
     strategy = strategy_class(params_dict)
     result = run_strategy_v2(df_prepared, strategy, trade_start_idx)
 

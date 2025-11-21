@@ -118,10 +118,16 @@ Performance Metrics:
 **Default Parameters:**
 - Date range: from 2025-06-15 to 2025-11-15
 - Parameters:
-  T MA Type = SMA
-  MA Length = 100
+  Fast MA Type = SMA
+  Fast MA Length = 100
+  Slow MA Length = 0 (disabled)
+  Trend MA Type = SMA
+  Trend MA Length = 100
   Close Count Long = 4
   Close Count Short = 5
+  Equity % = 100
+  Contract Size = 0.01
+  Commission Rate = 0.0005
 
 ### Expected Results
 
@@ -130,9 +136,19 @@ Strategy: S_03 Reversal v07 Light
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Performance Metrics:
-├─ Net Profit:        95.06%
-├─ Max Drawdown:      30.48%
-├─ Total Trades:      209
+├─ Net Profit:        83.56%
+├─ Max Drawdown:      35.34%
+├─ Total Trades:      224
+├─ Winning Trades:    70
+├─ Losing Trades:     154
+├─ Win Rate:          31.25%
+├─ Profit Factor:     1.26
+└─ Sharpe Ratio:      0.15
+
+Special Checks (Reversal Strategy):
+├─ Always in position: YES
+├─ Gaps (flat periods): 0
+└─ Position changes: 224
 ```
 
 ---

@@ -267,8 +267,7 @@ def _prepare_dataset_for_optimization(
         end_mask = times <= end
         if not end_mask.any():
             return df.iloc[0:0].copy(), 0
-        end_idx = len(end_mask) - 1 - int(end_mask[::-1].argmax())
-        end_idx += 1
+        end_idx = len(df)
     else:
         end_idx = len(df)
 
