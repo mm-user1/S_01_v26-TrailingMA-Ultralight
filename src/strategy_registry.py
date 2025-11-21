@@ -29,6 +29,29 @@ class StrategyRegistry:
     }
 
     @classmethod
+    def get_all_strategies(cls) -> Dict[str, Type[BaseStrategy]]:
+        """Return mapping of all registered strategies."""
+
+        return dict(cls._strategies)
+
+    @classmethod
+    def get_strategy_info(cls) -> List[Dict[str, Any]]:
+        """Return basic metadata for all registered strategies."""
+
+        strategies: List[Dict[str, Any]] = []
+        for strategy_id, strategy_class in cls._strategies.items():
+            description = (strategy_class.__doc__ or "").strip().splitlines()
+            strategies.append(
+                {
+                    "strategy_id": strategy_id,
+                    "name": getattr(strategy_class, "STRATEGY_NAME", strategy_id),
+                    "description": description[0] if description else "",
+                    "type": "trend" if strategy_id == "s01_trailing_ma" else "reversal",
+                }
+            )
+        return strategies
+
+    @classmethod
     def get_strategy_class(cls, strategy_id: str) -> Type[BaseStrategy]:
         """
         Get strategy class by ID.

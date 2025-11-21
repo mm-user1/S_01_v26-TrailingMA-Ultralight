@@ -1778,6 +1778,8 @@
         recovery: 0.10,
         consistency: 0.10
       };
+
+      let currentStrategy = { strategy_id: 's01_trailing_ma' };
       const SCORE_DEFAULT_ENABLED = {
         romad: true,
         sharpe: true,
@@ -3105,7 +3107,39 @@
         const trailShortTypes = collectSelectedTypes('trailShort');
         const lockTrailTypes = Boolean(document.getElementById('trailLock')?.checked);
 
+        const strategyId = currentStrategy?.strategy_id || 's01_trailing_ma';
+
+        if (strategyId === 's03_reversal') {
+          return {
+            strategyId,
+            start,
+            end,
+            trendTypes: [],
+            trailLongTypes: [],
+            trailShortTypes: [],
+            lockTrailTypes: false,
+            payload: {
+              dateFilter: document.getElementById('dateFilter').checked,
+              backtester: document.getElementById('backtester').checked,
+              start,
+              end,
+              maFastType: document.getElementById('s03MaFastType').value,
+              maFastLength: Number(document.getElementById('s03MaFastLength').value),
+              maSlowType: document.getElementById('s03MaSlowType').value,
+              maSlowLength: Number(document.getElementById('s03MaSlowLength').value),
+              maTrendType: document.getElementById('s03MaTrendType').value,
+              maTrendLength: Number(document.getElementById('s03MaTrendLength').value),
+              closeCountLong: Number(document.getElementById('s03CloseCountLong').value),
+              closeCountShort: Number(document.getElementById('s03CloseCountShort').value),
+              equityPct: Number(document.getElementById('s03EquityPct').value),
+              contractSize: Number(document.getElementById('s03ContractSize').value),
+              commissionRate: Number(document.getElementById('s03CommissionRate').value)
+            }
+          };
+        }
+
         return {
+          strategyId,
           start,
           end,
           trendTypes,

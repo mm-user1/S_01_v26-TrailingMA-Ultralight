@@ -10,13 +10,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
-from backtest_engine import StrategyParams, load_data, run_strategy, prepare_dataset_with_warmup
+from backtest_engine import StrategyParams, load_data, run_strategy, prepare_dataset_with_warmup, run_strategy_v2
 from optimizer_engine import (
     OptimizationResult,
     OptimizationConfig,
     export_to_csv,
     run_optimization,
 )
+from strategy_registry import StrategyRegistry
 
 app = Flask(__name__)
 
@@ -405,6 +406,25 @@ def _normalize_preset_payload(values: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
+def _coerce_strategy_param(defn: Dict[str, Any], value: Any) -> Any:
+    param_type = str(defn.get("type", "")).lower()
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return defn.get("default")
+    if param_type in {"int", "integer"}:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return defn.get("default")
+    if param_type == "float":
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return defn.get("default")
+    if param_type == "bool":
+        return _coerce_bool(value)
+    return value
+
+
 def _resolve_csv_path(raw_path: str) -> Path:
     if raw_path is None:
         raise ValueError("CSV path is empty.")
@@ -426,6 +446,52 @@ def _resolve_csv_path(raw_path: str) -> Path:
 @app.route("/")
 def index() -> object:
     return send_from_directory(Path(app.root_path), "index.html")
+
+
+@app.route("/api/strategies", methods=["GET"])
+def get_strategies() -> object:
+    """
+    Return list of available strategies with metadata and parameter definitions.
+    """
+
+    try:
+        strategies = []
+        for strategy_id, strategy_class in StrategyRegistry.get_all_strategies().items():
+            param_defs = strategy_class.get_param_definitions()
+            info = next(
+                (
+                    entry
+                    for entry in StrategyRegistry.get_strategy_info()
+                    if entry.get("strategy_id") == strategy_id
+                ),
+                None,
+            )
+            default_params = {
+                key: value.get("default") for key, value in param_defs.items()
+            }
+            allows_reversal = False
+            try:
+                instance = strategy_class(default_params)
+                allows_reversal = bool(instance.allows_reversal())
+            except Exception:
+                allows_reversal = False
+
+            strategies.append(
+                {
+                    "strategy_id": strategy_id,
+                    "name": info.get("name") if info else strategy_id,
+                    "description": info.get("description", "") if info else "",
+                    "type": info.get("type", "unknown") if info else "unknown",
+                    "allows_reversal": allows_reversal,
+                    "parameter_count": len(param_defs),
+                    "parameters": param_defs,
+                }
+            )
+
+        return jsonify(strategies)
+    except Exception as exc:  # pragma: no cover - defensive
+        app.logger.exception("Failed to list strategies")
+        return jsonify({"error": str(exc)}), HTTPStatus.INTERNAL_SERVER_ERROR
 
 
 @app.get("/api/presets")
@@ -952,10 +1018,25 @@ def run_backtest() -> object:
     except json.JSONDecodeError:
         return ("Invalid payload JSON.", HTTPStatus.BAD_REQUEST)
 
+    strategy_id = (
+        request.form.get("strategy_id")
+        or request.form.get("strategyId")
+        or request.form.get("strategy")
+        or "s01_trailing_ma"
+    )
+
     try:
-        params = StrategyParams.from_dict(payload)
+        strategy_class = StrategyRegistry.get_strategy_class(str(strategy_id).strip())
     except ValueError as exc:
         return (str(exc), HTTPStatus.BAD_REQUEST)
+
+    param_defs = strategy_class.get_param_definitions()
+    params: Dict[str, Any] = {key: value.get("default") for key, value in param_defs.items()}
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key not in param_defs:
+                continue
+            params[key] = _coerce_strategy_param(param_defs[key], value)
 
     try:
         df = load_data(data_source)
@@ -978,17 +1059,28 @@ def run_backtest() -> object:
                 pass
             opened_file = None
 
-    # Prepare dataset with warmup if date filtering is enabled
     trade_start_idx = 0
-    if params.use_date_filter and (params.start is not None or params.end is not None):
+    if strategy_id == "s01_trailing_ma":
         try:
-            df, trade_start_idx = prepare_dataset_with_warmup(df, params.start, params.end, params)
-        except Exception as exc:  # pragma: no cover - defensive
-            app.logger.exception("Failed to prepare dataset with warmup")
-            return ("Failed to prepare dataset for backtest.", HTTPStatus.INTERNAL_SERVER_ERROR)
+            params_obj = StrategyParams.from_dict(params)
+        except ValueError as exc:
+            return (str(exc), HTTPStatus.BAD_REQUEST)
+
+        if params_obj.use_date_filter and (params_obj.start is not None or params_obj.end is not None):
+            try:
+                df, trade_start_idx = prepare_dataset_with_warmup(
+                    df, params_obj.start, params_obj.end, params_obj
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                app.logger.exception("Failed to prepare dataset with warmup")
+                return (
+                    "Failed to prepare dataset for backtest.",
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
 
     try:
-        result = run_strategy(df, params, trade_start_idx)
+        strategy = strategy_class(params)
+        result = run_strategy_v2(df, strategy, trade_start_idx=trade_start_idx)
     except ValueError as exc:
         return (str(exc), HTTPStatus.BAD_REQUEST)
     except Exception as exc:  # pragma: no cover - defensive
@@ -997,7 +1089,7 @@ def run_backtest() -> object:
 
     return jsonify({
         "metrics": result.to_dict(),
-        "parameters": params.to_dict(),
+        "parameters": params,
     })
 
 
