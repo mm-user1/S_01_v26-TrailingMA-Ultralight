@@ -6,7 +6,8 @@ from typing import IO, Any, Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 from backtesting import _stats
-from indicators import DEFAULT_ATR_PERIOD, VALID_MA_TYPES, atr, get_ma
+from indicators import DEFAULT_ATR_PERIOD, VALID_MA_TYPES
+from strategy_registry import StrategyRegistry
 
 
 CSVSource = Union[str, Path, IO[str], IO[bytes]]
@@ -290,274 +291,81 @@ def prepare_dataset_with_warmup(
     return trimmed_df, trade_start_idx
 
 
-def run_strategy(df: pd.DataFrame, params: StrategyParams, trade_start_idx: int = 0) -> StrategyResult:
-    if params.use_backtester is False:
-        raise ValueError("Backtester is disabled in the provided parameters")
+def run_strategy_v2(
+    df: pd.DataFrame,
+    strategy,
+    trade_start_idx: int = 0,
+    cached_data: Optional[Dict[str, Any]] = None,
+) -> StrategyResult:
+    """Universal backtest entrypoint for BaseStrategy implementations."""
 
-    close = df["Close"]
-    high = df["High"]
-    low = df["Low"]
-    volume = df["Volume"]
+    if hasattr(strategy, "trade_start_idx"):
+        strategy.trade_start_idx = trade_start_idx
 
-    ma_series = get_ma(close, params.ma_type, params.ma_length, volume, high, low)
-    atr_series = atr(high, low, close, params.atr_period)
-    lowest_long = low.rolling(params.stop_long_lp, min_periods=1).min()
-    highest_short = high.rolling(params.stop_short_lp, min_periods=1).max()
-
-    trail_ma_long = get_ma(close, params.trail_ma_long_type, params.trail_ma_long_length, volume, high, low)
-    trail_ma_short = get_ma(close, params.trail_ma_short_type, params.trail_ma_short_length, volume, high, low)
-    if params.trail_ma_long_length > 0:
-        trail_ma_long = trail_ma_long * (1 + params.trail_ma_long_offset / 100.0)
-    if params.trail_ma_short_length > 0:
-        trail_ma_short = trail_ma_short * (1 + params.trail_ma_short_offset / 100.0)
-
-    times = df.index
-    if params.use_date_filter:
-        # Use trade_start_idx to define trading zone
-        time_in_range = np.zeros(len(times), dtype=bool)
-        time_in_range[trade_start_idx:] = True
-    else:
-        time_in_range = np.ones(len(times), dtype=bool)
-
-    equity = 100.0
-    realized_equity = equity
-    position = 0
-    prev_position = 0
-    position_size = 0.0
-    entry_price = math.nan
-    stop_price = math.nan
-    target_price = math.nan
-    trail_price_long = math.nan
-    trail_price_short = math.nan
-    trail_activated_long = False
-    trail_activated_short = False
-    entry_time_long: Optional[pd.Timestamp] = None
-    entry_time_short: Optional[pd.Timestamp] = None
-    entry_commission = 0.0
-
-    counter_close_trend_long = 0
-    counter_close_trend_short = 0
-    counter_trade_long = 0
-    counter_trade_short = 0
+    result = strategy.simulate(df, cached_data=cached_data)
 
     trades: List[TradeRecord] = []
-    realized_curve: List[float] = []
+    for trade in result.get("trades", []):
+        entry_idx = trade.get("entry_idx")
+        exit_idx = trade.get("exit_idx")
+        entry_time = df.index[entry_idx] if entry_idx is not None else df.index[0]
+        exit_time = df.index[exit_idx] if exit_idx is not None else df.index[-1]
 
-    for i in range(len(df)):
-        time = times[i]
-        c = close.iat[i]
-        h = high.iat[i]
-        l = low.iat[i]
-        ma_value = ma_series.iat[i]
-        atr_value = atr_series.iat[i]
-        lowest_value = lowest_long.iat[i]
-        highest_value = highest_short.iat[i]
-        trail_long_value = trail_ma_long.iat[i]
-        trail_short_value = trail_ma_short.iat[i]
-
-        if not np.isnan(ma_value):
-            if c > ma_value:
-                counter_close_trend_long += 1
-                counter_close_trend_short = 0
-            elif c < ma_value:
-                counter_close_trend_short += 1
-                counter_close_trend_long = 0
-            else:
-                counter_close_trend_long = 0
-                counter_close_trend_short = 0
-
-        if position > 0:
-            counter_trade_long = 1
-            counter_trade_short = 0
-        elif position < 0:
-            counter_trade_long = 0
-            counter_trade_short = 1
-
-        exit_price: Optional[float] = None
-        if position > 0:
-            if (
-                not trail_activated_long
-                and not math.isnan(entry_price)
-                and not math.isnan(stop_price)
-            ):
-                activation_price = entry_price + (entry_price - stop_price) * params.trail_rr_long
-                if h >= activation_price:
-                    trail_activated_long = True
-                    if math.isnan(trail_price_long):
-                        trail_price_long = stop_price
-            if not math.isnan(trail_price_long) and not np.isnan(trail_long_value):
-                if np.isnan(trail_price_long) or trail_long_value > trail_price_long:
-                    trail_price_long = trail_long_value
-            if trail_activated_long:
-                if not math.isnan(trail_price_long) and l <= trail_price_long:
-                    exit_price = h if trail_price_long > h else trail_price_long
-            else:
-                if l <= stop_price:
-                    exit_price = stop_price
-                elif h >= target_price:
-                    exit_price = target_price
-            if exit_price is None and entry_time_long is not None and params.stop_long_max_days > 0:
-                days_in_trade = int(math.floor((time - entry_time_long).total_seconds() / 86400))
-                if days_in_trade >= params.stop_long_max_days:
-                    exit_price = c
-            if exit_price is not None:
-                gross_pnl = (exit_price - entry_price) * position_size
-                exit_commission = exit_price * position_size * params.commission_rate
-                realized_equity += gross_pnl - exit_commission
-                trades.append(
-                    TradeRecord(
-                        direction="long",
-                        entry_time=entry_time_long,
-                        exit_time=time,
-                        entry_price=entry_price,
-                        exit_price=exit_price,
-                        size=position_size,
-                        net_pnl=gross_pnl - exit_commission - entry_commission,
-                    )
-                )
-                position = 0
-                position_size = 0.0
-                entry_price = math.nan
-                stop_price = math.nan
-                target_price = math.nan
-                trail_price_long = math.nan
-                trail_activated_long = False
-                entry_time_long = None
-                entry_commission = 0.0
-
-        elif position < 0:
-            if (
-                not trail_activated_short
-                and not math.isnan(entry_price)
-                and not math.isnan(stop_price)
-            ):
-                activation_price = entry_price - (stop_price - entry_price) * params.trail_rr_short
-                if l <= activation_price:
-                    trail_activated_short = True
-                    if math.isnan(trail_price_short):
-                        trail_price_short = stop_price
-            if not math.isnan(trail_price_short) and not np.isnan(trail_short_value):
-                if np.isnan(trail_price_short) or trail_short_value < trail_price_short:
-                    trail_price_short = trail_short_value
-            if trail_activated_short:
-                if not math.isnan(trail_price_short) and h >= trail_price_short:
-                    exit_price = l if trail_price_short < l else trail_price_short
-            else:
-                if h >= stop_price:
-                    exit_price = stop_price
-                elif l <= target_price:
-                    exit_price = target_price
-            if exit_price is None and entry_time_short is not None and params.stop_short_max_days > 0:
-                days_in_trade = int(math.floor((time - entry_time_short).total_seconds() / 86400))
-                if days_in_trade >= params.stop_short_max_days:
-                    exit_price = c
-            if exit_price is not None:
-                gross_pnl = (entry_price - exit_price) * position_size
-                exit_commission = exit_price * position_size * params.commission_rate
-                realized_equity += gross_pnl - exit_commission
-                trades.append(
-                    TradeRecord(
-                        direction="short",
-                        entry_time=entry_time_short,
-                        exit_time=time,
-                        entry_price=entry_price,
-                        exit_price=exit_price,
-                        size=position_size,
-                        net_pnl=gross_pnl - exit_commission - entry_commission,
-                    )
-                )
-                position = 0
-                position_size = 0.0
-                entry_price = math.nan
-                stop_price = math.nan
-                target_price = math.nan
-                trail_price_short = math.nan
-                trail_activated_short = False
-                entry_time_short = None
-                entry_commission = 0.0
-
-        up_trend = counter_close_trend_long >= params.close_count_long and counter_trade_long == 0
-        down_trend = counter_close_trend_short >= params.close_count_short and counter_trade_short == 0
-
-        can_open_long = (
-            up_trend
-            and position == 0
-            and prev_position == 0
-            and time_in_range[i]
-            and not np.isnan(atr_value)
-            and not np.isnan(lowest_value)
+        trades.append(
+            TradeRecord(
+                direction=trade.get("direction", ""),
+                entry_time=entry_time,
+                exit_time=exit_time,
+                entry_price=trade.get("entry_price", math.nan),
+                exit_price=trade.get("exit_price", math.nan),
+                size=trade.get("size", 0.0),
+                net_pnl=trade.get("net_pnl", 0.0),
+            )
         )
-        can_open_short = (
-            down_trend
-            and position == 0
-            and prev_position == 0
-            and time_in_range[i]
-            and not np.isnan(atr_value)
-            and not np.isnan(highest_value)
-        )
-
-        if can_open_long:
-            stop_size = atr_value * params.stop_long_atr
-            long_stop_price = lowest_value - stop_size
-            long_stop_distance = c - long_stop_price
-            if long_stop_distance > 0:
-                long_stop_pct = (long_stop_distance / c) * 100
-                if long_stop_pct <= params.stop_long_max_pct or params.stop_long_max_pct <= 0:
-                    risk_cash = realized_equity * (params.risk_per_trade_pct / 100)
-                    qty = risk_cash / long_stop_distance if long_stop_distance != 0 else 0
-                    if params.contract_size > 0:
-                        qty = math.floor((qty / params.contract_size)) * params.contract_size
-                    if qty > 0:
-                        position = 1
-                        position_size = qty
-                        entry_price = c
-                        stop_price = long_stop_price
-                        target_price = c + long_stop_distance * params.stop_long_rr
-                        trail_price_long = long_stop_price
-                        trail_activated_long = False
-                        entry_time_long = time
-                        entry_commission = entry_price * position_size * params.commission_rate
-                        realized_equity -= entry_commission
-
-        if can_open_short and position == 0:
-            stop_size = atr_value * params.stop_short_atr
-            short_stop_price = highest_value + stop_size
-            short_stop_distance = short_stop_price - c
-            if short_stop_distance > 0:
-                short_stop_pct = (short_stop_distance / c) * 100
-                if short_stop_pct <= params.stop_short_max_pct or params.stop_short_max_pct <= 0:
-                    risk_cash = realized_equity * (params.risk_per_trade_pct / 100)
-                    qty = risk_cash / short_stop_distance if short_stop_distance != 0 else 0
-                    if params.contract_size > 0:
-                        qty = math.floor((qty / params.contract_size)) * params.contract_size
-                    if qty > 0:
-                        position = -1
-                        position_size = qty
-                        entry_price = c
-                        stop_price = short_stop_price
-                        target_price = c - short_stop_distance * params.stop_short_rr
-                        trail_price_short = short_stop_price
-                        trail_activated_short = False
-                        entry_time_short = time
-                        entry_commission = entry_price * position_size * params.commission_rate
-                        realized_equity -= entry_commission
-
-        mark_to_market = realized_equity
-        if position > 0 and not math.isnan(entry_price):
-            mark_to_market += (c - entry_price) * position_size
-        elif position < 0 and not math.isnan(entry_price):
-            mark_to_market += (entry_price - c) * position_size
-        realized_curve.append(realized_equity)
-        prev_position = position
-
-    equity_series = pd.Series(realized_curve, index=df.index[: len(realized_curve)])
-    net_profit_pct = ((realized_equity - equity) / equity) * 100
-    max_drawdown_pct = compute_max_drawdown(equity_series)
-    total_trades = len(trades)
 
     return StrategyResult(
-        net_profit_pct=net_profit_pct,
-        max_drawdown_pct=max_drawdown_pct,
-        total_trades=total_trades,
+        net_profit_pct=result.get("net_profit_pct", 0.0),
+        max_drawdown_pct=result.get("max_drawdown_pct", 0.0),
+        total_trades=result.get("total_trades", 0),
         trades=trades,
     )
+
+
+def run_strategy(df: pd.DataFrame, params: StrategyParams, trade_start_idx: int = 0) -> StrategyResult:
+    """Backward-compatible wrapper that routes to the strategy module."""
+
+    param_dict = {
+        "useBacktester": params.use_backtester,
+        "dateFilter": params.use_date_filter,
+        "startDate": params.start,
+        "endDate": params.end,
+        "maType": params.ma_type,
+        "maLength": params.ma_length,
+        "closeCountLong": params.close_count_long,
+        "closeCountShort": params.close_count_short,
+        "stopLongAtr": params.stop_long_atr,
+        "stopLongRr": params.stop_long_rr,
+        "stopLongLp": params.stop_long_lp,
+        "stopShortAtr": params.stop_short_atr,
+        "stopShortRr": params.stop_short_rr,
+        "stopShortLp": params.stop_short_lp,
+        "stopLongMaxPct": params.stop_long_max_pct,
+        "stopShortMaxPct": params.stop_short_max_pct,
+        "stopLongMaxDays": params.stop_long_max_days,
+        "stopShortMaxDays": params.stop_short_max_days,
+        "trailRrLong": params.trail_rr_long,
+        "trailMaLongType": params.trail_ma_long_type,
+        "trailMaLongLength": params.trail_ma_long_length,
+        "trailMaLongOffset": params.trail_ma_long_offset,
+        "trailRrShort": params.trail_rr_short,
+        "trailMaShortType": params.trail_ma_short_type,
+        "trailMaShortLength": params.trail_ma_short_length,
+        "trailMaShortOffset": params.trail_ma_short_offset,
+        "riskPerTradePct": params.risk_per_trade_pct,
+        "contractSize": params.contract_size,
+        "commissionRate": params.commission_rate,
+        "atrPeriod": params.atr_period,
+    }
+
+    strategy = StrategyRegistry.get_strategy_instance("s01_trailing_ma", param_dict)
+    return run_strategy_v2(df, strategy, trade_start_idx=trade_start_idx)
