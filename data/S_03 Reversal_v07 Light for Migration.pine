@@ -1,0 +1,248 @@
+// S_03 Reversal_v07 Light for GPT
+// @version=5
+strategy(title="S_03 Reversal for GPT",
+	 overlay=true,
+	 initial_capital=100,
+	 currency="USDT",
+	 calc_on_order_fills=false,
+	 calc_on_every_tick=false,
+	 use_bar_magnifier=true,
+	 fill_orders_on_standard_ohlc=true,
+	 process_orders_on_close=false,
+	 default_qty_type=strategy.percent_of_equity,
+	 default_qty_value=100,
+	 commission_type=strategy.commission.percent,
+	 commission_value=0.05)
+
+
+// Date Filter
+useDateFilter   = input.bool(true, "Date Filer", inline="Use Date Filer")
+useDaysFilter   = input.bool(false, "Days Filer", inline="Use Date Filer")
+drawTester      = input.bool(title="Backtester", defval=true, inline="Use Date Filer")
+comments        = input.string(title="", defval="", inline="Use Date Filer")
+
+tradeMonday     = input.bool(true, "Mon", inline="Days of week")
+tradeTuesday    = input.bool(true, "Tue", inline="Days of week")
+tradeWednsday   = input.bool(true, "Wed", inline="Days of week")
+tradeThursday   = input.bool(true, "Thu", inline="Days of week")
+tradeFriday     = input.bool(true, "Fri", inline="Days of week")
+tradeSaturday   = input.bool(true, "Sat", inline="Days of week")
+tradeSunday     = input.bool(true, "Sun", inline="Days of week")
+
+startDate       = input.time(timestamp('2024-07-01'), title="Start Date")
+endDate         = input.time(timestamp('2025-08-01'), title="End Date")
+
+
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ INPUTS ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+// Long or Short Direction + Break Switch + Trend Reverse Switch
+tradeLong   = input.bool(title="Long", defval=true, inline="Trade Direction")
+tradeShort  = input.bool(title="Short", defval=true, inline="Trade Direction")
+breakOut    = input.bool(title="Breakout", defval=false, inline="Trade Direction")
+useClose    = input.bool(title="Use close", defval=false, inline="Trade Direction")
+
+
+// Show MA
+var g_ma   = "Moving Averages"
+useMA1     = input.bool(defval=true, title="L MA", inline="MA №1", group=g_ma)
+useMA2     = input.bool(defval=true, title="S MA", inline="MA №2", group=g_ma)
+useMA3     = input.bool(defval=true, title="T MA", inline="MA №3", group=g_ma)
+
+
+// Get MA Types
+maType1    = input.string(title="", defval="KAMA", options=["EMA", "SMA", "HMA", "WMA", "ALMA", "KAMA", "TMA", "T3", "DEMA", "VWMA", "VWAP"], inline="MA №1", group=g_ma)
+maType2    = input.string(title="", defval="KAMA", options=["EMA", "SMA", "HMA", "WMA", "ALMA", "KAMA", "TMA", "T3", "DEMA", "VWMA", "VWAP"], inline="MA №2", group=g_ma)
+maType3    = input.string(title="", defval="T3", options=["EMA", "SMA", "HMA", "WMA", "ALMA", "KAMA", "TMA", "T3", "DEMA", "VWMA", "VWAP"], inline="MA №3", group=g_ma)
+
+
+// Get MA Lengths
+maLength1  = input.int(title="", defval=15, minval=0, step=1, inline="MA №1", group=g_ma)
+maLength2  = input.int(title="", defval=15, minval=0, step=1, inline="MA №2", group=g_ma)
+maLength3  = input.int(title="", defval=50, minval=0, step=5, inline="MA №3", group=g_ma)
+
+
+// Get MA Colors
+maColor1  = input.color(defval=#8eb678, title="", inline="MA №1", group=g_ma)
+maColor2  = input.color(defval=#c99686, title="", inline="MA №2", group=g_ma)
+maColor3  = input.color(defval=color.rgb(166, 109, 176, 40), title="", inline="MA №3", group=g_ma)
+
+
+// Close Count + T Bands Inputs
+useCloseCount     = input.bool(defval=false, title="Close Count Long", inline="Close Count", group=g_ma)
+closeCountLong    = input.int(title="", defval=3, minval=1, step=1, inline="Close Count", group=g_ma)
+closeCountShort   = input.int(title="Short", defval=3, minval=1, step=1, inline="Close Count", group=g_ma)
+
+contracsSize      = input.float(title="Contract Size", defval=0.01, options=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000], group=g_ma)
+
+
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ CALCULATIONS ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+// KAMA and T3 inputs 
+float fastKama = 2
+float slowKama = 30
+float factorT3 = 0.7
+// factorT3 = input.float(title='FactorT3', minval=0, maxval=1, defval=0.7, step=0.1)
+
+
+// Get gd function for T3 Moving Average calculation
+gd(_maSource, _maLength) =>
+    ta.ema(_maSource, _maLength) * (1 + factorT3) - ta.ema(ta.ema(_maSource, _maLength), _maLength) * factorT3
+
+
+// Get selected Moving Average
+getMA(_maSource, _maType, _maLength) =>
+    if _maLength == 0
+        na
+    else
+        switch _maType
+            "SMA" => ta.sma(_maSource, _maLength)
+            "HMA" => ta.hma(_maSource, _maLength)
+            "WMA" => ta.wma(_maSource, _maLength)
+            "VWMA" => ta.vwma(_maSource, _maLength)
+            "VWAP" => ta.vwap
+            "ALMA" => ta.alma(_maSource, _maLength, 0.85, 6)
+            "DEMA" =>
+                e1 = ta.ema(_maSource, _maLength)
+                e2 = ta.ema(e1, _maLength)
+                2 * e1 - e2
+            "KAMA" =>
+                mom = math.abs(ta.change(_maSource, _maLength))
+                volatility = math.sum(math.abs(ta.change(_maSource)), _maLength)
+                er = volatility != 0 ? mom / volatility : 0
+                fastAlpha = 2 / (fastKama + 1)
+                slowAlpha = 2 / (slowKama + 1)
+                alpha = math.pow(er * (fastAlpha - slowAlpha) + slowAlpha, 2)
+                kama = 0.0
+                kama := alpha * _maSource + (1 - alpha) * nz(kama[1], _maSource)
+                kama
+            "TMA" =>
+                tma = ta.sma(ta.sma(_maSource, math.ceil(_maLength / 2)), math.floor(_maLength / 2) + 1)
+            "T3" =>
+                t3 = gd(gd(gd(_maSource, _maLength), _maLength), _maLength)
+            => ta.ema(_maSource, _maLength)
+
+
+// Get ATR and MA values
+atr             = ta.atr(14)
+
+ma1             = getMA(close, maType1, maLength1)
+ma2             = getMA(close, maType2, maLength2)
+ma3             = getMA(close, maType3, maLength3)
+
+
+// Close Count
+var int countCloseLong = 0
+var int countCloseShort = 0
+
+if close > ma3
+    countCloseLong := countCloseLong + 1
+    countCloseShort := 0
+else if close < ma3
+    countCloseShort := countCloseShort + 1
+    countCloseLong := 0
+else
+    countCloseLong := 0
+    countCloseShort := 0
+
+countLong = if useCloseCount
+    countCloseLong >= closeCountLong
+else
+    true
+
+countShort = if useCloseCount
+    countCloseShort >= closeCountShort
+else
+    true
+
+
+// Check Dates Range
+timeInRange = not useDateFilter or time >= startDate and time <= endDate
+
+tradeDays = if useDaysFilter
+    (tradeMonday and time(timeframe.period, '0000-0000:2', 'GMT+8')) or 
+     (tradeTuesday and time(timeframe.period, '0000-0000:3', 'GMT+8')) or 
+     (tradeWednsday and time(timeframe.period, '0000-0000:4', 'GMT+8')) or 
+     (tradeThursday and time(timeframe.period, '0000-0000:5', 'GMT+8')) or 
+     (tradeFriday and time(timeframe.period, '0000-0000:6', 'GMT+8')) or 
+     (tradeSaturday and time(timeframe.period, '0000-0000:7', 'GMT+8')) or 
+     (tradeSunday and time(timeframe.period, '0000-0000:1', 'GMT+8'))
+else
+    true
+
+
+// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ ENTRY ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+longConditions  = timeInRange and tradeDays and tradeLong and countLong and barstate.isconfirmed
+shortConditions = timeInRange and tradeDays and tradeShort and countShort and barstate.isconfirmed
+
+
+// Enter trade
+
+if longConditions and strategy.position_size < 0
+    strategy.close("Short", comment="Close Short")
+
+if shortConditions and strategy.position_size > 0
+    strategy.close("Long", comment="Close Long")
+
+if longConditions and strategy.position_size == 0 and strategy.position_size == 0[1]
+    positionSize = math.floor((strategy.equity / close) / contracsSize) * contracsSize
+    strategy.entry("Long", strategy.long, qty=positionSize)
+
+if shortConditions and strategy.position_size == 0 and strategy.position_size == 0[1]
+    positionSize = math.floor((strategy.equity / close) / contracsSize) * contracsSize
+    strategy.entry("Short", strategy.short, qty=positionSize)
+
+
+// Exit trade
+if not timeInRange
+    strategy.close_all("Close")
+
+
+// Leverage counter
+var leverageSize = 1
+
+entryBarLong = strategy.position_size[1] < 0 and strategy.position_size > 0
+entryBarShort = strategy.position_size[1] > 0 and strategy.position_size < 0
+
+
+// Days counters
+var int entryTime = na
+var float maxDaysInTrade = 0.0
+
+if strategy.opentrades > 0 and na(entryTime)
+    entryTime := time
+
+if strategy.opentrades > 0 and not na(entryTime)
+    daysInTrade = (time - entryTime) / (1000 * 60 * 60 * 24)
+    if daysInTrade > maxDaysInTrade
+        maxDaysInTrade := daysInTrade
+
+if strategy.opentrades == 0 and not na(entryTime)
+    entryTime := na
+
+// Draw MAs
+plot(not useMA1 ? na : ma1, color=maColor1, linewidth=1, title="MA №1")
+plot(not useMA2 ? na : ma2, color=maColor2, linewidth=1, title="MA №2")
+plot(not useMA3 ? na : ma3, color=maColor3, linewidth=2, title="MA №3")
+
+plotshape(entryBarLong, style=shape.circle, location=location.top, color=color.gray, size=size.tiny, transp=80)
+plotshape(entryBarShort, style=shape.circle, location=location.top, color=color.gray, size=size.tiny, transp=80)
+
+// Prepare stats table
+var table testTable = table.new(position.bottom_left, 2, 5, border_width=1, border_color=color.black, frame_color=color.black, frame_width=1)
+f_fillCell(_table, _column, _row, _title, _value, _bgcolor, _txtcolor) =>
+    _cellText = _title + "\n" + _value
+    table.cell(_table, _column, _row, _cellText, bgcolor=_bgcolor, text_color=_txtcolor)
+
+// Draw stats table
+var bgcolor = #f3f3f3
+if barstate.islastconfirmedhistory
+    if drawTester
+        f_fillCell(testTable, 0, 0, "WR:", str.tostring(math.floor(strategy.wintrades / strategy.closedtrades * 100)) + "%", bgcolor, (math.floor(strategy.wintrades / strategy.closedtrades * 100)) > 45 ? #6caf5d : color.black)
+        f_fillCell(testTable, 1, 0, "PnL:", str.tostring(math.floor(strategy.netprofit_percent)) + "%", bgcolor, (math.floor(strategy.netprofit_percent)) <= 0 ? #a73302 : color.black)
+        f_fillCell(testTable, 0, 1, "DD:", str.tostring(math.ceil(strategy.max_drawdown_percent)) + "%", bgcolor, (math.ceil(strategy.max_drawdown_percent)) > 20 ? #a73302 : color.black)
+        f_fillCell(testTable, 1, 1, "Trades:", str.tostring(strategy.closedtrades), bgcolor, color.black)
+        f_fillCell(testTable, 1, 3, "Lev:", str.tostring(leverageSize), bgcolor, leverageSize >= 10 ? #a73302 : color.black)
+        f_fillCell(testTable, 0, 4, "Max D:", str.tostring(math.ceil(maxDaysInTrade)), bgcolor, color.black)
