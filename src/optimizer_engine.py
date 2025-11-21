@@ -13,13 +13,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from backtest_engine import (
-    DEFAULT_ATR_PERIOD,
-    atr,
-    compute_max_drawdown,
-    get_ma,
-    load_data,
-)
+from backtest_engine import compute_max_drawdown, load_data
+from indicators import DEFAULT_ATR_PERIOD, atr, get_ma
 
 # Constants
 CHUNK_SIZE = 2000
