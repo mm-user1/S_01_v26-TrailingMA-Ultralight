@@ -5,7 +5,7 @@ import logging
 import multiprocessing as mp
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional
 
 import optuna
 from optuna.pruners import MedianPruner, PercentilePruner, PatientPruner
@@ -17,11 +17,10 @@ from backtest_engine import load_data
 from optimizer_engine import (
     DEFAULT_SCORE_CONFIG,
     OptimizationResult,
-    PARAMETER_MAP,
-    _generate_numeric_sequence,
     _init_worker,
-    _parse_timestamp,
+    _prepare_dataset_for_optimization,
     _simulate_combination,
+    generate_parameter_grid,
     calculate_score,
 )
 
@@ -48,9 +47,17 @@ class OptunaConfig:
 class OptunaOptimizer:
     """Optuna-based optimiser that reuses the grid search simulation engine."""
 
-    def __init__(self, base_config, optuna_config: OptunaConfig) -> None:
+    def __init__(
+        self,
+        base_config,
+        optuna_config: OptunaConfig,
+        strategy_class,
+        param_definitions: Dict[str, Dict[str, Any]],
+    ) -> None:
         self.base_config = base_config
         self.optuna_config = optuna_config
+        self.strategy_class = strategy_class
+        self.param_definitions = param_definitions
         self.pool: Optional[mp.pool.Pool] = None
         self.trial_results: List[OptimizationResult] = []
         self.best_value: float = float("-inf")
@@ -68,29 +75,31 @@ class OptunaOptimizer:
 
         space: Dict[str, Dict[str, Any]] = {}
 
-        for frontend_name, (internal_name, is_int) in PARAMETER_MAP.items():
-            if not self.base_config.enabled_params.get(frontend_name):
+        for param_name, param_def in self.param_definitions.items():
+            if not self.base_config.enabled_params.get(param_name, False):
                 continue
 
-            if frontend_name not in self.base_config.param_ranges:
-                raise ValueError(f"Missing range for parameter '{frontend_name}'.")
+            param_type = param_def.get("type")
+            if param_type == "bool":
+                space[param_name] = {"type": "categorical", "choices": [True, False]}
+                continue
 
-            start, stop, step = self.base_config.param_ranges[frontend_name]
+            if param_name not in self.base_config.param_ranges:
+                raise ValueError(f"Missing range for parameter '{param_name}'.")
+
+            start, stop, step = self.base_config.param_ranges[param_name]
             low = min(float(start), float(stop))
             high = max(float(start), float(stop))
             step_value = abs(float(step)) if step else 0.0
 
-            if is_int:
-                if low == high:
-                    low = high = round(low)
+            if param_type == "int":
                 spec: Dict[str, Any] = {
                     "type": "int",
                     "low": int(round(low)),
                     "high": int(round(high)),
+                    "step": max(1, int(round(step_value))) if step_value else 1,
                 }
-                int_step = max(1, int(round(step_value))) if step_value else 1
-                spec["step"] = int_step
-            else:
+            elif param_type == "float":
                 spec = {
                     "type": "float",
                     "low": float(low),
@@ -98,37 +107,16 @@ class OptunaOptimizer:
                 }
                 if step_value:
                     spec["step"] = float(step_value)
-                if low > 0 and high / max(low, 1e-9) > 100:
-                    spec["log"] = True
+            elif param_type == "categorical":
+                if isinstance(self.base_config.param_ranges[param_name], (list, tuple)):
+                    choices = list(self.base_config.param_ranges[param_name])
+                else:
+                    choices = param_def.get("choices", [param_def.get("default")])
+                spec = {"type": "categorical", "choices": choices}
+            else:
+                raise ValueError(f"Unsupported parameter type: {param_type}")
 
-            space[internal_name] = spec
-
-        trend_types = [ma.upper() for ma in self.base_config.ma_types_trend]
-        trail_long_types = [ma.upper() for ma in self.base_config.ma_types_trail_long]
-        trail_short_types = [ma.upper() for ma in self.base_config.ma_types_trail_short]
-
-        if not trend_types or not trail_long_types or not trail_short_types:
-            raise ValueError("At least one MA type must be selected in each group.")
-
-        space["ma_type"] = {"type": "categorical", "choices": trend_types}
-
-        if self.base_config.lock_trail_types:
-            short_set = {ma.upper() for ma in trail_short_types}
-            paired = [ma for ma in trail_long_types if ma in short_set]
-            if not paired:
-                raise ValueError(
-                    "No overlapping trail MA types available when lock_trail_types is enabled."
-                )
-            space["trail_ma_long_type"] = {"type": "categorical", "choices": paired}
-        else:
-            space["trail_ma_long_type"] = {
-                "type": "categorical",
-                "choices": trail_long_types,
-            }
-            space["trail_ma_short_type"] = {
-                "type": "categorical",
-                "choices": trail_short_types,
-            }
+            space[param_name] = spec
 
         return space
 
@@ -166,124 +154,22 @@ class OptunaOptimizer:
     # ------------------------------------------------------------------
     # Worker pool initialisation
     # ------------------------------------------------------------------
-    def _collect_lengths(self, frontend_key: str) -> Iterable[int]:
-        if self.base_config.enabled_params.get(frontend_key):
-            start, stop, step = self.base_config.param_ranges[frontend_key]
-            sequence = _generate_numeric_sequence(start, stop, step, True)
-        else:
-            value = self.base_config.fixed_params.get(frontend_key, 0)
-            sequence = [value]
-        return [int(round(val)) for val in sequence]
-
     def _setup_worker_pool(self, df: pd.DataFrame) -> None:
-        from backtest_engine import prepare_dataset_with_warmup, StrategyParams
+        for name, definition in self.param_definitions.items():
+            if not self.base_config.enabled_params.get(name, False) and name not in self.base_config.fixed_params:
+                self.base_config.fixed_params[name] = definition.get("default")
 
-        ma_specs: Set[Tuple[str, int]] = set()
-
-        trend_lengths = self._collect_lengths("maLength")
-        trail_long_lengths = self._collect_lengths("trailLongLength")
-        trail_short_lengths = self._collect_lengths("trailShortLength")
-
-        if self.base_config.lock_trail_types:
-            short_set = {ma.upper() for ma in self.base_config.ma_types_trail_short}
-            trail_long_types = [ma for ma in self.base_config.ma_types_trail_long if ma in short_set]
-            trail_short_types = trail_long_types
-        else:
-            trail_long_types = [ma.upper() for ma in self.base_config.ma_types_trail_long]
-            trail_short_types = [ma.upper() for ma in self.base_config.ma_types_trail_short]
-
-        for ma_type in [ma.upper() for ma in self.base_config.ma_types_trend]:
-            for length in trend_lengths:
-                ma_specs.add((ma_type, max(1, int(length))))
-
-        for ma_type in trail_long_types:
-            for length in trail_long_lengths:
-                ma_specs.add((ma_type, max(0, int(length))))
-
-        for ma_type in trail_short_types:
-            for length in trail_short_lengths:
-                ma_specs.add((ma_type, max(0, int(length))))
-
-        if self.base_config.enabled_params.get("stopLongLP"):
-            long_lp_values = {
-                max(1, int(val))
-                for val in _generate_numeric_sequence(
-                    *self.base_config.param_ranges["stopLongLP"], True
-                )
-            }
-        else:
-            long_lp_values = {max(1, int(self.base_config.fixed_params.get("stopLongLP", 1)))}
-
-        if self.base_config.enabled_params.get("stopShortLP"):
-            short_lp_values = {
-                max(1, int(val))
-                for val in _generate_numeric_sequence(
-                    *self.base_config.param_ranges["stopShortLP"], True
-                )
-            }
-        else:
-            short_lp_values = {max(1, int(self.base_config.fixed_params.get("stopShortLP", 1)))}
-
-        use_date_filter = bool(self.base_config.fixed_params.get("dateFilter", False))
-        start = _parse_timestamp(self.base_config.fixed_params.get("start"))
-        end = _parse_timestamp(self.base_config.fixed_params.get("end"))
-
-        # Prepare dataset with warmup if date filtering is enabled
-        trade_start_idx = 0
-        if use_date_filter and (start is not None or end is not None):
-            # Find the maximum MA length from all possible values
-            max_ma_length = max(
-                max(trend_lengths, default=1),
-                max(trail_long_lengths, default=0),
-                max(trail_short_lengths, default=0)
-            )
-
-            # Create a dummy StrategyParams with max MA lengths for warmup calculation
-            dummy_params = StrategyParams(
-                use_backtester=True,
-                use_date_filter=use_date_filter,
-                start=start,
-                end=end,
-                ma_type="SMA",
-                ma_length=max_ma_length,
-                trail_ma_long_type="SMA",
-                trail_ma_long_length=max_ma_length,
-                trail_ma_short_type="SMA",
-                trail_ma_short_length=max_ma_length,
-                close_count_long=1,
-                close_count_short=1,
-                stop_long_atr=1.0,
-                stop_long_rr=1.0,
-                stop_long_lp=1,
-                stop_short_atr=1.0,
-                stop_short_rr=1.0,
-                stop_short_lp=1,
-                stop_long_max_pct=0.0,
-                stop_short_max_pct=0.0,
-                stop_long_max_days=0,
-                stop_short_max_days=0,
-                trail_rr_long=1.0,
-                trail_rr_short=1.0,
-                trail_ma_long_offset=0.0,
-                trail_ma_short_offset=0.0,
-                risk_per_trade_pct=self.base_config.risk_per_trade_pct,
-                contract_size=self.base_config.contract_size,
-                commission_rate=self.base_config.commission_rate,
-                atr_period=self.base_config.atr_period
-            )
-
-            df, trade_start_idx = prepare_dataset_with_warmup(df, start, end, dummy_params)
+        combinations = generate_parameter_grid(self.base_config, self.param_definitions)
+        cache_requirements = self.strategy_class.get_cache_requirements(combinations)
+        df_prepared, trade_start_idx = _prepare_dataset_for_optimization(
+            df, self.base_config, cache_requirements
+        )
 
         pool_args = (
-            df,
-            float(self.base_config.risk_per_trade_pct),
-            float(self.base_config.contract_size),
-            float(self.base_config.commission_rate),
-            int(self.base_config.atr_period),
-            list(ma_specs),
-            list(long_lp_values),
-            list(short_lp_values),
-            use_date_filter,
+            df_prepared,
+            cache_requirements,
+            self.strategy_class,
+            self.base_config,
             trade_start_idx,
         )
 
@@ -336,18 +222,17 @@ class OptunaOptimizer:
             elif p_type == "categorical":
                 params_dict[key] = trial.suggest_categorical(key, list(spec["choices"]))
 
-        if self.base_config.lock_trail_types:
-            trail_type = params_dict.get("trail_ma_long_type")
-            if trail_type is not None:
-                params_dict["trail_ma_short_type"] = trail_type
+        for name, definition in self.param_definitions.items():
+            if self.base_config.enabled_params.get(name, False):
+                continue
+            value = self.base_config.fixed_params.get(name, definition.get("default"))
+            params_dict[name] = value
 
-        for frontend_name, (internal_name, is_int) in PARAMETER_MAP.items():
-            if self.base_config.enabled_params.get(frontend_name):
-                continue
-            value = self.base_config.fixed_params.get(frontend_name)
-            if value is None:
-                continue
-            params_dict[internal_name] = int(round(float(value))) if is_int else float(value)
+        if self.base_config.lock_trail_types:
+            trail_type = params_dict.get("trailMaLongType") or params_dict.get("trail_ma_long_type")
+            if trail_type is not None:
+                params_dict["trailMaShortType"] = trail_type
+                params_dict["trail_ma_short_type"] = trail_type
 
         return params_dict
 
@@ -548,8 +433,11 @@ class OptunaOptimizer:
         return self.trial_results
 
 
-def run_optuna_optimization(base_config, optuna_config: OptunaConfig) -> List[OptimizationResult]:
+def run_optuna_optimization(
+    base_config, optuna_config: OptunaConfig, strategy_class
+) -> List[OptimizationResult]:
     """Execute Optuna optimisation using the provided configuration."""
 
-    optimizer = OptunaOptimizer(base_config, optuna_config)
+    param_definitions = strategy_class.get_param_definitions()
+    optimizer = OptunaOptimizer(base_config, optuna_config, strategy_class, param_definitions)
     return optimizer.optimize()

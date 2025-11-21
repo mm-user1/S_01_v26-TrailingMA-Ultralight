@@ -12,10 +12,8 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 
 from backtest_engine import StrategyParams, load_data, run_strategy, prepare_dataset_with_warmup
 from optimizer_engine import (
-    CSV_COLUMN_SPECS,
     OptimizationResult,
     OptimizationConfig,
-    PARAMETER_MAP,
     export_to_csv,
     run_optimization,
 )
@@ -1106,18 +1104,6 @@ def _build_optimization_config(csv_file, payload: dict, worker_processes=None) -
     if not isinstance(fixed_params, dict):
         raise ValueError("fixed_params must be a dictionary.")
 
-    ma_types_trend = payload.get("ma_types_trend") or payload.get("maTypesTrend") or []
-    ma_types_trail_long = (
-        payload.get("ma_types_trail_long")
-        or payload.get("maTypesTrailLong")
-        or []
-    )
-    ma_types_trail_short = (
-        payload.get("ma_types_trail_short")
-        or payload.get("maTypesTrailShort")
-        or []
-    )
-
     lock_trail_types_raw = (
         payload.get("lock_trail_types")
         or payload.get("lockTrailTypes")
@@ -1241,14 +1227,19 @@ def _build_optimization_config(csv_file, payload: dict, worker_processes=None) -
             "optuna_save_study": optuna_save_study,
         }
 
+    strategy_id = (
+        payload.get("strategy_id")
+        or payload.get("strategyId")
+        or payload.get("strategy")
+        or "s01_trailing_ma"
+    )
+
     config = OptimizationConfig(
         csv_file=csv_file,
         enabled_params=enabled_params,
         param_ranges=param_ranges,
         fixed_params=fixed_params,
-        ma_types_trend=[str(ma).upper() for ma in ma_types_trend],
-        ma_types_trail_long=[str(ma).upper() for ma in ma_types_trail_long],
-        ma_types_trail_short=[str(ma).upper() for ma in ma_types_trail_short],
+        strategy_id=str(strategy_id).strip() or "s01_trailing_ma",
         risk_per_trade_pct=float(risk_per_trade),
         contract_size=float(contract_size),
         commission_rate=float(commission_rate),
@@ -1320,13 +1311,6 @@ def _unique_preserve_order(items):
             seen.add(item)
             result.append(item)
     return result
-
-
-_PARAMETER_FRONTEND_ORDER = [
-    frontend_name
-    for _, frontend_name, _, _ in CSV_COLUMN_SPECS
-    if frontend_name is not None
-]
 
 
 def generate_output_filename(csv_filename: str, config: OptimizationConfig, mode: str = None) -> str:
@@ -1442,6 +1426,16 @@ def run_optimization_endpoint() -> object:
         app.logger.exception("Failed to construct optimization config")
         return ("Failed to prepare optimization config.", HTTPStatus.INTERNAL_SERVER_ERROR)
 
+    try:
+        strategy_class = StrategyRegistry.get_strategy_class(
+            optimization_config.strategy_id
+        )
+    except ValueError as exc:
+        if opened_file:
+            opened_file.close()
+            opened_file = None
+        return (str(exc), HTTPStatus.BAD_REQUEST)
+
     results: List[OptimizationResult] = []
     optimization_metadata: Optional[Dict[str, Any]] = None
     try:
@@ -1524,39 +1518,10 @@ def run_optimization_endpoint() -> object:
                 pass
             opened_file = None
 
-    fixed_parameters = []
-    trend_types = _unique_preserve_order(optimization_config.ma_types_trend)
-    trail_long_types = _unique_preserve_order(optimization_config.ma_types_trail_long)
-    trail_short_types = _unique_preserve_order(optimization_config.ma_types_trail_short)
-
-    for name in _PARAMETER_FRONTEND_ORDER:
-        if name == "maType":
-            if len(trend_types) == 1:
-                fixed_parameters.append((name, trend_types[0]))
-            continue
-        if name == "trailLongType":
-            if len(trail_long_types) == 1:
-                fixed_parameters.append((name, trail_long_types[0]))
-            continue
-        if name == "trailShortType":
-            if len(trail_short_types) == 1:
-                fixed_parameters.append((name, trail_short_types[0]))
-            continue
-
-        if bool(optimization_config.enabled_params.get(name, False)):
-            continue
-
-        value = optimization_config.fixed_params.get(name)
-        if value is None:
-            param_info = PARAMETER_MAP.get(name)
-            if param_info and results:
-                attr_name = param_info[0]
-                value = getattr(results[0], attr_name, None)
-        fixed_parameters.append((name, value))
-
     csv_content = export_to_csv(
         results,
-        fixed_parameters,
+        optimization_config,
+        strategy_class,
         filter_min_profit=optimization_config.filter_min_profit,
         min_profit_threshold=optimization_config.min_profit_threshold,
         optimization_metadata=optimization_metadata,
