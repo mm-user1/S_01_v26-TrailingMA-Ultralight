@@ -84,8 +84,14 @@ class OptimizationResult:
     score: float = 0.0
 
     def __getattr__(self, item: str) -> Any:  # pragma: no cover - defensive
-        if item in self.params:
-            return self.params[item]
+        # Avoid recursion during unpickling when __dict__ may be incomplete.
+        try:
+            params = object.__getattribute__(self, "params")
+        except AttributeError:
+            raise AttributeError(item)
+
+        if item in params:
+            return params[item]
         raise AttributeError(item)
 
     def to_dict(self) -> Dict[str, Any]:
