@@ -310,26 +310,15 @@ class S03Reversal(BaseStrategy):
         self.counter_close_long = 0
         self.counter_close_short = 0
 
+        # Date filtering: Trust trade_start_idx set by optimizer
+        # DO NOT use df.index.searchsorted() - df may already be trimmed by optimizer
         if self.date_filter:
             time_mask = np.zeros(len(df), dtype=bool)
             start_idx = int(self.trade_start_idx) if self.trade_start_idx is not None else 0
-            if start_idx == 0 and self.start_date is not None:
-                start_idx = int(df.index.searchsorted(self.start_date))
-
             time_mask[start_idx:] = True
-
-            if self.end_date is not None:
-                end_idx = int(df.index.searchsorted(self.end_date, side="right"))
-                time_mask[end_idx:] = False
-
             self.time_in_range = time_mask
         else:
             self.time_in_range = np.ones(len(df), dtype=bool)
-
-    def _is_date_allowed(self, idx: int) -> bool:
-        if self.time_in_range is None:
-            return True
-        return bool(self.time_in_range[idx])
 
     def allows_reversal(self) -> bool:
         return True
@@ -396,7 +385,9 @@ class S03Reversal(BaseStrategy):
     def should_exit(
         self, idx: int, position_info: Dict[str, Any]
     ) -> Tuple[bool, Optional[float], str]:
-        if not self._is_date_allowed(idx):
+        # Exit if outside allowed date range
+        if self.time_in_range is not None and not self.time_in_range[idx]:
             return True, self.close[idx], "date_filter"
+        # Reversal strategy: no other exit conditions (only reverse on opposite signal)
         return False, None, ""
 
