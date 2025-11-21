@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Type
 
 from strategies.base_strategy import BaseStrategy
 from strategies.s01_trailing_ma import S01TrailingMA
+from strategies.s03_reversal import S03Reversal
 
 
 class StrategyRegistry:
@@ -24,7 +25,7 @@ class StrategyRegistry:
     # Strategy registry (will be populated as strategies are added)
     _strategies: Dict[str, Type[BaseStrategy]] = {
         "s01_trailing_ma": S01TrailingMA,
-        # "s03_reversal": S03Reversal (planned Phase 5),
+        "s03_reversal": S03Reversal,
     }
 
     @classmethod
