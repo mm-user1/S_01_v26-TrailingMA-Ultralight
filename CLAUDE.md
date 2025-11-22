@@ -155,6 +155,12 @@ The web UI supports multiple trading strategies:
 3. Call `StrategyRegistry.register_strategy()` in `src/strategies/__init__.py`
 4. The strategy will automatically appear in the web UI dropdown via `/api/strategies`
 
+## Dynamic Parameter Forms (Phase 8)
+
+- Backtester and Optimizer parameter forms are generated dynamically from the strategy metadata returned by `/api/strategies`.
+- Optimizer range controls (enable + from/to/step) are built at runtime for numeric parameters, so adding new strategies or parameters no longer requires HTML edits.
+- MA type collections for S_01 remain supported; ensure at least one trend and trailing type is selected before running grid optimizations.
+
 ## Key Design Constraints
 
 From `agents.md`, critical development guidelines:

@@ -417,6 +417,52 @@
       padding: 12px 0;
     }
 
+    /* ========================================
+       Dynamic Optimizer Ranges
+       ======================================== */
+
+    .dynamic-ranges-container {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px 0;
+      margin-top: 20px;
+    }
+
+    .range-control {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px;
+      border: 1px solid #e0e0e0;
+      border-radius: 4px;
+      background: #f9f9f9;
+    }
+
+    .range-checkbox {
+      flex: 0 0 auto;
+    }
+
+    .range-label {
+      flex: 0 0 140px;
+      font-size: 13px;
+      color: #2a2a2a;
+      font-weight: 500;
+    }
+
+    .range-inputs {
+      flex: 1;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .range-inputs input {
+      width: 80px;
+      padding: 6px 8px;
+      font-size: 12px;
+    }
+
     .param-section {
       border: 1px solid #ddd;
       border-radius: 4px;
@@ -1276,270 +1322,16 @@
                   </div>
                 </div>
 
-                <div class="section">
-                  <div class="opt-section">
-                    <div class="opt-section-title">T MA</div>
-                    <div class="opt-row">
-                      <input id="opt-maLength" type="checkbox" checked />
-                      <label class="opt-label" for="opt-maLength">T MA Length</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-maLength-from" min="0" type="number" value="25" step="1" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-maLength-to" min="0" type="number" value="500" step="1" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-maLength-step" min="1" type="number" value="25" step="1" />
-                      </div>
-                    </div>
-                  </div>
+                <!-- Dynamic Parameter Container for Optimizer -->
+                <div id="optimizerDynamicParams" class="dynamic-params-container">
+                  <!-- Параметры будут генерироваться здесь динамически -->
+                  <p style="color: #999; padding: 20px;">Выберите стратегию для отображения параметров.</p>
+                </div>
 
-                  <div class="opt-section">
-                    <div class="opt-section-title">Close Count</div>
-                    <div class="opt-row">
-                      <input id="opt-closeCountLong" type="checkbox" checked />
-                      <label class="opt-label" for="opt-closeCountLong">Close Count Long</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-closeCountLong-from" min="0" type="number" value="2" step="1" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-closeCountLong-to" min="0" type="number" value="10" step="1" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-closeCountLong-step" min="1" type="number" value="1" step="1" />
-                      </div>
-                    </div>
-                    <div class="opt-row">
-                      <input id="opt-closeCountShort" type="checkbox" checked />
-                      <label class="opt-label" for="opt-closeCountShort">Close Count Short</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-closeCountShort-from" min="0" type="number" value="2" step="1" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-closeCountShort-to" min="0" type="number" value="10" step="1" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-closeCountShort-step" min="1" type="number" value="1" step="1" />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="opt-section">
-                    <div class="opt-section-title">Stop Long</div>
-                    <div class="opt-row">
-                      <input id="opt-stopLongX" type="checkbox" checked />
-                      <label class="opt-label" for="opt-stopLongX">Stop Long X</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-stopLongX-from" step="0.1" type="number" value="1.0" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-stopLongX-to" step="0.1" type="number" value="3.0" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-stopLongX-step" step="0.1" type="number" value="0.1" />
-                      </div>
-                    </div>
-                    <div class="opt-row">
-                      <input id="opt-stopLongRR" type="checkbox" />
-                      <label class="opt-label" for="opt-stopLongRR">Stop Long RR</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-stopLongRR-from" step="0.1" type="number" value="2.0" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-stopLongRR-to" step="0.1" type="number" value="4.0" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-stopLongRR-step" step="0.1" type="number" value="0.2" />
-                      </div>
-                    </div>
-                    <div class="opt-row">
-                      <input id="opt-stopLongLP" type="checkbox" checked />
-                      <label class="opt-label" for="opt-stopLongLP">Stop Long LP</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-stopLongLP-from" min="0" type="number" value="2" step="1" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-stopLongLP-to" min="0" type="number" value="6" step="1" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-stopLongLP-step" min="1" type="number" value="1" step="1" />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="opt-section">
-                    <div class="opt-section-title">Stop Short</div>
-                    <div class="opt-row">
-                      <input id="opt-stopShortX" type="checkbox" checked />
-                      <label class="opt-label" for="opt-stopShortX">Stop Short X</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-stopShortX-from" step="0.1" type="number" value="1.0" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-stopShortX-to" step="0.1" type="number" value="3.0" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-stopShortX-step" step="0.1" type="number" value="0.1" />
-                      </div>
-                    </div>
-                    <div class="opt-row">
-                      <input id="opt-stopShortRR" type="checkbox" />
-                      <label class="opt-label" for="opt-stopShortRR">Stop Short RR</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-stopShortRR-from" step="0.1" type="number" value="2.0" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-stopShortRR-to" step="0.1" type="number" value="4.0" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-stopShortRR-step" step="0.1" type="number" value="0.2" />
-                      </div>
-                    </div>
-                    <div class="opt-row">
-                      <input id="opt-stopShortLP" type="checkbox" checked />
-                      <label class="opt-label" for="opt-stopShortLP">Stop Short LP</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-stopShortLP-from" min="0" type="number" value="2" step="1" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-stopShortLP-to" min="0" type="number" value="6" step="1" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-stopShortLP-step" min="1" type="number" value="1" step="1" />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="opt-section">
-                    <div class="opt-section-title">Stop Max %</div>
-                    <div class="opt-row">
-                      <input id="opt-stopLongMaxPct" type="checkbox" checked />
-                      <label class="opt-label" for="opt-stopLongMaxPct">L Stop Max %</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-stopLongMaxPct-from" step="0.1" type="number" value="3.0" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-stopLongMaxPct-to" step="0.1" type="number" value="10.0" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-stopLongMaxPct-step" step="0.1" type="number" value="1.0" />
-                      </div>
-                    </div>
-                    <div class="opt-row">
-                      <input id="opt-stopShortMaxPct" type="checkbox" checked />
-                      <label class="opt-label" for="opt-stopShortMaxPct">S Stop Max %</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-stopShortMaxPct-from" step="0.1" type="number" value="3.0" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-stopShortMaxPct-to" step="0.1" type="number" value="10.0" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-stopShortMaxPct-step" step="0.1" type="number" value="1.0" />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="opt-section">
-                    <div class="opt-section-title">Stop Max Days</div>
-                    <div class="opt-row">
-                      <input id="opt-stopLongMaxDays" type="checkbox" checked />
-                      <label class="opt-label" for="opt-stopLongMaxDays">L Stop Max D</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-stopLongMaxDays-from" min="0" type="number" value="2" step="1" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-stopLongMaxDays-to" min="0" type="number" value="7" step="1" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-stopLongMaxDays-step" min="1" type="number" value="1" step="1" />
-                      </div>
-                    </div>
-                    <div class="opt-row">
-                      <input id="opt-stopShortMaxDays" type="checkbox" checked />
-                      <label class="opt-label" for="opt-stopShortMaxDays">S Stop Max D</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-stopShortMaxDays-from" min="0" type="number" value="2" step="1" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-stopShortMaxDays-to" min="0" type="number" value="7" step="1" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-stopShortMaxDays-step" min="1" type="number" value="1" step="1" />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="opt-section">
-                    <div class="opt-section-title">Trailing RR</div>
-                    <div class="opt-row">
-                      <input id="opt-trailRRLong" type="checkbox" />
-                      <label class="opt-label" for="opt-trailRRLong">Trail RR Long</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-trailRRLong-from" step="0.1" type="number" value="0.5" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-trailRRLong-to" step="0.1" type="number" value="2.0" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-trailRRLong-step" step="0.1" type="number" value="0.2" />
-                      </div>
-                    </div>
-                    <div class="opt-row">
-                      <input id="opt-trailRRShort" type="checkbox" />
-                      <label class="opt-label" for="opt-trailRRShort">Trail RR Short</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-trailRRShort-from" step="0.1" type="number" value="0.5" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-trailRRShort-to" step="0.1" type="number" value="2.0" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-trailRRShort-step" step="0.1" type="number" value="0.2" />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="opt-section">
-                    <div class="opt-section-title">Trail MA Long</div>
-                    <div class="opt-row">
-                      <input id="opt-trailLongLength" type="checkbox" checked />
-                      <label class="opt-label" for="opt-trailLongLength">Length</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-trailLongLength-from" min="0" type="number" value="25" step="5" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-trailLongLength-to" min="0" type="number" value="200" step="5" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-trailLongLength-step" min="1" type="number" value="25" step="1" />
-                      </div>
-                    </div>
-                    <div class="opt-row">
-                      <input id="opt-trailLongOffset" type="checkbox" checked />
-                      <label class="opt-label" for="opt-trailLongOffset">Offset</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-trailLongOffset-from" step="0.1" type="number" value="0.0" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-trailLongOffset-to" step="0.1" type="number" value="-3.0" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-trailLongOffset-step" step="0.1" type="number" value="0.5" />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="opt-section">
-                    <div class="opt-section-title">Trail MA Short</div>
-                    <div class="opt-row">
-                      <input id="opt-trailShortLength" type="checkbox" checked />
-                      <label class="opt-label" for="opt-trailShortLength">Length</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-trailShortLength-from" min="0" type="number" value="25" step="5" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-trailShortLength-to" min="0" type="number" value="200" step="5" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-trailShortLength-step" min="1" type="number" value="25" step="1" />
-                      </div>
-                    </div>
-                    <div class="opt-row">
-                      <input id="opt-trailShortOffset" type="checkbox" checked />
-                      <label class="opt-label" for="opt-trailShortOffset">Offset</label>
-                      <div class="opt-controls">
-                        <label>From:</label>
-                        <input class="tiny-input" id="opt-trailShortOffset-from" step="0.1" type="number" value="0.0" />
-                        <label>To:</label>
-                        <input class="tiny-input" id="opt-trailShortOffset-to" step="0.1" type="number" value="3.0" />
-                        <label>Step:</label>
-                        <input class="tiny-input" id="opt-trailShortOffset-step" step="0.1" type="number" value="0.5" />
-                      </div>
-                    </div>
-                  </div>
+                <!-- Dynamic Optimizer Range Controls Container -->
+                <div id="optimizerDynamicRanges" class="dynamic-ranges-container">
+                  <!-- Контролы диапазонов будут генерироваться здесь динамически -->
+                  <p style="color: #999; padding: 20px;">Выберите стратегию для отображения параметров оптимизации.</p>
                 </div>
 
               </form>
@@ -1724,6 +1516,17 @@
       const SCORE_DEFAULT_INVERT = {
         ulcer: true
       };
+
+      const optimizerParamCache = {};
+      const optimizerRangeCache = {};
+
+      function debounce(fn, delay = 150) {
+        let timer = null;
+        return (...args) => {
+          window.clearTimeout(timer);
+          timer = window.setTimeout(() => fn(...args), delay);
+        };
+      }
 
       let defaults = {
         dateFilter: true,
@@ -2093,15 +1896,15 @@
        * @param {Object} strategy - Объект стратегии с parameters
        * @param {boolean} preserveValues - Сохранять ли текущие значения
        */
-      function buildParameterForm(containerId, strategy, preserveValues = true) {
+      function buildParameterForm(containerId, strategy, preserveValues = true, initialValues = null) {
         const container = document.getElementById(containerId);
         if (!container) {
           console.error(`Container ${containerId} not found`);
           return;
         }
 
-        const currentValues = {};
-        if (preserveValues) {
+        const currentValues = initialValues ? { ...initialValues } : {};
+        if (preserveValues && !initialValues) {
           container.querySelectorAll('input, select').forEach((input) => {
             const paramId = input.name;
             if (!paramId) return;
@@ -2177,6 +1980,184 @@
         return params;
       }
 
+      function isOptimizable(paramDef) {
+        return paramDef && (paramDef.type === 'int' || paramDef.type === 'float');
+      }
+
+      function getOptimizableParameters(parameters) {
+        if (!parameters || typeof parameters !== 'object') {
+          return [];
+        }
+
+        return Object.entries(parameters).filter(([paramId, paramDef]) => {
+          if (EXTERNAL_PARAM_IDS.has(paramId)) {
+            return false;
+          }
+          return isOptimizable(paramDef);
+        });
+      }
+
+      function createRangeControl(paramId, paramDef, savedState = null) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'range-control';
+        wrapper.dataset.paramId = paramId;
+        wrapper.dataset.paramType = paramDef.type;
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'range-checkbox';
+        checkbox.id = `opt-${paramId}`;
+        const enabled = savedState && typeof savedState.enabled === 'boolean' ? savedState.enabled : true;
+        checkbox.checked = enabled;
+
+        const label = document.createElement('div');
+        label.className = 'range-label';
+        label.textContent = paramDef.description || paramId;
+
+        const inputsWrapper = document.createElement('div');
+        inputsWrapper.className = 'range-inputs';
+
+        const defaultStep = paramDef.step !== undefined
+          ? paramDef.step
+          : paramDef.type === 'int'
+            ? 1
+            : 0.1;
+        const fromValue = savedState?.from ?? paramDef.min ?? paramDef.default ?? 0;
+        const toValue = savedState?.to ?? paramDef.max ?? paramDef.default ?? fromValue;
+        const stepValue = savedState?.step ?? defaultStep;
+
+        const fromInput = document.createElement('input');
+        fromInput.type = 'number';
+        fromInput.className = 'range-from';
+        fromInput.id = `opt-${paramId}-from`;
+        fromInput.name = `${paramId}-from`;
+        if (paramDef.min !== undefined) fromInput.min = paramDef.min;
+        if (paramDef.max !== undefined) fromInput.max = paramDef.max;
+        fromInput.step = defaultStep;
+        fromInput.value = fromValue;
+
+        const toInput = document.createElement('input');
+        toInput.type = 'number';
+        toInput.className = 'range-to';
+        toInput.id = `opt-${paramId}-to`;
+        toInput.name = `${paramId}-to`;
+        if (paramDef.min !== undefined) toInput.min = paramDef.min;
+        if (paramDef.max !== undefined) toInput.max = paramDef.max;
+        toInput.step = defaultStep;
+        toInput.value = toValue;
+
+        const stepInput = document.createElement('input');
+        stepInput.type = 'number';
+        stepInput.className = 'range-step';
+        stepInput.id = `opt-${paramId}-step`;
+        stepInput.name = `${paramId}-step`;
+        stepInput.min = paramDef.type === 'int' ? 1 : 0.0001;
+        stepInput.step = defaultStep;
+        stepInput.value = Math.abs(stepValue) || defaultStep;
+
+        const updateState = () => {
+          const disabled = !checkbox.checked;
+          [fromInput, toInput, stepInput].forEach((input) => {
+            input.disabled = disabled;
+          });
+        };
+
+        checkbox.addEventListener('change', () => {
+          updateState();
+          calculateTotalCombinations();
+        });
+
+        [fromInput, toInput, stepInput].forEach((input) => {
+          input.addEventListener('input', calculateTotalCombinations);
+        });
+
+        updateState();
+
+        inputsWrapper.appendChild(document.createTextNode('From:'));
+        inputsWrapper.appendChild(fromInput);
+        inputsWrapper.appendChild(document.createTextNode('To:'));
+        inputsWrapper.appendChild(toInput);
+        inputsWrapper.appendChild(document.createTextNode('Step:'));
+        inputsWrapper.appendChild(stepInput);
+
+        wrapper.appendChild(checkbox);
+        wrapper.appendChild(label);
+        wrapper.appendChild(inputsWrapper);
+
+        return wrapper;
+      }
+
+      function collectRangeState() {
+        const container = document.getElementById('optimizerDynamicRanges');
+        const ranges = {};
+        if (!container) {
+          return ranges;
+        }
+
+        container.querySelectorAll('.range-control').forEach((control) => {
+          const paramId = control.dataset.paramId;
+          const checkbox = control.querySelector('.range-checkbox');
+          const fromInput = control.querySelector('.range-from');
+          const toInput = control.querySelector('.range-to');
+          const stepInput = control.querySelector('.range-step');
+
+          ranges[paramId] = {
+            enabled: Boolean(checkbox && checkbox.checked),
+            from: Number(fromInput ? fromInput.value : 0),
+            to: Number(toInput ? toInput.value : 0),
+            step: Math.abs(Number(stepInput ? stepInput.value : 0)) || 0,
+            type: control.dataset.paramType || ''
+          };
+        });
+
+        return ranges;
+      }
+
+      function buildOptimizerRanges(strategy, savedState = null) {
+        const container = document.getElementById('optimizerDynamicRanges');
+        if (!container) {
+          return;
+        }
+
+        const previousState = savedState || collectRangeState();
+        container.innerHTML = '';
+
+        if (!strategy || !strategy.parameters) {
+          container.innerHTML = '<p style="color: #999; padding: 20px;">Параметры для этой стратегии недоступны.</p>';
+          return;
+        }
+
+        const optimizableParams = getOptimizableParameters(strategy.parameters);
+        if (!optimizableParams.length) {
+          container.innerHTML = '<p style="color: #999; padding: 20px;">Нет оптимизируемых параметров для этой стратегии.</p>';
+          return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        optimizableParams.forEach(([paramId, paramDef]) => {
+          const control = createRangeControl(paramId, paramDef, previousState[paramId]);
+          fragment.appendChild(control);
+        });
+
+        container.appendChild(fragment);
+      }
+
+      function collectOptimizerRanges() {
+        const rawRanges = collectRangeState();
+        const ranges = {};
+
+        Object.entries(rawRanges).forEach(([paramId, range]) => {
+          ranges[paramId] = {
+            ...range,
+            from: Number(range.from),
+            to: Number(range.to),
+            step: Math.abs(Number(range.step))
+          };
+        });
+
+        return ranges;
+      }
+
       /**
        * Handle backtester strategy change
        */
@@ -2201,9 +2182,19 @@
         console.log('Backtester strategy changed to:', strategyId);
       }
 
+      const rebuildOptimizerForms = debounce((strategy) => {
+        updateOptimizerParameterForm(strategy);
+      }, 120);
+
       function onOptimizerStrategyChange() {
         const strategyId = document.getElementById('optimizerStrategy')?.value;
         if (!strategyId) return;
+
+        const previousId = currentOptimizerStrategy?.strategy_id;
+        if (previousId) {
+          optimizerParamCache[previousId] = collectDynamicParameters('optimizerDynamicParams');
+          optimizerRangeCache[previousId] = collectRangeState();
+        }
 
         currentOptimizerStrategy = strategyMetadataCache[strategyId];
         if (!currentOptimizerStrategy) {
@@ -2217,7 +2208,7 @@
         document.getElementById('optimizerStrategyDesc').textContent = currentOptimizerStrategy.description;
         document.getElementById('optimizerStrategyInfo').style.display = 'block';
 
-        updateOptimizerParameterForm(currentOptimizerStrategy);
+        rebuildOptimizerForms(currentOptimizerStrategy);
 
         console.log('Optimizer strategy changed to:', strategyId);
       }
@@ -2276,8 +2267,11 @@
       }
 
       function updateOptimizerParameterForm(strategy) {
-        updateParameterVisibility('.optimizer-window .content', strategy);
-        updateFormFieldDefaults('optimizer', strategy);
+        const cachedParams = strategy ? optimizerParamCache[strategy.strategy_id] : null;
+        const cachedRanges = strategy ? optimizerRangeCache[strategy.strategy_id] : null;
+        buildParameterForm('optimizerDynamicParams', strategy, true, cachedParams || null);
+        buildOptimizerRanges(strategy, cachedRanges || null);
+        calculateTotalCombinations();
       }
 
       function updateFormFieldDefaults(formType, strategy) {
@@ -2351,6 +2345,29 @@
         });
 
         return mapped;
+      }
+
+      function collectOptimizerParameters() {
+        const params = collectDynamicParameters('optimizerDynamicParams');
+
+        params.dateFilter = document.getElementById('dateFilter').checked;
+        params.startDate = document.getElementById('startDate').value;
+        params.endDate = document.getElementById('endDate').value;
+
+        const backtesterCheckbox = document.getElementById('backtester');
+        if (backtesterCheckbox) {
+          params.useBacktester = backtesterCheckbox.checked;
+          params.backtester = backtesterCheckbox.checked;
+        }
+
+        const csvPathElement = document.getElementById('csvPath');
+        if (csvPathElement && csvPathElement.value) {
+          params.csvPath = csvPathElement.value;
+        } else if (selectedCsvPath) {
+          params.csvPath = selectedCsvPath;
+        }
+
+        return params;
       }
 
       function collectBacktesterParameters() {
@@ -2827,179 +2844,6 @@
         });
       }
 
-      const OPTIMIZATION_PARAMETERS = [
-        {
-          frontendKey: 'maLength',
-          checkboxId: 'opt-maLength',
-          fromId: 'opt-maLength-from',
-          toId: 'opt-maLength-to',
-          stepId: 'opt-maLength-step',
-          sourceId: 'maLength',
-          type: 'int'
-        },
-        {
-          frontendKey: 'closeCountLong',
-          checkboxId: 'opt-closeCountLong',
-          fromId: 'opt-closeCountLong-from',
-          toId: 'opt-closeCountLong-to',
-          stepId: 'opt-closeCountLong-step',
-          sourceId: 'closeCountLong',
-          type: 'int'
-        },
-        {
-          frontendKey: 'closeCountShort',
-          checkboxId: 'opt-closeCountShort',
-          fromId: 'opt-closeCountShort-from',
-          toId: 'opt-closeCountShort-to',
-          stepId: 'opt-closeCountShort-step',
-          sourceId: 'closeCountShort',
-          type: 'int'
-        },
-        {
-          frontendKey: 'stopLongX',
-          checkboxId: 'opt-stopLongX',
-          fromId: 'opt-stopLongX-from',
-          toId: 'opt-stopLongX-to',
-          stepId: 'opt-stopLongX-step',
-          sourceId: 'stopLongX',
-          type: 'float'
-        },
-        {
-          frontendKey: 'stopLongRR',
-          checkboxId: 'opt-stopLongRR',
-          fromId: 'opt-stopLongRR-from',
-          toId: 'opt-stopLongRR-to',
-          stepId: 'opt-stopLongRR-step',
-          sourceId: 'stopLongRR',
-          type: 'float'
-        },
-        {
-          frontendKey: 'stopLongLP',
-          checkboxId: 'opt-stopLongLP',
-          fromId: 'opt-stopLongLP-from',
-          toId: 'opt-stopLongLP-to',
-          stepId: 'opt-stopLongLP-step',
-          sourceId: 'stopLongLP',
-          type: 'int'
-        },
-        {
-          frontendKey: 'stopShortX',
-          checkboxId: 'opt-stopShortX',
-          fromId: 'opt-stopShortX-from',
-          toId: 'opt-stopShortX-to',
-          stepId: 'opt-stopShortX-step',
-          sourceId: 'stopShortX',
-          type: 'float'
-        },
-        {
-          frontendKey: 'stopShortRR',
-          checkboxId: 'opt-stopShortRR',
-          fromId: 'opt-stopShortRR-from',
-          toId: 'opt-stopShortRR-to',
-          stepId: 'opt-stopShortRR-step',
-          sourceId: 'stopShortRR',
-          type: 'float'
-        },
-        {
-          frontendKey: 'stopShortLP',
-          checkboxId: 'opt-stopShortLP',
-          fromId: 'opt-stopShortLP-from',
-          toId: 'opt-stopShortLP-to',
-          stepId: 'opt-stopShortLP-step',
-          sourceId: 'stopShortLP',
-          type: 'int'
-        },
-        {
-          frontendKey: 'stopLongMaxPct',
-          checkboxId: 'opt-stopLongMaxPct',
-          fromId: 'opt-stopLongMaxPct-from',
-          toId: 'opt-stopLongMaxPct-to',
-          stepId: 'opt-stopLongMaxPct-step',
-          sourceId: 'stopLongMaxPct',
-          type: 'float'
-        },
-        {
-          frontendKey: 'stopShortMaxPct',
-          checkboxId: 'opt-stopShortMaxPct',
-          fromId: 'opt-stopShortMaxPct-from',
-          toId: 'opt-stopShortMaxPct-to',
-          stepId: 'opt-stopShortMaxPct-step',
-          sourceId: 'stopShortMaxPct',
-          type: 'float'
-        },
-        {
-          frontendKey: 'stopLongMaxDays',
-          checkboxId: 'opt-stopLongMaxDays',
-          fromId: 'opt-stopLongMaxDays-from',
-          toId: 'opt-stopLongMaxDays-to',
-          stepId: 'opt-stopLongMaxDays-step',
-          sourceId: 'stopLongMaxDays',
-          type: 'int'
-        },
-        {
-          frontendKey: 'stopShortMaxDays',
-          checkboxId: 'opt-stopShortMaxDays',
-          fromId: 'opt-stopShortMaxDays-from',
-          toId: 'opt-stopShortMaxDays-to',
-          stepId: 'opt-stopShortMaxDays-step',
-          sourceId: 'stopShortMaxDays',
-          type: 'int'
-        },
-        {
-          frontendKey: 'trailRRLong',
-          checkboxId: 'opt-trailRRLong',
-          fromId: 'opt-trailRRLong-from',
-          toId: 'opt-trailRRLong-to',
-          stepId: 'opt-trailRRLong-step',
-          sourceId: 'trailRRLong',
-          type: 'float'
-        },
-        {
-          frontendKey: 'trailRRShort',
-          checkboxId: 'opt-trailRRShort',
-          fromId: 'opt-trailRRShort-from',
-          toId: 'opt-trailRRShort-to',
-          stepId: 'opt-trailRRShort-step',
-          sourceId: 'trailRRShort',
-          type: 'float'
-        },
-        {
-          frontendKey: 'trailLongLength',
-          checkboxId: 'opt-trailLongLength',
-          fromId: 'opt-trailLongLength-from',
-          toId: 'opt-trailLongLength-to',
-          stepId: 'opt-trailLongLength-step',
-          sourceId: 'trailLongLength',
-          type: 'int'
-        },
-        {
-          frontendKey: 'trailLongOffset',
-          checkboxId: 'opt-trailLongOffset',
-          fromId: 'opt-trailLongOffset-from',
-          toId: 'opt-trailLongOffset-to',
-          stepId: 'opt-trailLongOffset-step',
-          sourceId: 'trailLongOffset',
-          type: 'float'
-        },
-        {
-          frontendKey: 'trailShortLength',
-          checkboxId: 'opt-trailShortLength',
-          fromId: 'opt-trailShortLength-from',
-          toId: 'opt-trailShortLength-to',
-          stepId: 'opt-trailShortLength-step',
-          sourceId: 'trailShortLength',
-          type: 'int'
-        },
-        {
-          frontendKey: 'trailShortOffset',
-          checkboxId: 'opt-trailShortOffset',
-          fromId: 'opt-trailShortOffset-from',
-          toId: 'opt-trailShortOffset-to',
-          stepId: 'opt-trailShortOffset-step',
-          sourceId: 'trailShortOffset',
-          type: 'float'
-        }
-      ];
 
       function setCheckboxGroup(group, selectedTypes) {
         const allCheckbox = document.querySelector(`input[data-group="${group}"][data-type="ALL"]`);
@@ -3144,8 +2988,12 @@
           }
         }
 
-        const dynamicContainer = document.getElementById('backtesterDynamicParams');
-        if (dynamicContainer) {
+        ['backtesterDynamicParams', 'optimizerDynamicParams'].forEach((containerId) => {
+          const dynamicContainer = document.getElementById(containerId);
+          if (!dynamicContainer) {
+            return;
+          }
+
           Object.entries(values).forEach(([key, value]) => {
             const input =
               dynamicContainer.querySelector(`[name="${key}"]`) ||
@@ -3159,7 +3007,7 @@
               input.value = value ?? '';
             }
           });
-        }
+        });
 
         if (Object.prototype.hasOwnProperty.call(values, 'trendMATypes') && Array.isArray(values.trendMATypes)) {
           setCheckboxGroup('trend', values.trendMATypes);
@@ -3623,7 +3471,7 @@
         return `${date}T${normalizedTime}`;
       }
 
-      function gatherFormState(strategyOverride = null) {
+      function gatherFormState(strategyOverride = null, mode = 'backtester') {
         const start = composeDateTime(
           document.getElementById('startDate').value,
           document.getElementById('startTime').value
@@ -3642,7 +3490,9 @@
         const strategyId = selectedStrategy?.strategy_id || 's01_trailing_ma';
         const strategy = selectedStrategy || strategyMetadataCache[strategyId];
 
-        const baseParams = collectBacktesterParameters();
+        const baseParams = mode === 'optimizer'
+          ? collectOptimizerParameters()
+          : collectBacktesterParameters();
         baseParams.startDate = document.getElementById('startDate').value;
         baseParams.endDate = document.getElementById('endDate').value;
 
@@ -3899,66 +3749,63 @@
       }
 
       function calculateTotalCombinations() {
+        const strategyId = currentOptimizerStrategy?.strategy_id
+          || document.getElementById('optimizerStrategy')?.value
+          || 's01_trailing_ma';
+        const strategy = currentOptimizerStrategy || strategyMetadataCache[strategyId];
+
         let total = 1;
         let valid = true;
+        const ranges = collectOptimizerRanges();
 
-        OPTIMIZATION_PARAMETERS.forEach((param) => {
-          const checkbox = document.getElementById(param.checkboxId);
-          const fromInput = document.getElementById(param.fromId);
-          const toInput = document.getElementById(param.toId);
-          const stepInput = document.getElementById(param.stepId);
-
-          if (!checkbox || !fromInput || !toInput || !stepInput) {
+        Object.values(ranges).forEach((range) => {
+          if (!range.enabled) {
             return;
           }
-
-          if (checkbox.checked) {
-            const from = Number(fromInput.value);
-            const to = Number(toInput.value);
-            const step = Number(stepInput.value);
-            const count = getRangeCount(from, to, step);
-            if (count <= 0) {
-              valid = false;
-            } else {
-              total *= count;
-            }
+          const count = getRangeCount(range.from, range.to, range.step);
+          if (count <= 0) {
+            valid = false;
+          } else {
+            total *= count;
           }
         });
 
-        let trendTypes = collectSelectedTypes('trend');
-        let trailLongTypes = collectSelectedTypes('trailLong');
-        let trailShortTypes = collectSelectedTypes('trailShort');
+        if (strategyId !== 's03_reversal') {
+          let trendTypes = collectSelectedTypes('trend');
+          let trailLongTypes = collectSelectedTypes('trailLong');
+          let trailShortTypes = collectSelectedTypes('trailShort');
 
-        const baseParams = collectBacktesterParameters();
-        if (!trendTypes.length && baseParams.maType) {
-          trendTypes = [baseParams.maType];
-        }
-        if (!trailLongTypes.length && baseParams.trailMaLongType) {
-          trailLongTypes = [baseParams.trailMaLongType];
-        }
-        if (!trailShortTypes.length && baseParams.trailMaShortType) {
-          trailShortTypes = [baseParams.trailMaShortType];
-        }
+          const baseParams = collectOptimizerParameters();
+          if (!trendTypes.length && baseParams.maType) {
+            trendTypes = [baseParams.maType];
+          }
+          if (!trailLongTypes.length && baseParams.trailMaLongType) {
+            trailLongTypes = [baseParams.trailMaLongType];
+          }
+          if (!trailShortTypes.length && baseParams.trailMaShortType) {
+            trailShortTypes = [baseParams.trailMaShortType];
+          }
 
-        const lock = Object.prototype.hasOwnProperty.call(baseParams, 'trailLock')
-          ? Boolean(baseParams.trailLock)
-          : Boolean(document.getElementById('trailLock')?.checked);
+          const lock = Object.prototype.hasOwnProperty.call(baseParams, 'trailLock')
+            ? Boolean(baseParams.trailLock)
+            : Boolean(document.getElementById('trailLock')?.checked);
 
-        let maCombos = 0;
-        if (lock) {
-          const shortSet = new Set(trailShortTypes.map((type) => type.toUpperCase()));
-          const intersection = trailLongTypes
-            .map((type) => type.toUpperCase())
-            .filter((type) => shortSet.has(type));
-          maCombos = trendTypes.length * intersection.length;
-        } else {
-          maCombos = trendTypes.length * trailLongTypes.length * trailShortTypes.length;
-        }
+          let maCombos = 0;
+          if (lock) {
+            const shortSet = new Set(trailShortTypes.map((type) => type.toUpperCase()));
+            const intersection = trailLongTypes
+              .map((type) => type.toUpperCase())
+              .filter((type) => shortSet.has(type));
+            maCombos = trendTypes.length * intersection.length;
+          } else {
+            maCombos = trendTypes.length * trailLongTypes.length * trailShortTypes.length;
+          }
 
-        if (maCombos === 0) {
-          valid = false;
-        } else {
-          total *= maCombos;
+          if (maCombos === 0) {
+            valid = false;
+          } else {
+            total *= maCombos;
+          }
         }
 
         if (!valid || !Number.isFinite(total)) {
@@ -3979,11 +3826,46 @@
         const enabledParams = {};
         const paramRanges = {};
         const fixedParams = {
-          dateFilter: state.payload.dateFilter,
-          backtester: state.payload.backtester,
+          dateFilter: Boolean(state.payload.dateFilter),
+          backtester: Boolean(state.payload.backtester),
           start: state.start,
           end: state.end
         };
+
+        const rangeState = collectOptimizerRanges();
+        Object.entries(rangeState).forEach(([paramId, range]) => {
+          const mapped = mapParametersForStrategy({ [paramId]: true }, strategy);
+          const targetKey = Object.keys(mapped)[0] || paramId;
+
+          enabledParams[targetKey] = Boolean(range.enabled);
+          if (range.enabled) {
+            paramRanges[targetKey] = [
+              Number(range.from),
+              Number(range.to),
+              Math.abs(Number(range.step)) || 0
+            ];
+          } else if (Object.prototype.hasOwnProperty.call(state.payload, paramId)) {
+            const baseValue = state.payload[paramId];
+            const paramDef = strategy.parameters?.[paramId];
+            const normalized = paramDef?.type === 'int'
+              ? Math.round(Number(baseValue))
+              : Number(baseValue);
+            fixedParams[targetKey] = Number.isFinite(normalized) ? normalized : baseValue;
+          }
+        });
+
+        Object.entries(state.payload).forEach(([key, value]) => {
+          const mapped = mapParametersForStrategy({ [key]: value }, strategy);
+          const targetKey = Object.keys(mapped)[0] || key;
+          if (
+            Object.prototype.hasOwnProperty.call(fixedParams, targetKey) ||
+            Object.prototype.hasOwnProperty.call(paramRanges, targetKey) ||
+            Object.prototype.hasOwnProperty.call(enabledParams, targetKey)
+          ) {
+            return;
+          }
+          fixedParams[targetKey] = mapped[targetKey];
+        });
 
         const { checkbox: minProfitCheckbox, input: minProfitInput } = getMinProfitElements();
         const filterEnabled = Boolean(minProfitCheckbox && minProfitCheckbox.checked);
@@ -3995,50 +3877,17 @@
           }
         }
 
-        OPTIMIZATION_PARAMETERS.forEach((param) => {
-          const checkbox = document.getElementById(param.checkboxId);
-          const fromInput = document.getElementById(param.fromId);
-          const toInput = document.getElementById(param.toId);
-          const stepInput = document.getElementById(param.stepId);
-          const sourceInput = document.getElementById(param.sourceId);
-
-          if (!checkbox || !fromInput || !toInput || !stepInput || !sourceInput) {
-            return;
-          }
-
-          enabledParams[param.frontendKey] = checkbox.checked;
-          if (checkbox.checked) {
-            paramRanges[param.frontendKey] = [
-              Number(fromInput.value),
-              Number(toInput.value),
-              Math.abs(Number(stepInput.value))
-            ];
-          } else {
-            const baseValueRaw = Number(sourceInput.value);
-            const baseValue = Number.isFinite(baseValueRaw) ? baseValueRaw : 0;
-            fixedParams[param.frontendKey] = param.type === 'int'
-              ? Math.round(baseValue)
-              : baseValue;
-          }
-        });
-
         const workerProcesses = getWorkerProcessesValue();
 
-        const riskInput = document.getElementById('riskPerTrade');
-        const contractInput = document.getElementById('contractSize');
-        const riskValue = Number.isFinite(Number(riskInput?.value))
-          ? Number(riskInput.value)
-          : Number(state?.payload?.riskPerTradePct ?? state?.payload?.equityPct ?? 0);
-        const contractValue = Number.isFinite(Number(contractInput?.value))
-          ? Number(contractInput.value)
-          : Number(state?.payload?.contractSize ?? 0);
+        const riskValue = Number(state?.payload?.riskPerTradePct ?? state?.payload?.equityPct ?? 0);
+        const contractValue = Number(state?.payload?.contractSize ?? 0);
         const commissionValue = Number(state?.payload?.commissionRate ?? 0.0005);
         const atrValue = Number(state?.payload?.atrPeriod ?? 14);
 
-        return {
+        const config = {
           enabled_params: enabledParams,
           param_ranges: paramRanges,
-          fixed_params: fixedParams,
+          fixed_params: mapParametersForStrategy(fixedParams, strategy),
           ma_types_trend: state.trendTypes,
           ma_types_trail_long: state.trailLongTypes,
           ma_types_trail_short: state.trailShortTypes,
@@ -4051,35 +3900,11 @@
           filter_min_profit: filterEnabled,
           min_profit_threshold: minProfitThreshold,
           score_config: collectScoreConfig(),
-          optimization_mode: 'grid'
+          optimization_mode: 'grid',
+          strategy_id: strategyId
         };
 
-        const mapKey = (key) => {
-          const mapped = mapParametersForStrategy({ [key]: true }, strategy);
-          return Object.keys(mapped)[0] || key;
-        };
-
-        const mappedEnabledParams = {};
-        Object.entries(config.enabled_params).forEach(([key, value]) => {
-          const mappedKey = mapKey(key);
-          mappedEnabledParams[mappedKey] = value;
-        });
-
-        const mappedParamRanges = {};
-        Object.entries(config.param_ranges).forEach(([key, value]) => {
-          const mappedKey = mapKey(key);
-          mappedParamRanges[mappedKey] = value;
-        });
-
-        const mappedFixedParams = mapParametersForStrategy(config.fixed_params, strategy);
-
-        return {
-          ...config,
-          strategy_id: strategyId,
-          enabled_params: mappedEnabledParams,
-          param_ranges: mappedParamRanges,
-          fixed_params: mappedFixedParams
-        };
+        return config;
       }
 
       function buildOptunaConfig(state) {
@@ -4382,7 +4207,7 @@
         }
 
         const isOptunaMode = Boolean(optMethodOptuna && optMethodOptuna.checked);
-        const state = gatherFormState(currentOptimizerStrategy);
+        const state = gatherFormState(currentOptimizerStrategy, 'optimizer');
         const strategyId = state.strategyId || 's01_trailing_ma';
 
         const wfEnabled = Boolean(document.getElementById('enableWF')?.checked);
@@ -4657,25 +4482,37 @@
       }
 
       function bindOptimizerInputs() {
-        OPTIMIZATION_PARAMETERS.forEach((param) => {
-          const checkbox = document.getElementById(param.checkboxId);
-          const fromInput = document.getElementById(param.fromId);
-          const toInput = document.getElementById(param.toId);
-          const stepInput = document.getElementById(param.stepId);
-
-          if (checkbox) {
-            checkbox.addEventListener('change', calculateTotalCombinations);
-          }
-          [fromInput, toInput, stepInput].forEach((input) => {
-            if (input) {
-              input.addEventListener('input', calculateTotalCombinations);
-            }
-          });
-        });
-
         const workerInput = document.getElementById('workerProcesses');
         if (workerInput) {
           workerInput.addEventListener('input', calculateTotalCombinations);
+        }
+
+        const optimizerParamsContainer = document.getElementById('optimizerDynamicParams');
+        if (optimizerParamsContainer) {
+          optimizerParamsContainer.addEventListener('change', (event) => {
+            if (event.target.closest('.param-row')) {
+              calculateTotalCombinations();
+            }
+          });
+          optimizerParamsContainer.addEventListener('input', (event) => {
+            if (event.target.closest('.param-row')) {
+              calculateTotalCombinations();
+            }
+          });
+        }
+
+        const rangeContainer = document.getElementById('optimizerDynamicRanges');
+        if (rangeContainer) {
+          rangeContainer.addEventListener('input', (event) => {
+            if (event.target.closest('.range-control')) {
+              calculateTotalCombinations();
+            }
+          });
+          rangeContainer.addEventListener('change', (event) => {
+            if (event.target.closest('.range-control')) {
+              calculateTotalCombinations();
+            }
+          });
         }
 
         const dateInputs = ['startDate', 'startTime', 'endDate', 'endTime'];
