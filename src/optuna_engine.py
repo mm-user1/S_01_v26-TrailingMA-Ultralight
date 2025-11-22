@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import multiprocessing as mp
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional
 
 import optuna
@@ -165,11 +165,13 @@ class OptunaOptimizer:
             df, self.base_config, cache_requirements
         )
 
+        worker_config = replace(self.base_config, csv_file=None)
+
         pool_args = (
             df_prepared,
             cache_requirements,
-            self.strategy_class,
-            self.base_config,
+            self.strategy_class.STRATEGY_ID,
+            worker_config,
             trade_start_idx,
         )
 
@@ -315,6 +317,13 @@ class OptunaOptimizer:
         self.pruned_trials = 0
 
         df = load_data(self.base_config.csv_file)
+        if hasattr(self.base_config.csv_file, "close") and not getattr(
+            self.base_config.csv_file, "closed", True
+        ):
+            try:
+                self.base_config.csv_file.close()
+            except Exception:
+                logger.debug("Failed to close csv_file handle after load_data")
         search_space = self._build_search_space()
         self._setup_worker_pool(df)
 

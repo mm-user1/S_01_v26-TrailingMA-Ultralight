@@ -7,7 +7,7 @@ import itertools
 import logging
 import math
 import multiprocessing as mp
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import IO, Any, Dict, List, Optional, Tuple
 
@@ -281,7 +281,7 @@ def _prepare_dataset_for_optimization(
 def _init_worker(
     df: pd.DataFrame,
     cache_requirements: Dict[str, Any],
-    strategy_class: type,
+    strategy_id: str,
     config: OptimizationConfig,
     trade_start_idx: int,
 ) -> None:
@@ -291,11 +291,11 @@ def _init_worker(
 
     _df = df
     _cached_data = {}
-    _strategy_class = strategy_class
+    _strategy_class = StrategyRegistry.get_strategy_class(strategy_id)
     _config = config
     _trade_start_idx = int(trade_start_idx)
 
-    logger.info(f"Initializing worker for {strategy_class.STRATEGY_ID}")
+    logger.info(f"Initializing worker for {_strategy_class.STRATEGY_ID}")
 
     if not cache_requirements:
         return
@@ -516,6 +516,11 @@ def run_grid_optimization(config: OptimizationConfig) -> List[OptimizationResult
             config.fixed_params[name] = definition.get("default")
 
     df = load_data(config.csv_file)
+    if hasattr(config.csv_file, "close") and not getattr(config.csv_file, "closed", True):
+        try:
+            config.csv_file.close()
+        except Exception:
+            logger.debug("Failed to close csv_file handle after load_data")
     combinations = generate_parameter_grid(config, param_definitions)
     total = len(combinations)
     if total == 0:
@@ -526,12 +531,14 @@ def run_grid_optimization(config: OptimizationConfig) -> List[OptimizationResult
         df, config, cache_requirements
     )
 
+    worker_config = replace(config, csv_file=None)
+
     results: List[OptimizationResult] = []
     pool_args = (
         df_prepared,
         cache_requirements,
-        strategy_class,
-        config,
+        strategy_class.STRATEGY_ID,
+        worker_config,
         trade_start_idx,
     )
     processes = min(32, max(1, int(config.worker_processes)))

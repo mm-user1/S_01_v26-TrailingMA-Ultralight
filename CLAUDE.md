@@ -134,6 +134,27 @@ Users can adjust weights per their risk preferences. All 6 metrics are written t
 - `DELETE /api/presets/<name>` → Delete preset
 - `POST /api/presets/import-csv` → Import parameters from optimization result CSV
 
+## Multi-Strategy Support
+
+The web UI supports multiple trading strategies:
+
+1. **S_01 TrailingMA v26 Ultralight** — Trend-following strategy
+2. **S_03 Reversal v07 Light** — Counter-trend reversal strategy
+
+### Selecting a Strategy
+
+1. Open the web UI at http://localhost:8000
+2. In the Backtester or Optimizer panel, select a strategy from the dropdown
+3. Strategy metadata (name, type, description) appears in the info panel
+4. Parameters and requests are routed using the selected `strategy_id`
+
+### Adding New Strategies
+
+1. Create a new strategy class inheriting from `BaseStrategy`
+2. Implement required methods (`should_long`, `should_short`, `calculate_entry`, etc.)
+3. Call `StrategyRegistry.register_strategy()` in `src/strategies/__init__.py`
+4. The strategy will automatically appear in the web UI dropdown via `/api/strategies`
+
 ## Key Design Constraints
 
 From `agents.md`, critical development guidelines:
