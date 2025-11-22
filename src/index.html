@@ -406,6 +406,110 @@
       cursor: pointer;
     }
 
+    /* ========================================
+       Dynamic Parameter Forms
+       ======================================== */
+
+    .dynamic-params-container {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 12px 0;
+    }
+
+    .param-section {
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 16px;
+      background: #fafafa;
+    }
+
+    .param-section-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #4a90e2;
+    }
+
+    .param-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .param-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .param-label {
+      flex: 0 0 180px;
+      font-size: 13px;
+      color: #2a2a2a;
+      font-weight: 500;
+    }
+
+    .param-input {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .param-input input[type="number"],
+    .param-input input[type="text"],
+    .param-input select {
+      width: 100%;
+      padding: 6px 10px;
+      font-size: 13px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      background: white;
+      color: #2a2a2a;
+    }
+
+    .param-input input[type="number"]:focus,
+    .param-input input[type="text"]:focus,
+    .param-input select:focus {
+      outline: none;
+      border-color: #4a90e2;
+      box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2);
+    }
+
+    .param-input input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+
+    .param-description {
+      font-size: 11px;
+      color: #666;
+      font-style: italic;
+      margin-top: 4px;
+    }
+
+    /* Parameter Grouping Colors */
+    .param-group-common {
+      background: #f0f7ff;
+    }
+
+    .param-group-ma {
+      background: #fff8f0;
+    }
+
+    .param-group-entry {
+      background: #f0fff4;
+    }
+
+    .param-group-exit {
+      background: #fff0f6;
+    }
+
+    .param-group-risk {
+      background: #f5f0ff;
+    }
+
     .results-area {
       background: #e8e8e8;
       border: 1px solid #999999;
@@ -963,283 +1067,21 @@
                     </div>
 
                     <button type="button" class="secondary" id="resetScoreBtn" style="margin-top: 10px;">Reset to Defaults</button>
-                  </div>
                 </div>
               </div>
+            </div>
 
-              <div class="section">
-                <div class="form-group with-ma">
-                  <label>T MA Type</label>
-                  <div class="ma-selector" data-group="trend">
-                    <div class="ma-row">
-                      <div class="ma-option">
-                        <input type="checkbox" id="trend-all" data-group="trend" data-type="ALL" />
-                        <label for="trend-all">ALL</label>
-                      </div>
-                      <div class="ma-option">
-                        <input type="checkbox" id="trend-ema" data-group="trend" data-type="EMA" />
-                        <label for="trend-ema">EMA</label>
-                      </div>
-                      <div class="ma-option">
-                        <input type="checkbox" id="trend-sma" data-group="trend" data-type="SMA" />
-                        <label for="trend-sma">SMA</label>
-                      </div>
-                      <div class="ma-option">
-                        <input type="checkbox" id="trend-hma" data-group="trend" data-type="HMA" />
-                        <label for="trend-hma">HMA</label>
-                      </div>
-                      <div class="ma-option">
-                        <input type="checkbox" id="trend-wma" data-group="trend" data-type="WMA" />
-                        <label for="trend-wma">WMA</label>
-                      </div>
-                      <div class="ma-option">
-                        <input type="checkbox" id="trend-alma" data-group="trend" data-type="ALMA" />
-                        <label for="trend-alma">ALMA</label>
-                      </div>
-                    </div>
-                    <div class="ma-row">
-                      <div class="ma-option">
-                        <input type="checkbox" id="trend-kama" data-group="trend" data-type="KAMA" />
-                        <label for="trend-kama">KAMA</label>
-                      </div>
-                      <div class="ma-option">
-                        <input type="checkbox" id="trend-tma" data-group="trend" data-type="TMA" />
-                        <label for="trend-tma">TMA</label>
-                      </div>
-                      <div class="ma-option">
-                        <input type="checkbox" id="trend-t3" data-group="trend" data-type="T3" />
-                        <label for="trend-t3">T3</label>
-                      </div>
-                      <div class="ma-option">
-                        <input type="checkbox" id="trend-dema" data-group="trend" data-type="DEMA" />
-                        <label for="trend-dema">DEMA</label>
-                      </div>
-                      <div class="ma-option">
-                        <input type="checkbox" id="trend-vwma" data-group="trend" data-type="VWMA" />
-                        <label for="trend-vwma">VWMA</label>
-                      </div>
-                      <div class="ma-option">
-                        <input type="checkbox" id="trend-vwap" data-group="trend" data-type="VWAP" />
-                        <label for="trend-vwap">VWAP</label>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+            <!-- Dynamic Parameter Container for Backtester -->
+            <div id="backtesterDynamicParams" class="dynamic-params-container">
+              <!-- Параметры будут генерироваться здесь динамически -->
+              <p style="color: #999; padding: 20px;">Выберите стратегию для отображения параметров.</p>
+            </div>
 
-                <div class="form-group">
-                  <label for="maLength">Length</label>
-                  <input type="number" id="maLength" min="0" />
-                </div>
-
-                <div class="form-group">
-                  <label for="closeCountLong">Close Count Long</label>
-                  <input type="number" id="closeCountLong" min="0" />
-                  <label for="closeCountShort">Close Count Short</label>
-                  <input type="number" id="closeCountShort" min="0" />
-                </div>
-              </div>
-
-              <div class="collapsible open">
-                <div class="collapsible-header">
-                  <span class="collapsible-icon">▼</span>
-                  <span class="section-title" style="margin: 0; border: none;">STOPS AND FILTERS</span>
-                </div>
-                <div class="collapsible-content">
-                  <div class="param-group">
-                    <label for="stopLongX">Stop Long X</label>
-                    <input type="number" id="stopLongX" step="0.1" min="0" />
-                    <label for="stopLongRR">RR</label>
-                    <input type="number" id="stopLongRR" step="0.1" min="0" />
-                    <label for="stopLongLP">LP</label>
-                    <input type="number" id="stopLongLP" min="1" />
-                  </div>
-
-                  <div class="param-group">
-                    <label for="stopShortX">Stop Short X</label>
-                    <input type="number" id="stopShortX" step="0.1" min="0" />
-                    <label for="stopShortRR">RR</label>
-                    <input type="number" id="stopShortRR" step="0.1" min="0" />
-                    <label for="stopShortLP">LP</label>
-                    <input type="number" id="stopShortLP" min="1" />
-                  </div>
-
-                  <div class="param-group">
-                    <label for="stopLongMaxPct">L Stop Max %</label>
-                    <input type="number" id="stopLongMaxPct" step="0.1" min="0" />
-                    <label for="stopShortMaxPct">S Stop Max %</label>
-                    <input type="number" id="stopShortMaxPct" step="0.1" min="0" />
-                  </div>
-
-                  <div class="param-group">
-                    <label for="stopLongMaxDays">L Stop Max D</label>
-                    <input type="number" id="stopLongMaxDays" min="0" />
-                    <label for="stopShortMaxDays">S Stop Max D</label>
-                    <input type="number" id="stopShortMaxDays" min="0" />
-                  </div>
-                </div>
-              </div>
-
-              <div class="collapsible open">
-                <div class="collapsible-header">
-                  <span class="collapsible-icon">▼</span>
-                  <span class="section-title" style="margin: 0; border: none;">TRAILING STOPS</span>
-                </div>
-                <div class="collapsible-content">
-                  <div class="param-group">
-                    <label for="trailRRLong">Trail RR Long</label>
-                    <input type="number" id="trailRRLong" step="0.1" min="0" />
-                    <label for="trailRRShort">Trail RR Short</label>
-                    <input type="number" id="trailRRShort" step="0.1" min="0" />
-                  </div>
-
-                  <div class="param-group" style="flex-direction: column; align-items: flex-start;">
-                    <label>Trail MA Long</label>
-                    <div class="ma-selector" data-group="trailLong">
-                      <div class="ma-row">
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailLong-all" data-group="trailLong" data-type="ALL" />
-                          <label for="trailLong-all">ALL</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailLong-ema" data-group="trailLong" data-type="EMA" />
-                          <label for="trailLong-ema">EMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailLong-sma" data-group="trailLong" data-type="SMA" />
-                          <label for="trailLong-sma">SMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailLong-hma" data-group="trailLong" data-type="HMA" />
-                          <label for="trailLong-hma">HMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailLong-wma" data-group="trailLong" data-type="WMA" />
-                          <label for="trailLong-wma">WMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailLong-alma" data-group="trailLong" data-type="ALMA" />
-                          <label for="trailLong-alma">ALMA</label>
-                        </div>
-                      </div>
-                      <div class="ma-row">
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailLong-kama" data-group="trailLong" data-type="KAMA" />
-                          <label for="trailLong-kama">KAMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailLong-tma" data-group="trailLong" data-type="TMA" />
-                          <label for="trailLong-tma">TMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailLong-t3" data-group="trailLong" data-type="T3" />
-                          <label for="trailLong-t3">T3</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailLong-dema" data-group="trailLong" data-type="DEMA" />
-                          <label for="trailLong-dema">DEMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailLong-vwma" data-group="trailLong" data-type="VWMA" />
-                          <label for="trailLong-vwma">VWMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailLong-vwap" data-group="trailLong" data-type="VWAP" />
-                          <label for="trailLong-vwap">VWAP</label>
-                        </div>
-                      </div>
-                    </div>
-                    <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center;">
-                      <label for="trailLongLength">Length</label>
-                      <input type="number" id="trailLongLength" min="0" />
-                      <label for="trailLongOffset">Offset</label>
-                      <input type="number" id="trailLongOffset" step="0.1" />
-                      <label style="display: flex; align-items: center; gap: 4px;">
-                        <input type="checkbox" id="trailLock" />
-                        <span title="Pair Trail MA Long & Short by the same MA type during optimization">Lock</span>
-                      </label>
-                    </div>
-                  </div>
-
-                  <div class="param-group" style="flex-direction: column; align-items: flex-start;">
-                    <label>Trail MA Short</label>
-                    <div class="ma-selector" data-group="trailShort">
-                      <div class="ma-row">
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailShort-all" data-group="trailShort" data-type="ALL" />
-                          <label for="trailShort-all">ALL</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailShort-ema" data-group="trailShort" data-type="EMA" />
-                          <label for="trailShort-ema">EMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailShort-sma" data-group="trailShort" data-type="SMA" />
-                          <label for="trailShort-sma">SMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailShort-hma" data-group="trailShort" data-type="HMA" />
-                          <label for="trailShort-hma">HMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailShort-wma" data-group="trailShort" data-type="WMA" />
-                          <label for="trailShort-wma">WMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailShort-alma" data-group="trailShort" data-type="ALMA" />
-                          <label for="trailShort-alma">ALMA</label>
-                        </div>
-                      </div>
-                      <div class="ma-row">
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailShort-kama" data-group="trailShort" data-type="KAMA" />
-                          <label for="trailShort-kama">KAMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailShort-tma" data-group="trailShort" data-type="TMA" />
-                          <label for="trailShort-tma">TMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailShort-t3" data-group="trailShort" data-type="T3" />
-                          <label for="trailShort-t3">T3</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailShort-dema" data-group="trailShort" data-type="DEMA" />
-                          <label for="trailShort-dema">DEMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailShort-vwma" data-group="trailShort" data-type="VWMA" />
-                          <label for="trailShort-vwma">VWMA</label>
-                        </div>
-                        <div class="ma-option">
-                          <input type="checkbox" id="trailShort-vwap" data-group="trailShort" data-type="VWAP" />
-                          <label for="trailShort-vwap">VWAP</label>
-                        </div>
-                      </div>
-                    </div>
-                    <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center;">
-                      <label for="trailShortLength">Length</label>
-                      <input type="number" id="trailShortLength" min="0" />
-                      <label for="trailShortOffset">Offset</label>
-                      <input type="number" id="trailShortOffset" step="0.1" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="section">
-                <div class="form-group">
-                  <label for="riskPerTrade">Risk Per Trade</label>
-                  <input type="number" id="riskPerTrade" step="0.01" min="0" />
-                  <label for="contractSize">Contract Size</label>
-                  <input type="number" id="contractSize" step="0.01" min="0" />
-                </div>
-              </div>
-
-              <div class="section">
-                <div class="section-title">Results</div>
-                <div id="results" class="results-area">Нажмите «Run» для запуска бэктеста…</div>
-                <div id="error" class="error" role="alert" style="display:none;"></div>
-              </div>
+            <div class="section">
+              <div class="section-title">Results</div>
+              <div id="results" class="results-area">Нажмите «Run» для запуска бэктеста…</div>
+              <div id="error" class="error" role="alert" style="display:none;"></div>
+            </div>
 
               <div class="button-group">
                 <div class="preset-dropdown" id="presetDropdown">
@@ -2043,6 +1885,301 @@
         }
       }
 
+      // ========================================
+      // Dynamic Parameter Form Generation
+      // ========================================
+
+      const EXTERNAL_PARAM_IDS = new Set(['dateFilter', 'startDate', 'endDate', 'useBacktester']);
+
+      /**
+       * Categorize parameters into logical groups for better UI organization
+       * @param {Object} parameters - Strategy parameter definitions
+       * @returns {Object} Grouped parameters
+       */
+      function categorizeParameters(parameters) {
+        const groups = {
+          common: {
+            title: 'Основные настройки',
+            cssClass: 'param-group-common',
+            params: []
+          },
+          ma: {
+            title: 'Скользящие средние',
+            cssClass: 'param-group-ma',
+            params: []
+          },
+          entry: {
+            title: 'Условия входа',
+            cssClass: 'param-group-entry',
+            params: []
+          },
+          exit: {
+            title: 'Условия выхода',
+            cssClass: 'param-group-exit',
+            params: []
+          },
+          risk: {
+            title: 'Управление рисками',
+            cssClass: 'param-group-risk',
+            params: []
+          }
+        };
+
+        const categoryRules = {
+          common: ['dateFilter', 'useBacktester', 'startDate', 'endDate', 'contractSize', 'commissionRate'],
+          ma: [
+            'maType',
+            'maLength',
+            'maFastType',
+            'maFastLength',
+            'maSlowType',
+            'maSlowLength',
+            'maTrendType',
+            'maTrendLength',
+            'trailMaLongType',
+            'trailMaLongLength',
+            'trailMaLongOffset',
+            'trailMaShortType',
+            'trailMaShortLength',
+            'trailMaShortOffset'
+          ],
+          entry: ['closeCountLong', 'closeCountShort', 'breakoutMode', 'useClosePrice'],
+          exit: [
+            'stopLongAtr',
+            'stopLongRr',
+            'stopLongLp',
+            'stopLongMaxPct',
+            'stopLongMaxDays',
+            'stopShortAtr',
+            'stopShortRr',
+            'stopShortLp',
+            'stopShortMaxPct',
+            'stopShortMaxDays',
+            'trailRrLong',
+            'trailRrShort'
+          ],
+          risk: ['riskPerTradePct', 'equityPct', 'atrPeriod']
+        };
+
+        Object.entries(parameters).forEach(([paramId, paramDef]) => {
+          if (EXTERNAL_PARAM_IDS.has(paramId)) {
+            return;
+          }
+
+          let assigned = false;
+          for (const [category, keywords] of Object.entries(categoryRules)) {
+            if (keywords.includes(paramId)) {
+              groups[category].params.push({ id: paramId, ...paramDef });
+              assigned = true;
+              break;
+            }
+          }
+
+          if (!assigned) {
+            groups.common.params.push({ id: paramId, ...paramDef });
+          }
+        });
+
+        return Object.entries(groups)
+          .filter(([, group]) => group.params.length > 0)
+          .reduce((acc, [key, group]) => {
+            acc[key] = group;
+            return acc;
+          }, {});
+      }
+
+      /**
+       * Create input element for a parameter based on its type
+       * @param {string} paramId - Parameter identifier
+       * @param {Object} paramDef - Parameter definition
+       * @param {*} currentValue - Current value (null to use default)
+       * @returns {HTMLElement} Parameter row element
+       */
+      function createParameterInput(paramId, paramDef, currentValue = null) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'param-row';
+        wrapper.setAttribute('data-param-id', paramId);
+
+        const label = document.createElement('label');
+        label.className = 'param-label';
+        label.setAttribute('for', `param-${paramId}`);
+        label.textContent = paramDef.description || paramId;
+
+        const inputContainer = document.createElement('div');
+        inputContainer.className = 'param-input';
+
+        let input;
+
+        switch (paramDef.type) {
+          case 'int':
+          case 'float':
+            input = document.createElement('input');
+            input.type = 'number';
+            input.id = `param-${paramId}`;
+            input.name = paramId;
+            input.value = currentValue !== null ? currentValue : paramDef.default;
+
+            if (paramDef.min !== undefined) input.min = paramDef.min;
+            if (paramDef.max !== undefined) input.max = paramDef.max;
+            if (paramDef.step !== undefined) input.step = paramDef.step;
+
+            if (paramDef.type === 'float') {
+              input.step = input.step || 0.01;
+            } else {
+              input.step = input.step || 1;
+            }
+            break;
+
+          case 'bool':
+            input = document.createElement('input');
+            input.type = 'checkbox';
+            input.id = `param-${paramId}`;
+            input.name = paramId;
+            input.checked = currentValue !== null ? currentValue : paramDef.default;
+            break;
+
+          case 'str':
+            input = document.createElement('input');
+            input.type = 'text';
+            input.id = `param-${paramId}`;
+            input.name = paramId;
+            input.value = currentValue !== null ? currentValue : paramDef.default || '';
+            break;
+
+          case 'categorical':
+            input = document.createElement('select');
+            input.id = `param-${paramId}`;
+            input.name = paramId;
+
+            if (paramDef.choices && Array.isArray(paramDef.choices)) {
+              paramDef.choices.forEach((choice) => {
+                const option = document.createElement('option');
+                option.value = choice;
+                option.textContent = choice;
+                input.appendChild(option);
+              });
+
+              input.value = currentValue !== null ? currentValue : paramDef.default;
+            }
+            break;
+
+          default:
+            console.warn(`Unknown parameter type: ${paramDef.type} for ${paramId}`);
+            input = document.createElement('input');
+            input.type = 'text';
+            input.id = `param-${paramId}`;
+            input.name = paramId;
+            input.value = currentValue !== null ? currentValue : paramDef.default || '';
+        }
+
+        inputContainer.appendChild(input);
+
+        if (paramDef.description) {
+          const description = document.createElement('div');
+          description.className = 'param-description';
+          description.textContent = paramDef.description;
+          inputContainer.appendChild(description);
+        }
+
+        wrapper.appendChild(label);
+        wrapper.appendChild(inputContainer);
+
+        return wrapper;
+      }
+
+      /**
+       * Build complete parameter form for a strategy
+       * @param {string} containerId - ID контейнера для вставки формы
+       * @param {Object} strategy - Объект стратегии с parameters
+       * @param {boolean} preserveValues - Сохранять ли текущие значения
+       */
+      function buildParameterForm(containerId, strategy, preserveValues = true) {
+        const container = document.getElementById(containerId);
+        if (!container) {
+          console.error(`Container ${containerId} not found`);
+          return;
+        }
+
+        const currentValues = {};
+        if (preserveValues) {
+          container.querySelectorAll('input, select').forEach((input) => {
+            const paramId = input.name;
+            if (!paramId) return;
+
+            if (input.type === 'checkbox') {
+              currentValues[paramId] = input.checked;
+            } else if (input.type === 'number') {
+              currentValues[paramId] = parseFloat(input.value);
+            } else {
+              currentValues[paramId] = input.value;
+            }
+          });
+        }
+
+        container.innerHTML = '';
+
+        if (!strategy || !strategy.parameters) {
+          container.innerHTML = '<p style="color: #999; padding: 20px;">Параметры для этой стратегии недоступны.</p>';
+          return;
+        }
+
+        const groups = categorizeParameters(strategy.parameters);
+
+        Object.entries(groups).forEach(([, group]) => {
+          const section = document.createElement('div');
+          section.className = `param-section ${group.cssClass}`;
+
+          const title = document.createElement('div');
+          title.className = 'param-section-title';
+          title.textContent = group.title;
+          section.appendChild(title);
+
+          group.params.forEach((param) => {
+            const currentValue = currentValues[param.id] !== undefined ? currentValues[param.id] : null;
+            const inputElement = createParameterInput(param.id, param, currentValue);
+            section.appendChild(inputElement);
+          });
+
+          container.appendChild(section);
+        });
+
+        console.log(`Built parameter form for ${strategy.strategy_id} with ${Object.keys(strategy.parameters).length} parameters`);
+      }
+
+      /**
+       * Collect parameters from dynamic form
+       * @param {string} containerId - ID контейнера с динамической формой
+       * @returns {Object} Параметры
+       */
+      function collectDynamicParameters(containerId) {
+        const container = document.getElementById(containerId);
+        if (!container) {
+          console.error(`Container ${containerId} not found`);
+          return {};
+        }
+
+        const params = {};
+
+        container.querySelectorAll('input, select').forEach((input) => {
+          const paramId = input.name;
+          if (!paramId) return;
+
+          if (input.type === 'checkbox') {
+            params[paramId] = input.checked;
+          } else if (input.type === 'number') {
+            const value = parseFloat(input.value);
+            params[paramId] = Number.isFinite(value) ? value : 0;
+          } else {
+            params[paramId] = input.value;
+          }
+        });
+
+        return params;
+      }
+
+      /**
+       * Handle backtester strategy change
+       */
       function onBacktesterStrategyChange() {
         const strategyId = document.getElementById('backtesterStrategy')?.value;
         if (!strategyId) return;
@@ -2059,7 +2196,7 @@
         document.getElementById('backtesterStrategyDesc').textContent = currentBacktesterStrategy.description;
         document.getElementById('backtesterStrategyInfo').style.display = 'block';
 
-        updateBacktesterParameterForm(currentBacktesterStrategy);
+        buildParameterForm('backtesterDynamicParams', currentBacktesterStrategy, true);
 
         console.log('Backtester strategy changed to:', strategyId);
       }
@@ -2217,35 +2354,24 @@
       }
 
       function collectBacktesterParameters() {
-        const params = {
-          dateFilter: document.getElementById('dateFilter').checked,
-          backtester: document.getElementById('backtester').checked,
-          useBacktester: document.getElementById('backtester').checked,
-          startDate: document.getElementById('startDate').value,
-          endDate: document.getElementById('endDate').value,
-          maType: collectSelectedTypes('trend')[0],
-          maLength: document.getElementById('maLength').value,
-          closeCountLong: document.getElementById('closeCountLong').value,
-          closeCountShort: document.getElementById('closeCountShort').value,
-          stopLongX: document.getElementById('stopLongX').value,
-          stopLongRR: document.getElementById('stopLongRR').value,
-          stopLongLP: document.getElementById('stopLongLP').value,
-          stopShortX: document.getElementById('stopShortX').value,
-          stopShortRR: document.getElementById('stopShortRR').value,
-          stopShortLP: document.getElementById('stopShortLP').value,
-          stopLongMaxPct: document.getElementById('stopLongMaxPct').value,
-          stopShortMaxPct: document.getElementById('stopShortMaxPct').value,
-          stopLongMaxDays: document.getElementById('stopLongMaxDays').value,
-          stopShortMaxDays: document.getElementById('stopShortMaxDays').value,
-          trailRRLong: document.getElementById('trailRRLong').value,
-          trailRRShort: document.getElementById('trailRRShort').value,
-          trailLongLength: document.getElementById('trailLongLength').value,
-          trailLongOffset: document.getElementById('trailLongOffset').value,
-          trailShortLength: document.getElementById('trailShortLength').value,
-          trailShortOffset: document.getElementById('trailShortOffset').value,
-          riskPerTrade: document.getElementById('riskPerTrade').value,
-          contractSize: document.getElementById('contractSize').value
-        };
+        const params = collectDynamicParameters('backtesterDynamicParams');
+
+        params.dateFilter = document.getElementById('dateFilter').checked;
+        params.startDate = document.getElementById('startDate').value;
+        params.endDate = document.getElementById('endDate').value;
+
+        const backtesterCheckbox = document.getElementById('backtester');
+        if (backtesterCheckbox) {
+          params.useBacktester = backtesterCheckbox.checked;
+          params.backtester = backtesterCheckbox.checked;
+        }
+
+        const csvPathElement = document.getElementById('csvPath');
+        if (csvPathElement && csvPathElement.value) {
+          params.csvPath = csvPathElement.value;
+        } else if (selectedCsvPath) {
+          params.csvPath = selectedCsvPath;
+        }
 
         return params;
       }
@@ -2880,6 +3006,9 @@
         const checkboxes = Array.from(
           document.querySelectorAll(`input[data-group="${group}"]:not([data-type="ALL"])`)
         );
+        if (!allCheckbox || !checkboxes.length) {
+          return;
+        }
         const normalized = new Set(selectedTypes);
         const shouldSelectAll = MA_TYPES.every((type) => normalized.has(type));
         allCheckbox.checked = shouldSelectAll;
@@ -2893,6 +3022,9 @@
         const checkboxes = Array.from(
           document.querySelectorAll(`input[data-group="${group}"]:not([data-type="ALL"])`)
         );
+        if (!allCheckbox || !checkboxes.length) {
+          return [];
+        }
         if (allCheckbox.checked) {
           return [...MA_TYPES];
         }
@@ -2907,6 +3039,9 @@
         const checkboxes = Array.from(
           document.querySelectorAll(`input[data-group="${group}"]:not([data-type="ALL"])`)
         );
+        if (!allCheckbox || !checkboxes.length) {
+          return;
+        }
         const allChecked = checkboxes.every((checkbox) => checkbox.checked);
         allCheckbox.checked = allChecked;
       }
@@ -2917,6 +3052,10 @@
           const checkboxes = Array.from(
             document.querySelectorAll(`input[data-group="${group}"]:not([data-type="ALL"])`)
           );
+
+          if (!allCheckbox || !checkboxes.length) {
+            return;
+          }
 
           allCheckbox.addEventListener('change', () => {
             checkboxes.forEach((checkbox) => {
@@ -3003,6 +3142,23 @@
           if (workerInput) {
             workerInput.value = values.workerProcesses;
           }
+        }
+
+        const dynamicContainer = document.getElementById('backtesterDynamicParams');
+        if (dynamicContainer) {
+          Object.entries(values).forEach(([key, value]) => {
+            const input =
+              dynamicContainer.querySelector(`[name="${key}"]`) ||
+              document.getElementById(`param-${key}`);
+            if (!input) {
+              return;
+            }
+            if (input.type === 'checkbox') {
+              input.checked = Boolean(value);
+            } else {
+              input.value = value ?? '';
+            }
+          });
         }
 
         if (Object.prototype.hasOwnProperty.call(values, 'trendMATypes') && Array.isArray(values.trendMATypes)) {
@@ -3096,47 +3252,23 @@
       }
 
       function collectPresetValues() {
-        const trendTypes = collectSelectedTypes('trend');
-        const trailLongTypes = collectSelectedTypes('trailLong');
-        const trailShortTypes = collectSelectedTypes('trailShort');
+        const dynamicParams = collectDynamicParameters('backtesterDynamicParams');
         const { checkbox: minProfitCheckbox, input: minProfitInput } = getMinProfitElements();
         const workerInput = document.getElementById('workerProcesses');
         const csvPathValue = typeof selectedCsvPath === 'string' ? selectedCsvPath.trim() : '';
         const scoreState = readScoreUIState();
 
         return {
+          ...dynamicParams,
           dateFilter: document.getElementById('dateFilter').checked,
           backtester: document.getElementById('backtester').checked,
+          useBacktester: document.getElementById('backtester').checked,
           trailLock: Boolean(document.getElementById('trailLock')?.checked),
           startDate: document.getElementById('startDate').value.trim(),
           startTime: document.getElementById('startTime').value.trim(),
           endDate: document.getElementById('endDate').value.trim(),
           endTime: document.getElementById('endTime').value.trim(),
           csvPath: csvPathValue,
-          trendMATypes: trendTypes,
-          maLength: parseNumber(document.getElementById('maLength').value, defaults.maLength),
-          closeCountLong: parseNumber(document.getElementById('closeCountLong').value, defaults.closeCountLong),
-          closeCountShort: parseNumber(document.getElementById('closeCountShort').value, defaults.closeCountShort),
-          stopLongX: parseNumber(document.getElementById('stopLongX').value, defaults.stopLongX),
-          stopLongRR: parseNumber(document.getElementById('stopLongRR').value, defaults.stopLongRR),
-          stopLongLP: parseNumber(document.getElementById('stopLongLP').value, defaults.stopLongLP),
-          stopShortX: parseNumber(document.getElementById('stopShortX').value, defaults.stopShortX),
-          stopShortRR: parseNumber(document.getElementById('stopShortRR').value, defaults.stopShortRR),
-          stopShortLP: parseNumber(document.getElementById('stopShortLP').value, defaults.stopShortLP),
-          stopLongMaxPct: parseNumber(document.getElementById('stopLongMaxPct').value, defaults.stopLongMaxPct),
-          stopShortMaxPct: parseNumber(document.getElementById('stopShortMaxPct').value, defaults.stopShortMaxPct),
-          stopLongMaxDays: parseNumber(document.getElementById('stopLongMaxDays').value, defaults.stopLongMaxDays),
-          stopShortMaxDays: parseNumber(document.getElementById('stopShortMaxDays').value, defaults.stopShortMaxDays),
-          trailRRLong: parseNumber(document.getElementById('trailRRLong').value, defaults.trailRRLong),
-          trailRRShort: parseNumber(document.getElementById('trailRRShort').value, defaults.trailRRShort),
-          trailLongTypes,
-          trailLongLength: parseNumber(document.getElementById('trailLongLength').value, defaults.trailLongLength),
-          trailLongOffset: parseNumber(document.getElementById('trailLongOffset').value, defaults.trailLongOffset),
-          trailShortTypes,
-          trailShortLength: parseNumber(document.getElementById('trailShortLength').value, defaults.trailShortLength),
-          trailShortOffset: parseNumber(document.getElementById('trailShortOffset').value, defaults.trailShortOffset),
-          riskPerTrade: parseNumber(document.getElementById('riskPerTrade').value, defaults.riskPerTrade),
-          contractSize: parseNumber(document.getElementById('contractSize').value, defaults.contractSize),
           workerProcesses: workerInput
             ? parseNumber(workerInput.value, defaults.workerProcesses)
             : defaults.workerProcesses,
@@ -3510,14 +3642,20 @@
         const strategyId = selectedStrategy?.strategy_id || 's01_trailing_ma';
         const strategy = selectedStrategy || strategyMetadataCache[strategyId];
 
-        const trendTypes = collectSelectedTypes('trend');
-        const trailLongTypes = collectSelectedTypes('trailLong');
-        const trailShortTypes = collectSelectedTypes('trailShort');
-        const lockTrailTypes = Boolean(document.getElementById('trailLock')?.checked);
-
         const baseParams = collectBacktesterParameters();
         baseParams.startDate = document.getElementById('startDate').value;
         baseParams.endDate = document.getElementById('endDate').value;
+
+        const trendTypes = baseParams.maType ? [baseParams.maType] : collectSelectedTypes('trend');
+        const trailLongTypes = baseParams.trailMaLongType
+          ? [baseParams.trailMaLongType]
+          : collectSelectedTypes('trailLong');
+        const trailShortTypes = baseParams.trailMaShortType
+          ? [baseParams.trailMaShortType]
+          : collectSelectedTypes('trailShort');
+        const lockTrailTypes = Object.prototype.hasOwnProperty.call(baseParams, 'trailLock')
+          ? Boolean(baseParams.trailLock)
+          : Boolean(document.getElementById('trailLock')?.checked);
 
         const payload = mapParametersForStrategy(baseParams, strategy);
 
@@ -3787,10 +3925,24 @@
           }
         });
 
-        const trendTypes = collectSelectedTypes('trend');
-        const trailLongTypes = collectSelectedTypes('trailLong');
-        const trailShortTypes = collectSelectedTypes('trailShort');
-        const lock = Boolean(document.getElementById('trailLock')?.checked);
+        let trendTypes = collectSelectedTypes('trend');
+        let trailLongTypes = collectSelectedTypes('trailLong');
+        let trailShortTypes = collectSelectedTypes('trailShort');
+
+        const baseParams = collectBacktesterParameters();
+        if (!trendTypes.length && baseParams.maType) {
+          trendTypes = [baseParams.maType];
+        }
+        if (!trailLongTypes.length && baseParams.trailMaLongType) {
+          trailLongTypes = [baseParams.trailMaLongType];
+        }
+        if (!trailShortTypes.length && baseParams.trailMaShortType) {
+          trailShortTypes = [baseParams.trailMaShortType];
+        }
+
+        const lock = Object.prototype.hasOwnProperty.call(baseParams, 'trailLock')
+          ? Boolean(baseParams.trailLock)
+          : Boolean(document.getElementById('trailLock')?.checked);
 
         let maCombos = 0;
         if (lock) {
@@ -3872,6 +4024,17 @@
 
         const workerProcesses = getWorkerProcessesValue();
 
+        const riskInput = document.getElementById('riskPerTrade');
+        const contractInput = document.getElementById('contractSize');
+        const riskValue = Number.isFinite(Number(riskInput?.value))
+          ? Number(riskInput.value)
+          : Number(state?.payload?.riskPerTradePct ?? state?.payload?.equityPct ?? 0);
+        const contractValue = Number.isFinite(Number(contractInput?.value))
+          ? Number(contractInput.value)
+          : Number(state?.payload?.contractSize ?? 0);
+        const commissionValue = Number(state?.payload?.commissionRate ?? 0.0005);
+        const atrValue = Number(state?.payload?.atrPeriod ?? 14);
+
         return {
           enabled_params: enabledParams,
           param_ranges: paramRanges,
@@ -3879,11 +4042,11 @@
           ma_types_trend: state.trendTypes,
           ma_types_trail_long: state.trailLongTypes,
           ma_types_trail_short: state.trailShortTypes,
-          lock_trail_types: Boolean(document.getElementById('trailLock')?.checked),
-          risk_per_trade_pct: Number(document.getElementById('riskPerTrade').value) || 0,
-          contract_size: Number(document.getElementById('contractSize').value) || 0,
-          commission_rate: 0.0005,
-          atr_period: 14,
+          lock_trail_types: Boolean(state.lockTrailTypes),
+          risk_per_trade_pct: riskValue,
+          contract_size: contractValue,
+          commission_rate: commissionValue,
+          atr_period: atrValue,
           worker_processes: workerProcesses,
           filter_min_profit: filterEnabled,
           min_profit_threshold: minProfitThreshold,
@@ -4741,6 +4904,39 @@
         resultsEl.classList.remove('loading');
         resultsEl.classList.add('ready');
       }
+
+      /**
+       * Test parameter form generation (console test)
+       */
+      window.testBacktesterFormGeneration = function() {
+        console.log('=== Testing Backtester Parameter Form Generation ===');
+
+        console.log('Test 1: S_01 form generation');
+        const s01 = strategyMetadataCache['s01_trailing_ma'];
+        if (s01) {
+          buildParameterForm('backtesterDynamicParams', s01, false);
+          const s01ParamCount = document.querySelectorAll('#backtesterDynamicParams .param-row').length;
+          console.log(`✅ S_01: ${s01ParamCount} параметров отрендерено`);
+        } else {
+          console.error('❌ S_01 strategy not found in cache');
+        }
+
+        console.log('Test 2: S_03 form generation');
+        const s03 = strategyMetadataCache['s03_reversal'];
+        if (s03) {
+          buildParameterForm('backtesterDynamicParams', s03, false);
+          const s03ParamCount = document.querySelectorAll('#backtesterDynamicParams .param-row').length;
+          console.log(`✅ S_03: ${s03ParamCount} параметров отрендерено`);
+        } else {
+          console.error('❌ S_03 strategy not found in cache');
+        }
+
+        console.log('Test 3: Parameter collection');
+        const params = collectBacktesterParameters();
+        console.log(`✅ Собрано ${Object.keys(params).length} параметров:`, params);
+
+        console.log('=== Backtester Tests Completed ===');
+      };
 
       if (presetToggleEl) {
         presetToggleEl.addEventListener('click', (event) => {
