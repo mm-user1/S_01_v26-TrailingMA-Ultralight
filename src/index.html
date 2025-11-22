@@ -729,6 +729,44 @@
       margin-bottom: 8px;
       letter-spacing: 0.5px;
     }
+
+    .strategy-selector {
+      width: 250px;
+      padding: 8px 10px;
+      font-size: 14px;
+      background: #ffffff;
+      border: 1px solid #999999;
+      border-radius: 3px;
+      color: #2a2a2a;
+    }
+
+    .strategy-selector:focus {
+      outline: none;
+      border-color: #4a90e2;
+      box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2);
+    }
+
+    .strategy-selector option {
+      padding: 6px;
+    }
+
+    #backtesterStrategyInfo,
+    #optimizerStrategyInfo {
+      margin-top: 12px;
+      font-size: 13px;
+    }
+
+    #backtesterStrategyInfo .value,
+    #optimizerStrategyInfo .value {
+      color: #2a2a2a;
+      font-weight: 500;
+    }
+
+    #backtesterStrategyDesc,
+    #optimizerStrategyDesc {
+      font-style: italic;
+      color: #5a5a5a;
+    }
   </style>
 </head>
 <body>
@@ -740,6 +778,30 @@
             <h2>Backtester</h2>
           </div>
           <div class="content">
+            <!-- Strategy Selection -->
+            <div class="section">
+              <div class="section-title">Стратегия</div>
+              <div class="form-group">
+                <label for="backtesterStrategy">Выбор стратегии:</label>
+                <select id="backtesterStrategy" class="strategy-selector">
+                  <option value="">Загрузка...</option>
+                </select>
+              </div>
+              <div id="backtesterStrategyInfo" class="info-panel" style="display: none;">
+                <div class="info-row">
+                  <span class="label">Название:</span>
+                  <span class="value" id="backtesterStrategyName"></span>
+                </div>
+                <div class="info-row">
+                  <span class="label">Тип:</span>
+                  <span class="value" id="backtesterStrategyType"></span>
+                </div>
+                <div class="info-row">
+                  <span class="label">Описание:</span>
+                  <span class="value" id="backtesterStrategyDesc"></span>
+                </div>
+              </div>
+            </div>
             <form id="backtestForm">
               <div class="section">
                 <div class="form-group">
@@ -1212,6 +1274,30 @@
           <div class="content">
             <div class="left-panel">
               <form id="optimizerForm">
+                <!-- Strategy Selection -->
+                <div class="section">
+                  <div class="section-title">Стратегия</div>
+                  <div class="form-group">
+                    <label for="optimizerStrategy">Выбор стратегии:</label>
+                    <select id="optimizerStrategy" class="strategy-selector">
+                      <option value="">Загрузка...</option>
+                    </select>
+                  </div>
+                  <div id="optimizerStrategyInfo" class="info-panel" style="display: none;">
+                    <div class="info-row">
+                      <span class="label">Название:</span>
+                      <span class="value" id="optimizerStrategyName"></span>
+                    </div>
+                    <div class="info-row">
+                      <span class="label">Тип:</span>
+                      <span class="value" id="optimizerStrategyType"></span>
+                    </div>
+                    <div class="info-row">
+                      <span class="label">Описание:</span>
+                      <span class="value" id="optimizerStrategyDesc"></span>
+                    </div>
+                  </div>
+                </div>
                 <div class="info-panel">
                   <div class="info-row">
                     <label for="workerProcesses">Worker processes:</label>
@@ -1741,7 +1827,7 @@
   </div>
 
   <script>
-    document.addEventListener('DOMContentLoaded', () => {
+    document.addEventListener('DOMContentLoaded', async () => {
       const MA_TYPES = [
         'EMA',
         'SMA',
@@ -1778,8 +1864,13 @@
         recovery: 0.10,
         consistency: 0.10
       };
+      // Global strategy state
+      let allStrategies = [];
+      let currentBacktesterStrategy = null;
+      let currentOptimizerStrategy = null;
 
-      let currentStrategy = { strategy_id: 's01_trailing_ma' };
+      // Strategy metadata cache
+      const strategyMetadataCache = {};
       const SCORE_DEFAULT_ENABLED = {
         romad: true,
         sharpe: true,
@@ -1835,6 +1926,30 @@
         scoreInvertMetrics: { ...SCORE_DEFAULT_INVERT }
       };
 
+      const PARAM_ALIAS_MAP = {
+        s01_trailing_ma: {
+          stopLongX: 'stopLongAtr',
+          stopLongRR: 'stopLongRr',
+          stopLongLP: 'stopLongLp',
+          stopShortX: 'stopShortAtr',
+          stopShortRR: 'stopShortRr',
+          stopShortLP: 'stopShortLp',
+          trailRRLong: 'trailRrLong',
+          trailRRShort: 'trailRrShort',
+          trailLongLength: 'trailMaLongLength',
+          trailLongOffset: 'trailMaLongOffset',
+          trailShortLength: 'trailMaShortLength',
+          trailShortOffset: 'trailMaShortOffset',
+          trailLongTypes: 'trailMaLongType',
+          trailShortTypes: 'trailMaShortType',
+          riskPerTrade: 'riskPerTradePct',
+          csvPath: 'csvPath'
+        },
+        s03_reversal: {
+          riskPerTrade: 'equityPct'
+        }
+      };
+
       const DEFAULT_PRESET_KEY = 'defaults';
       const PRESET_NAME_PATTERN = /^[A-Za-z0-9 _-]{1,64}$/;
       const PRESET_LABELS = {
@@ -1881,6 +1996,278 @@
       };
 
       let knownPresets = [];
+
+      async function loadStrategies() {
+        try {
+          const response = await fetch('/api/strategies');
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+
+          allStrategies = await response.json();
+          allStrategies.forEach((strategy) => {
+            strategyMetadataCache[strategy.strategy_id] = strategy;
+          });
+
+          const backtesterSelect = document.getElementById('backtesterStrategy');
+          if (backtesterSelect) {
+            backtesterSelect.innerHTML = '';
+            allStrategies.forEach((strategy) => {
+              const option = document.createElement('option');
+              option.value = strategy.strategy_id;
+              option.textContent = strategy.name;
+              backtesterSelect.appendChild(option);
+            });
+            backtesterSelect.value = 's01_trailing_ma';
+          }
+
+          const optimizerSelect = document.getElementById('optimizerStrategy');
+          if (optimizerSelect) {
+            optimizerSelect.innerHTML = '';
+            allStrategies.forEach((strategy) => {
+              const option = document.createElement('option');
+              option.value = strategy.strategy_id;
+              option.textContent = strategy.name;
+              optimizerSelect.appendChild(option);
+            });
+            optimizerSelect.value = 's01_trailing_ma';
+          }
+
+          onBacktesterStrategyChange();
+          onOptimizerStrategyChange();
+
+          console.log(`Loaded ${allStrategies.length} strategies:`, allStrategies.map((s) => s.strategy_id));
+        } catch (error) {
+          console.error('Failed to load strategies:', error);
+          alert(`Ошибка загрузки стратегий: ${error.message}`);
+        }
+      }
+
+      function onBacktesterStrategyChange() {
+        const strategyId = document.getElementById('backtesterStrategy')?.value;
+        if (!strategyId) return;
+
+        currentBacktesterStrategy = strategyMetadataCache[strategyId];
+        if (!currentBacktesterStrategy) {
+          console.error('Strategy not found:', strategyId);
+          return;
+        }
+
+        document.getElementById('backtesterStrategyName').textContent = currentBacktesterStrategy.name;
+        document.getElementById('backtesterStrategyType').textContent =
+          currentBacktesterStrategy.type === 'trend' ? 'Трендовая' : 'Реверсивная';
+        document.getElementById('backtesterStrategyDesc').textContent = currentBacktesterStrategy.description;
+        document.getElementById('backtesterStrategyInfo').style.display = 'block';
+
+        updateBacktesterParameterForm(currentBacktesterStrategy);
+
+        console.log('Backtester strategy changed to:', strategyId);
+      }
+
+      function onOptimizerStrategyChange() {
+        const strategyId = document.getElementById('optimizerStrategy')?.value;
+        if (!strategyId) return;
+
+        currentOptimizerStrategy = strategyMetadataCache[strategyId];
+        if (!currentOptimizerStrategy) {
+          console.error('Strategy not found:', strategyId);
+          return;
+        }
+
+        document.getElementById('optimizerStrategyName').textContent = currentOptimizerStrategy.name;
+        document.getElementById('optimizerStrategyType').textContent =
+          currentOptimizerStrategy.type === 'trend' ? 'Трендовая' : 'Реверсивная';
+        document.getElementById('optimizerStrategyDesc').textContent = currentOptimizerStrategy.description;
+        document.getElementById('optimizerStrategyInfo').style.display = 'block';
+
+        updateOptimizerParameterForm(currentOptimizerStrategy);
+
+        console.log('Optimizer strategy changed to:', strategyId);
+      }
+
+      function getStrategyParameterIds(strategy) {
+        if (!strategy || !strategy.parameters) return [];
+        return Object.keys(strategy.parameters);
+      }
+
+      function updateParameterVisibility(containerSelector, strategy) {
+        const container = document.querySelector(containerSelector);
+        if (!container) return;
+
+        const strategyParamIds = new Set(getStrategyParameterIds(strategy));
+        const aliasMap = PARAM_ALIAS_MAP[strategy?.strategy_id] || {};
+        const aliasValues = new Set(Object.keys(aliasMap));
+
+        const allFormGroups = container.querySelectorAll('.form-group, .param-group');
+
+        allFormGroups.forEach((group) => {
+          const inputs = group.querySelectorAll('input, select');
+          let hasStrategyParam = false;
+
+          inputs.forEach((input) => {
+            const inputId = input.id || input.name || '';
+            const snakeId = inputId.replace(/([A-Z])/g, '_$1').toLowerCase();
+            if (
+              strategyParamIds.has(inputId) ||
+              strategyParamIds.has(snakeId) ||
+              aliasValues.has(inputId)
+            ) {
+              hasStrategyParam = true;
+            }
+          });
+
+          const hasOptimizerControl = group.querySelector('[id^="opt-"]');
+          const isCommonControl =
+            group.closest('.info-panel') ||
+            group.querySelector(
+              '#csvFile, #selectedFilesWrapper, #dateFilter, #backtester, #startDate, #endDate, #startTime, #endTime,' +
+                ' #wfExportTrades, #wfExportTopK, #minProfitFilter, #minProfitThreshold, #workerProcesses, #optMethodGrid,' +
+                ' #optMethodOptuna, #enableWF'
+            );
+
+          if (isCommonControl || hasOptimizerControl || hasStrategyParam) {
+            group.style.display = '';
+          } else {
+            group.style.display = 'none';
+          }
+        });
+      }
+
+      function updateBacktesterParameterForm(strategy) {
+        updateParameterVisibility('.backtester-window .content', strategy);
+        updateFormFieldDefaults('backtester', strategy);
+      }
+
+      function updateOptimizerParameterForm(strategy) {
+        updateParameterVisibility('.optimizer-window .content', strategy);
+        updateFormFieldDefaults('optimizer', strategy);
+      }
+
+      function updateFormFieldDefaults(formType, strategy) {
+        if (!strategy || !strategy.parameters) return;
+
+        const aliasMap = PARAM_ALIAS_MAP[strategy.strategy_id] || {};
+        Object.entries(strategy.parameters).forEach(([paramId, paramDef]) => {
+          const camelId = paramId;
+          const snakeId = paramId.replace(/([A-Z])/g, '_$1').toLowerCase();
+          const aliasId = Object.keys(aliasMap).find((key) => aliasMap[key] === paramId) || null;
+
+          const input =
+            document.getElementById(camelId) ||
+            document.getElementById(snakeId) ||
+            (aliasId ? document.getElementById(aliasId) : null) ||
+            document.querySelector(`[name="${camelId}"]`);
+
+          if (!input) return;
+
+          if (!input.value || input.value === '') {
+            if (paramDef.type === 'bool') {
+              input.checked = paramDef.default;
+            } else {
+              input.value = paramDef.default;
+            }
+          }
+
+          if (paramDef.min !== undefined) {
+            input.min = paramDef.min;
+          }
+          if (paramDef.max !== undefined) {
+            input.max = paramDef.max;
+          }
+          if (paramDef.step !== undefined) {
+            input.step = paramDef.step;
+          }
+        });
+      }
+
+      function mapParametersForStrategy(uiParams, strategy) {
+        if (!strategy || !strategy.parameters) return uiParams;
+
+        const mapped = {};
+        const strategyParamIds = Object.keys(strategy.parameters);
+        const aliasMap = PARAM_ALIAS_MAP[strategy.strategy_id] || {};
+
+        Object.entries(uiParams).forEach(([key, value]) => {
+          if (aliasMap[key]) {
+            mapped[aliasMap[key]] = value;
+            return;
+          }
+
+          if (strategyParamIds.includes(key)) {
+            mapped[key] = value;
+            return;
+          }
+
+          const snakeKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
+          if (strategyParamIds.includes(snakeKey)) {
+            mapped[snakeKey] = value;
+            return;
+          }
+
+          const camelKey = key.replace(/_([a-z])/g, (m, p1) => p1.toUpperCase());
+          if (strategyParamIds.includes(camelKey)) {
+            mapped[camelKey] = value;
+            return;
+          }
+
+          mapped[key] = value;
+        });
+
+        return mapped;
+      }
+
+      function collectBacktesterParameters() {
+        const params = {
+          dateFilter: document.getElementById('dateFilter').checked,
+          backtester: document.getElementById('backtester').checked,
+          useBacktester: document.getElementById('backtester').checked,
+          startDate: document.getElementById('startDate').value,
+          endDate: document.getElementById('endDate').value,
+          maType: collectSelectedTypes('trend')[0],
+          maLength: document.getElementById('maLength').value,
+          closeCountLong: document.getElementById('closeCountLong').value,
+          closeCountShort: document.getElementById('closeCountShort').value,
+          stopLongX: document.getElementById('stopLongX').value,
+          stopLongRR: document.getElementById('stopLongRR').value,
+          stopLongLP: document.getElementById('stopLongLP').value,
+          stopShortX: document.getElementById('stopShortX').value,
+          stopShortRR: document.getElementById('stopShortRR').value,
+          stopShortLP: document.getElementById('stopShortLP').value,
+          stopLongMaxPct: document.getElementById('stopLongMaxPct').value,
+          stopShortMaxPct: document.getElementById('stopShortMaxPct').value,
+          stopLongMaxDays: document.getElementById('stopLongMaxDays').value,
+          stopShortMaxDays: document.getElementById('stopShortMaxDays').value,
+          trailRRLong: document.getElementById('trailRRLong').value,
+          trailRRShort: document.getElementById('trailRRShort').value,
+          trailLongLength: document.getElementById('trailLongLength').value,
+          trailLongOffset: document.getElementById('trailLongOffset').value,
+          trailShortLength: document.getElementById('trailShortLength').value,
+          trailShortOffset: document.getElementById('trailShortOffset').value,
+          riskPerTrade: document.getElementById('riskPerTrade').value,
+          contractSize: document.getElementById('contractSize').value
+        };
+
+        return params;
+      }
+
+      function isReversalStrategy(strategyId) {
+        const strategy = strategyMetadataCache[strategyId];
+        return strategy?.allows_reversal === true;
+      }
+
+      function formatStrategyResults(results, strategyId) {
+        const isReversal = isReversalStrategy(strategyId);
+
+        let output = `Net Profit %: ${results.net_profit_pct}\n`;
+        output += `Max Drawdown %: ${results.max_drawdown_pct}\n`;
+        output += `Total Trades: ${results.total_trades}\n`;
+
+        if (isReversal) {
+          output += `\n⚠ Реверсивная стратегия: всегда в позиции (лонг или шорт)\n`;
+        }
+
+        return output;
+      }
 
       window.toggleWFSettings = function toggleWFSettings() {
         const wfToggle = document.getElementById('enableWF');
@@ -1933,6 +2320,18 @@
       const presetEmptyEl = document.getElementById('presetEmpty');
       const presetImportInput = document.getElementById('presetImportInput');
       let selectedCsvPath = '';
+
+      await loadStrategies();
+
+      const backtesterStrategySelect = document.getElementById('backtesterStrategy');
+      if (backtesterStrategySelect) {
+        backtesterStrategySelect.addEventListener('change', onBacktesterStrategyChange);
+      }
+
+      const optimizerStrategySelect = document.getElementById('optimizerStrategy');
+      if (optimizerStrategySelect) {
+        optimizerStrategySelect.addEventListener('change', onOptimizerStrategyChange);
+      }
 
       function renderSelectedFiles(files) {
         if (!selectedFilesWrapper || !selectedFilesList) {
@@ -3092,7 +3491,7 @@
         return `${date}T${normalizedTime}`;
       }
 
-      function gatherFormState() {
+      function gatherFormState(strategyOverride = null) {
         const start = composeDateTime(
           document.getElementById('startDate').value,
           document.getElementById('startTime').value
@@ -3102,12 +3501,25 @@
           document.getElementById('endTime').value
         );
 
+        const selectedStrategy =
+          strategyOverride ||
+          currentBacktesterStrategy ||
+          currentOptimizerStrategy ||
+          null;
+
+        const strategyId = selectedStrategy?.strategy_id || 's01_trailing_ma';
+        const strategy = selectedStrategy || strategyMetadataCache[strategyId];
+
         const trendTypes = collectSelectedTypes('trend');
         const trailLongTypes = collectSelectedTypes('trailLong');
         const trailShortTypes = collectSelectedTypes('trailShort');
         const lockTrailTypes = Boolean(document.getElementById('trailLock')?.checked);
 
-        const strategyId = currentStrategy?.strategy_id || 's01_trailing_ma';
+        const baseParams = collectBacktesterParameters();
+        baseParams.startDate = document.getElementById('startDate').value;
+        baseParams.endDate = document.getElementById('endDate').value;
+
+        const payload = mapParametersForStrategy(baseParams, strategy);
 
         if (strategyId === 's03_reversal') {
           return {
@@ -3118,23 +3530,7 @@
             trailLongTypes: [],
             trailShortTypes: [],
             lockTrailTypes: false,
-            payload: {
-              dateFilter: document.getElementById('dateFilter').checked,
-              backtester: document.getElementById('backtester').checked,
-              start,
-              end,
-              maFastType: document.getElementById('s03MaFastType').value,
-              maFastLength: Number(document.getElementById('s03MaFastLength').value),
-              maSlowType: document.getElementById('s03MaSlowType').value,
-              maSlowLength: Number(document.getElementById('s03MaSlowLength').value),
-              maTrendType: document.getElementById('s03MaTrendType').value,
-              maTrendLength: Number(document.getElementById('s03MaTrendLength').value),
-              closeCountLong: Number(document.getElementById('s03CloseCountLong').value),
-              closeCountShort: Number(document.getElementById('s03CloseCountShort').value),
-              equityPct: Number(document.getElementById('s03EquityPct').value),
-              contractSize: Number(document.getElementById('s03ContractSize').value),
-              commissionRate: Number(document.getElementById('s03CommissionRate').value)
-            }
+            payload
           };
         }
 
@@ -3146,33 +3542,7 @@
           trailLongTypes,
           trailShortTypes,
           lockTrailTypes,
-          payload: {
-            dateFilter: document.getElementById('dateFilter').checked,
-            backtester: document.getElementById('backtester').checked,
-            start,
-            end,
-            maLength: Number(document.getElementById('maLength').value),
-            closeCountLong: Number(document.getElementById('closeCountLong').value),
-            closeCountShort: Number(document.getElementById('closeCountShort').value),
-            stopLongX: Number(document.getElementById('stopLongX').value),
-            stopLongRR: Number(document.getElementById('stopLongRR').value),
-            stopLongLP: Number(document.getElementById('stopLongLP').value),
-            stopShortX: Number(document.getElementById('stopShortX').value),
-            stopShortRR: Number(document.getElementById('stopShortRR').value),
-            stopShortLP: Number(document.getElementById('stopShortLP').value),
-            stopLongMaxPct: Number(document.getElementById('stopLongMaxPct').value),
-            stopShortMaxPct: Number(document.getElementById('stopShortMaxPct').value),
-            stopLongMaxDays: Number(document.getElementById('stopLongMaxDays').value),
-            stopShortMaxDays: Number(document.getElementById('stopShortMaxDays').value),
-            trailRRLong: Number(document.getElementById('trailRRLong').value),
-            trailRRShort: Number(document.getElementById('trailRRShort').value),
-            trailLongLength: Number(document.getElementById('trailLongLength').value),
-            trailLongOffset: Number(document.getElementById('trailLongOffset').value),
-            trailShortLength: Number(document.getElementById('trailShortLength').value),
-            trailShortOffset: Number(document.getElementById('trailShortOffset').value),
-            riskPerTrade: Number(document.getElementById('riskPerTrade').value),
-            contractSize: Number(document.getElementById('contractSize').value)
-          }
+          payload
         };
       }
 
@@ -3452,6 +3822,8 @@
       }
 
       function buildOptimizationConfig(state) {
+        const strategyId = state.strategyId || currentOptimizerStrategy?.strategy_id || 's01_trailing_ma';
+        const strategy = currentOptimizerStrategy || strategyMetadataCache[strategyId];
         const enabledParams = {};
         const paramRanges = {};
         const fixedParams = {
@@ -3517,6 +3889,33 @@
           min_profit_threshold: minProfitThreshold,
           score_config: collectScoreConfig(),
           optimization_mode: 'grid'
+        };
+
+        const mapKey = (key) => {
+          const mapped = mapParametersForStrategy({ [key]: true }, strategy);
+          return Object.keys(mapped)[0] || key;
+        };
+
+        const mappedEnabledParams = {};
+        Object.entries(config.enabled_params).forEach(([key, value]) => {
+          const mappedKey = mapKey(key);
+          mappedEnabledParams[mappedKey] = value;
+        });
+
+        const mappedParamRanges = {};
+        Object.entries(config.param_ranges).forEach(([key, value]) => {
+          const mappedKey = mapKey(key);
+          mappedParamRanges[mappedKey] = value;
+        });
+
+        const mappedFixedParams = mapParametersForStrategy(config.fixed_params, strategy);
+
+        return {
+          ...config,
+          strategy_id: strategyId,
+          enabled_params: mappedEnabledParams,
+          param_ranges: mappedParamRanges,
+          fixed_params: mappedFixedParams
         };
       }
 
@@ -3820,7 +4219,8 @@
         }
 
         const isOptunaMode = Boolean(optMethodOptuna && optMethodOptuna.checked);
-        const state = gatherFormState();
+        const state = gatherFormState(currentOptimizerStrategy);
+        const strategyId = state.strategyId || 's01_trailing_ma';
 
         const wfEnabled = Boolean(document.getElementById('enableWF')?.checked);
         if (wfEnabled && !isOptunaMode) {
@@ -3837,7 +4237,10 @@
           return;
         }
 
-        if (!state.trendTypes.length || !state.trailLongTypes.length || !state.trailShortTypes.length) {
+        if (
+          strategyId !== 's03_reversal' &&
+          (!state.trendTypes.length || !state.trailLongTypes.length || !state.trailShortTypes.length)
+        ) {
           optimizerResultsEl.textContent = 'Select at least one MA type in each group for optimization.';
           optimizerResultsEl.classList.remove('ready');
           optimizerResultsEl.style.display = 'block';
@@ -3850,8 +4253,8 @@
           return;
         }
 
-        let total = null;
-        if (!isOptunaMode) {
+        let total = strategyId === 's03_reversal' ? 1 : null;
+        if (!isOptunaMode && strategyId !== 's03_reversal') {
           total = calculateTotalCombinations();
           if (!total) {
             optimizerResultsEl.textContent = 'Please configure valid ranges for optimization parameters.';
@@ -3868,6 +4271,7 @@
         }
 
         const config = isOptunaMode ? buildOptunaConfig(state) : buildOptimizationConfig(state);
+        config.strategy_id = strategyId;
         const totalSources = sources.length;
         const statusMessages = new Array(totalSources).fill('');
         const updateStatus = (index, message) => {
@@ -3979,6 +4383,7 @@
           } else if (source && source.path) {
             formData.append('csvPath', source.path);
           }
+          formData.append('strategy_id', strategyId);
           formData.append('config', JSON.stringify(config));
 
           try {
@@ -4218,7 +4623,10 @@
           return;
         }
 
-        if (!state.trendTypes.length || !state.trailLongTypes.length || !state.trailShortTypes.length) {
+        if (
+          state.strategyId !== 's03_reversal' &&
+          (!state.trendTypes.length || !state.trailLongTypes.length || !state.trailShortTypes.length)
+        ) {
           errorEl.textContent = 'Пожалуйста, выберите хотя бы один MA в каждой группе.';
           errorEl.style.display = 'block';
           return;
@@ -4227,34 +4635,36 @@
         const combinations = [];
         const useLock = Boolean(state.lockTrailTypes);
 
-        if (useLock) {
-          // Lock ON: парное связывание Trail Long/Short по одному типу
-          const shortLookup = new Map();
-          state.trailShortTypes.forEach((type) => {
-            const key = type.toUpperCase();
-            if (!shortLookup.has(key)) {
-              shortLookup.set(key, type);
-            }
-          });
-
-          state.trailLongTypes.forEach((trailLongType) => {
-            const matchedShort = shortLookup.get(trailLongType.toUpperCase());
-            if (!matchedShort) {
-              return;
-            }
-            state.trendTypes.forEach((trendType) => {
-              combinations.push({ trendType, trailLongType, trailShortType: matchedShort });
+        if (state.strategyId !== 's03_reversal') {
+          if (useLock) {
+            const shortLookup = new Map();
+            state.trailShortTypes.forEach((type) => {
+              const key = type.toUpperCase();
+              if (!shortLookup.has(key)) {
+                shortLookup.set(key, type);
+              }
             });
-          });
-        } else {
-          // Lock OFF: полное декартово произведение всех типов
-          state.trendTypes.forEach((trendType) => {
+
             state.trailLongTypes.forEach((trailLongType) => {
-              state.trailShortTypes.forEach((trailShortType) => {
-                combinations.push({ trendType, trailLongType, trailShortType });
+              const matchedShort = shortLookup.get(trailLongType.toUpperCase());
+              if (!matchedShort) {
+                return;
+              }
+              state.trendTypes.forEach((trendType) => {
+                combinations.push({ trendType, trailLongType, trailShortType: matchedShort });
               });
             });
-          });
+          } else {
+            state.trendTypes.forEach((trendType) => {
+              state.trailLongTypes.forEach((trailLongType) => {
+                state.trailShortTypes.forEach((trailShortType) => {
+                  combinations.push({ trendType, trailLongType, trailShortType });
+                });
+              });
+            });
+          }
+        } else {
+          combinations.push({});
         }
 
         if (!combinations.length) {
@@ -4276,12 +4686,14 @@
 
         for (let index = 0; index < combinations.length; index += 1) {
           const combo = combinations[index];
-          const payload = {
-            ...state.payload,
-            maType: combo.trendType,
-            trailLongType: combo.trailLongType,
-            trailShortType: combo.trailShortType
-          };
+          const payload = state.strategyId === 's03_reversal'
+            ? { ...state.payload }
+            : {
+                ...state.payload,
+                maType: combo.trendType,
+                trailLongType: combo.trailLongType,
+                trailShortType: combo.trailShortType
+              };
 
           const formData = new FormData();
           if (primaryFile) {
@@ -4290,6 +4702,7 @@
           if (selectedCsvPath) {
             formData.append('csvPath', selectedCsvPath);
           }
+          formData.append('strategy_id', state.strategyId || 's01_trailing_ma');
           formData.append('payload', JSON.stringify(payload));
 
           resultsEl.textContent = `Выполняется расчёт… (${index + 1}/${combinations.length})`;
@@ -4306,7 +4719,15 @@
             }
 
             const data = await response.json();
-            aggregatedResults.push(formatResultBlock(index + 1, combinations.length, payload, data));
+            const formattedResult = formatStrategyResults(
+              data.metrics,
+              state.strategyId || 's01_trailing_ma'
+            );
+            aggregatedResults.push(
+              state.strategyId === 's03_reversal'
+                ? formattedResult
+                : formatResultBlock(index + 1, combinations.length, payload, data)
+            );
           } catch (err) {
             resultsEl.textContent = 'Произошла ошибка.';
             resultsEl.classList.remove('loading');
