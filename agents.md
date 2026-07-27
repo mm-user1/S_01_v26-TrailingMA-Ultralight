@@ -347,6 +347,18 @@ python tools/generate_baseline_s01.py
 
 **Key behavioral rules:**
 
+- **V2 planning policy**
+  - `grid_v2_planning_policy` is `full` by default. `sampled` enables the
+    core-owned deterministic budgeted planner; V1 strategy-owned Grid behavior
+    is unchanged.
+  - V2 sampled planning allocates the requested budget across ordered logical
+    blocks, then uses versioned balanced discrete LHS/PCG64 substreams with
+    deterministic dedup/top-up. A budget covering the full valid space uses the
+    exact legacy full builder and order.
+  - Preview, execution, Queue, WFA reuse, summaries, and storage distinguish
+    configured budget, full space, and delivered/planned candidates. Candidate
+    IDs remain plan-local; semantic keys do not include policy, budget, or seed.
+
 - **Backend metadata contract**
   - Each backend's `get_backend_metadata()` (normalized by `get_fast_grid_backend_metadata`) declares `profile`, ordered `modes` (with `default_enabled`), seed/allocation support, and `diversity_group_fields`.
   - Missing `grid_enabled_modes` defaults to the backend's `default_enabled` modes via `default_grid_enabled_modes` — no per-strategy server hardcode. An explicitly empty S06 mode list stays an error.
@@ -394,7 +406,7 @@ python tools/generate_baseline_s01.py
 - Strategy selection and parameter configuration
 - Optimizer mode selector: **Optuna** or **Grid**
 - Optuna settings (objectives + primary objective, budget, sampler, pruner, constraints)
-- Grid settings (candidate budget, seed, LHS-by-mode sampling, top candidates, fast + optional slow objective sets, mode allocation, diversity, advanced)
+- Grid settings (V2 full/budgeted planning, candidate budget, seed, top candidates, fast + optional slow objective sets, mode allocation, diversity, advanced)
 - Grid preview panel calls `POST /api/grid/preview` to show parameter space size, mode allocation and coverage
 - Initial Search Coverage mode toggle (Optuna) with coverage analysis and warmup auto-fill
 - Trials Log toggle for Optuna trial-level logging control

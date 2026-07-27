@@ -318,6 +318,45 @@ def test_signal_grid_compiled_rows_match_reference_and_use_mapping_metadata(sign
         _assert_rows_equal(compiled_row, reference_row)
 
 
+@pytest.mark.skipif(not compiled_batch_available(), reason="Compiled signal path required.")
+def test_sampled_signal_grid_compiled_rows_match_reference(signal_df, hooks):
+    common = {
+        "enabled_axes": ("maType3", "emergencySlPct"),
+        "planning_policy": "sampled",
+        "requested_budget": 3,
+        "seed": 77,
+        "top_n": 2,
+    }
+    compiled_plan = build_grid_v2_plan(
+        fixture_config(),
+        GridV2Settings(**common, prefer_compiled=True),
+        base_params=_base_params(),
+    )
+    reference_plan = build_grid_v2_plan(
+        fixture_config(),
+        GridV2Settings(**common, prefer_compiled=False),
+        base_params=_base_params(),
+    )
+    two_worker_plan = build_grid_v2_plan(
+        fixture_config(),
+        GridV2Settings(**common, prefer_compiled=True, compiled_workers=2),
+        base_params=_base_params(),
+    )
+
+    compiled = execute_grid_v2_candidates(compiled_plan, signal_df, 0, hooks)
+    reference = execute_grid_v2_candidates(reference_plan, signal_df, 0, hooks)
+    two_workers = execute_grid_v2_candidates(two_worker_plan, signal_df, 0, hooks)
+
+    assert compiled_plan.planned_candidate_count == 3
+    assert compiled_plan.candidate_table.semantic_keys_by_row == reference_plan.candidate_table.semantic_keys_by_row
+    assert compiled.metadata["compiled_config_packing"] == "mapping"
+    for compiled_row, reference_row, two_worker_row in zip(
+        compiled.rows, reference.rows, two_workers.rows
+    ):
+        _assert_rows_equal(compiled_row, reference_row)
+        _assert_rows_equal(compiled_row, two_worker_row)
+
+
 def test_signal_grid_cache_estimate_uses_exit_signal_rows_and_no_float_dataprep(signal_df, hooks):
     plan = _grid_plan(prefer_compiled=True)
     estimate = estimate_grid_v2_cache(plan, signal_df, 0, hooks)

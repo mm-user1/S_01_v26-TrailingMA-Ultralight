@@ -254,6 +254,9 @@ def test_s06_b2_grid_wfa_plan_reuse_matches_cache_disabled_windows():
         "constraints": [],
         "score_config": {},
         "grid_top_candidates": 2,
+        "grid_v2_planning_policy": "sampled",
+        "grid_budget": 3,
+        "grid_seed": 77,
         "grid_enabled_modes": ["bracket"],
         "grid_diversity_enabled": False,
         "grid_slow_refinement_enabled": False,
@@ -279,6 +282,8 @@ def test_s06_b2_grid_wfa_plan_reuse_matches_cache_disabled_windows():
     )
 
     assert first_summary["grid"]["plan_reuse_enabled"] is True
+    assert first_summary["grid"]["planning"]["effective_policy"] == "sampled"
+    assert first_summary["planned_candidate_count"] == 3
     assert first_summary["grid"]["plan_reuse_hit"] is False
     assert second_summary["grid"]["plan_reuse_enabled"] is True
     assert second_summary["grid"]["plan_reuse_hit"] is True

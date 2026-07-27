@@ -1080,6 +1080,14 @@ function isFullEnumerationProfile(profile) {
   return profile === 'full_enumeration' || profile === 'full_enumeration_v2';
 }
 
+function isGridV2Profile(profile) {
+  return profile === 'full_enumeration_v2';
+}
+
+function getGridV2PlanningPolicy() {
+  return document.getElementById('gridV2PlanningPolicy')?.value === 'sampled' ? 'sampled' : 'full';
+}
+
 function getUserFacingGridModes(metadata) {
   return (Array.isArray(metadata?.modes) ? metadata.modes : []).filter((mode) => {
     return String(mode?.id || '').trim();
@@ -1100,6 +1108,8 @@ function getSelectedGridModes() {
 function syncGridProfileUi() {
   const metadata = getEnabledGridMetadata();
   const fullEnumeration = isFullEnumerationProfile(metadata.profile);
+  const gridV2 = isGridV2Profile(metadata.profile);
+  const sampledPlanning = gridV2 && getGridV2PlanningPolicy() === 'sampled';
   const userFacingModes = getUserFacingGridModes(metadata);
   const hasModes = userFacingModes.length > 0;
   const modeSection = document.getElementById('gridProfileModesSection');
@@ -1108,12 +1118,18 @@ function syncGridProfileUi() {
   const seedRow = document.getElementById('gridSeedRow');
   const allocationSection = document.getElementById('gridAllocationSection');
   const samplingInput = document.getElementById('gridSamplingMethod');
+  const planningRow = document.getElementById('gridV2PlanningPolicyRow');
   const diversityLabel = document.getElementById('gridDiversityMaxLabel');
 
-  if (budgetRow) budgetRow.style.display = fullEnumeration ? 'none' : 'flex';
-  if (seedRow) seedRow.style.display = fullEnumeration ? 'none' : 'flex';
-  if (allocationSection) allocationSection.style.display = fullEnumeration ? 'none' : 'block';
-  if (samplingInput) samplingInput.value = fullEnumeration ? 'Full enumeration' : 'LHS by mode';
+  if (planningRow) planningRow.style.display = gridV2 ? 'flex' : 'none';
+  if (budgetRow) budgetRow.style.display = (gridV2 ? sampledPlanning : !fullEnumeration) ? 'flex' : 'none';
+  if (seedRow) seedRow.style.display = (gridV2 ? sampledPlanning : !fullEnumeration) ? 'flex' : 'none';
+  if (allocationSection) allocationSection.style.display = (gridV2 ? sampledPlanning : !fullEnumeration) ? 'block' : 'none';
+  if (samplingInput) {
+    samplingInput.value = gridV2
+      ? (sampledPlanning ? 'Balanced discrete LHS (PCG64)' : 'Full enumeration')
+      : (fullEnumeration ? 'Full enumeration' : 'LHS by mode');
+  }
   if (diversityLabel) {
     diversityLabel.textContent = fullEnumeration
       ? 'Max per diversity group'
@@ -1599,10 +1615,9 @@ function buildGridConfig(state) {
   const metadata = getEnabledGridMetadata();
   const fullEnumeration = isFullEnumerationProfile(metadata.profile);
   const hasGridModes = hasUserFacingGridModes(metadata);
-  const previewBudget = Number(window.lastGridPreview?.actual_budget);
-  const budget = fullEnumeration && Number.isFinite(previewBudget) && previewBudget > 0
-    ? previewBudget
-    : getGridBudgetValue();
+  const gridV2 = isGridV2Profile(metadata.profile);
+  const planningPolicy = gridV2 ? getGridV2PlanningPolicy() : 'full';
+  const budget = getGridBudgetValue();
   const seedRaw = Number(document.getElementById('gridSeed')?.value);
   const topRaw = Number(document.getElementById('gridTopCandidates')?.value);
   const minQuotaRaw = Number(document.getElementById('gridMinQuota')?.value);
@@ -1612,6 +1627,17 @@ function buildGridConfig(state) {
   const fastObjectiveConfig = collectGridObjectiveSelection('fast');
   const slowObjectiveConfig = collectGridObjectiveSelection('slow');
   const slowRefinementEnabled = Boolean(document.getElementById('gridSlowRefinementEnabled')?.checked);
+  const manualPercents = gridV2
+    ? Object.fromEntries(
+        Array.from(document.querySelectorAll('#gridV2ManualAllocation input[data-grid-block-name]'))
+          .map((input) => [String(input.dataset.gridBlockName || ''), Number(input.value) || 0])
+          .filter(([name]) => name)
+      )
+    : {
+        cc_only: Number(document.getElementById('gridManualCc')?.value) || 0,
+        tbands_only: Number(document.getElementById('gridManualTbands')?.value) || 0,
+        both: Number(document.getElementById('gridManualBoth')?.value) || 0
+      };
 
   const config = {
     ...optunaCompatibleConfig,
@@ -1619,17 +1645,14 @@ function buildGridConfig(state) {
     optimization_mode: 'grid',
     objectives: fastObjectiveConfig.objectives,
     primary_objective: fastObjectiveConfig.primary_objective,
+    grid_v2_planning_policy: planningPolicy,
     grid_budget: budget,
     grid_seed: Number.isFinite(seedRaw) ? Math.max(0, Math.round(seedRaw)) : 42,
     grid_top_candidates: Number.isFinite(topRaw) ? Math.max(1, Math.min(500, Math.round(topRaw))) : 10,
     grid_enabled_modes: fullEnumeration && hasGridModes ? getSelectedGridModes() : [],
     grid_allocation_method: allocationMethod,
     grid_min_quota: Number.isFinite(minQuotaRaw) ? Math.max(0, Math.min(0.33, minQuotaRaw)) : 0.10,
-    grid_manual_percents: {
-      cc_only: Number(document.getElementById('gridManualCc')?.value) || 0,
-      tbands_only: Number(document.getElementById('gridManualTbands')?.value) || 0,
-      both: Number(document.getElementById('gridManualBoth')?.value) || 0
-    },
+    grid_manual_percents: manualPercents,
     grid_diversity_enabled: Boolean(document.getElementById('gridDiversityEnabled')?.checked),
     grid_diversity_max_per_group: Number.isFinite(diversityMaxRaw)
       ? Math.max(1, Math.min(50, Math.round(diversityMaxRaw)))
@@ -1643,6 +1666,23 @@ function buildGridConfig(state) {
   };
 
   return config;
+}
+
+function getCurrentPlannedGridCandidates(config) {
+  const preview = window.lastGridPreview;
+  if (
+    preview
+    && window.lastGridPreviewConfigKey === getGridPreviewConfigKey(config)
+    && String(preview.requested_planning_policy || '') === String(config?.grid_v2_planning_policy || 'full')
+    && Number(preview.planned_candidate_count) > 0
+  ) {
+    return Number(preview.planned_candidate_count);
+  }
+  return Number(config?.grid_budget || 0);
+}
+
+function getGridPreviewConfigKey(config) {
+  return JSON.stringify(config || {});
 }
 
 function buildCurrentOptimizerConfig(state) {
@@ -1754,6 +1794,8 @@ async function runWalkForward({ sources, state }) {
       workers: config.worker_processes
     },
     grid: optimizerMode === 'grid' ? {
+      planningPolicy: config.grid_v2_planning_policy,
+      plannedCandidates: getCurrentPlannedGridCandidates(config),
       budget: config.grid_budget,
       seed: config.grid_seed,
       topCandidates: config.grid_top_candidates,
@@ -2076,17 +2118,57 @@ function syncGridBudgetHelp({ normalizeInput = false } = {}) {
 }
 
 function syncGridAllocationUi() {
-  if (isFullEnumerationProfile(getEnabledGridMetadata().profile)) return;
+  const metadata = getEnabledGridMetadata();
+  const gridV2 = isGridV2Profile(metadata.profile);
+  if (isFullEnumerationProfile(metadata.profile) && (!gridV2 || getGridV2PlanningPolicy() !== 'sampled')) return;
   const method = Array.from(document.querySelectorAll('input[name="gridAllocationMethod"]'))
     .find((radio) => radio.checked)?.value || 'auto_sqrt_space';
   const minQuotaRow = document.getElementById('gridMinQuotaRow');
   const manual = document.getElementById('gridManualAllocation');
+  const v2Manual = document.getElementById('gridV2ManualAllocation');
   if (minQuotaRow) {
     minQuotaRow.style.display = method === 'auto_sqrt_space' ? 'flex' : 'none';
   }
-  if (manual) {
-    manual.style.display = method === 'manual' ? 'flex' : 'none';
-  }
+  if (manual) manual.style.display = !gridV2 && method === 'manual' ? 'flex' : 'none';
+  if (v2Manual) v2Manual.style.display = gridV2 && method === 'manual' ? 'flex' : 'none';
+}
+
+function syncGridV2ManualAllocation(modes) {
+  const container = document.getElementById('gridV2ManualAllocation');
+  if (!container || !isGridV2Profile(getEnabledGridMetadata().profile)) return;
+  const prior = Object.fromEntries(
+    Array.from(container.querySelectorAll('input[data-grid-block-name]'))
+      .map((input) => [input.dataset.gridBlockName, input.value])
+  );
+  const pending = window.pendingGridV2ManualPercents && typeof window.pendingGridV2ManualPercents === 'object'
+    ? window.pendingGridV2ManualPercents
+    : {};
+  const normalizedModes = (Array.isArray(modes) ? modes : []).filter((mode) => String(mode?.mode || '').trim());
+  const defaultPercent = normalizedModes.length ? 100 / normalizedModes.length : 0;
+  container.replaceChildren();
+  normalizedModes.forEach((mode, index) => {
+    const blockName = String(mode.mode).trim();
+    const group = document.createElement('div');
+    group.className = 'form-group';
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0';
+    input.max = '100';
+    input.step = '0.01';
+    input.dataset.gridBlockName = blockName;
+    input.id = `gridV2Manual-${index}`;
+    const fallback = index === normalizedModes.length - 1
+      ? 100 - Math.floor(defaultPercent * 100) / 100 * (normalizedModes.length - 1)
+      : Math.floor(defaultPercent * 100) / 100;
+    input.value = prior[blockName] ?? pending[blockName] ?? String(Number(fallback.toFixed(2)));
+    label.htmlFor = input.id;
+    label.textContent = `${mode.label || blockName} %`;
+    group.append(label, input);
+    container.appendChild(group);
+  });
+  window.pendingGridV2ManualPercents = null;
+  syncGridAllocationUi();
 }
 
 function updateGridPreviewDom(preview) {
@@ -2102,31 +2184,38 @@ function updateGridPreviewDom(preview) {
     const total = preview?.total_space_label || '-';
     const budget = preview?.actual_budget_label || preview?.requested_budget_label || '-';
     const coverage = preview?.coverage_label || '-';
-    summary.textContent = isFullEnumerationProfile(preview?.profile)
-      ? `Parameter space: ${total} semantic combinations. Coverage: ${coverage}. Method: Full enumeration.`
-      : `Parameter space: ${total} semantic combinations. Grid budget: ${budget} candidates, ${coverage} coverage.`;
+    const effectivePolicy = preview?.effective_planning_policy;
+    summary.textContent = effectivePolicy === 'full'
+      ? `Parameter space: ${total} semantic combinations. Planned: ${budget}. Coverage: ${coverage}. Method: Full enumeration.`
+      : `Parameter space: ${total} semantic combinations. Planned: ${budget} candidates, ${coverage} coverage. Method: Budgeted deterministic sample.`;
   }
   if (!rowsEl) return;
   rowsEl.innerHTML = '';
   const modes = Array.isArray(preview?.modes) ? preview.modes : [];
+  syncGridV2ManualAllocation(modes);
   if (!modes.length) {
     rowsEl.innerHTML = '<tr><td colspan="5">No Grid preview available.</td></tr>';
     return;
   }
   modes.forEach((mode) => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${mode.label || mode.mode || '-'}</td>
-      <td>${mode.space_label || mode.space_size || '-'}</td>
-      <td>${mode.budget_label || mode.budget || '-'}</td>
-      <td>${mode.coverage_label || '-'}</td>
-      <td>${mode.generation || '-'}</td>
-    `;
+    [
+      mode.label || mode.mode || '-',
+      mode.space_label || mode.space_size || '-',
+      mode.budget_label || mode.budget || '-',
+      mode.coverage_label || '-',
+      mode.generation || '-'
+    ].forEach((value) => {
+      const td = document.createElement('td');
+      td.textContent = String(value);
+      tr.appendChild(td);
+    });
     rowsEl.appendChild(tr);
   });
 }
 
 function setGridPreviewError(message) {
+  window.lastGridPreviewConfigKey = null;
   const errorEl = document.getElementById('gridPreviewError');
   const summary = document.getElementById('gridPreviewSummary');
   const rowsEl = document.getElementById('gridPreviewRows');
@@ -2153,10 +2242,17 @@ async function updateGridPreview() {
   try {
     const state = gatherFormState();
     const config = buildGridConfig(state);
+    const previewConfigKey = getGridPreviewConfigKey(config);
     const warmupBars = Number(document.getElementById('warmupBars')?.value) || 1000;
     const preview = await fetchGridPreviewRequest(config, window.currentStrategyId, warmupBars);
     if (seq !== gridPreviewSeq) return;
     updateGridPreviewDom(preview);
+    // Dynamic V2 manual controls may be created from this Preview. Recompute
+    // the key after rendering so non-operative retained values do not make the
+    // just-returned Preview appear stale.
+    window.lastGridPreviewConfigKey = getGridPreviewConfigKey(
+      buildGridConfig(gatherFormState())
+    ) || previewConfigKey;
   } catch (error) {
     if (seq !== gridPreviewSeq) return;
     setGridPreviewError(error?.message || 'Grid preview failed.');
@@ -2413,6 +2509,8 @@ async function submitOptimization(event) {
       sanitizeTradesThreshold: config.sanitize_trades_threshold
     },
     grid: optimizerMode === 'grid' ? {
+      planningPolicy: config.grid_v2_planning_policy,
+      plannedCandidates: getCurrentPlannedGridCandidates(config),
       budget: config.grid_budget,
       seed: config.grid_seed,
       topCandidates: config.grid_top_candidates,
@@ -2443,7 +2541,7 @@ async function submitOptimization(event) {
   }
   if (optunaProgressText) {
     if (optimizerMode === 'grid') {
-      optunaProgressText.textContent = `Grid candidates: 0 / ${Number(config.grid_budget || 0).toLocaleString('en-US')}`;
+      optunaProgressText.textContent = `Grid candidates: 0 / ${getCurrentPlannedGridCandidates(config).toLocaleString('en-US')}`;
     } else if (config.optuna_budget_mode === 'trials') {
       optunaProgressText.textContent = `Trial: 0 / ${config.optuna_n_trials.toLocaleString('en-US')} (0%)`;
     } else if (config.optuna_budget_mode === 'time') {
@@ -2471,7 +2569,7 @@ async function submitOptimization(event) {
   let inFlightRunId = '';
   const optunaBudgetMode = config.optuna_budget_mode;
   const plannedTrials = optunaBudgetMode === 'trials' ? config.optuna_n_trials : null;
-  const plannedGridCandidates = optimizerMode === 'grid' ? Number(config.grid_budget || 0) : null;
+  const plannedGridCandidates = optimizerMode === 'grid' ? getCurrentPlannedGridCandidates(config) : null;
 
   for (let index = 0; index < totalSources; index += 1) {
     const source = sources[index];
@@ -2783,6 +2881,23 @@ function bindGridControls() {
       scheduleGridPreviewUpdate();
     });
   });
+
+  const planningPolicy = document.getElementById('gridV2PlanningPolicy');
+  if (planningPolicy && planningPolicy.dataset.gridBound !== '1') {
+    planningPolicy.dataset.gridBound = '1';
+    planningPolicy.addEventListener('change', () => {
+      syncGridProfileUi();
+      syncGridAllocationUi();
+      scheduleGridPreviewUpdate();
+    });
+  }
+
+  const v2Manual = document.getElementById('gridV2ManualAllocation');
+  if (v2Manual && v2Manual.dataset.gridBound !== '1') {
+    v2Manual.dataset.gridBound = '1';
+    v2Manual.addEventListener('input', scheduleGridPreviewUpdate);
+    v2Manual.addEventListener('change', scheduleGridPreviewUpdate);
+  }
 
   [
     'gridSeed',

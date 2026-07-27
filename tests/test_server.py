@@ -76,6 +76,9 @@ def test_grid_start_page_label_and_marker_are_compact():
     assert 'id="gridSlowRefinementEnabled"' in index_html
     assert 'class="grid-slow-objective-checkbox"' in index_html
     assert 'id="gridProfileModesSection"' in index_html
+    assert 'id="gridV2PlanningPolicy"' in index_html
+    assert '<option value="full" selected>Full enumeration</option>' in index_html
+    assert 'id="gridV2ManualAllocation"' in index_html
     assert "grid_enabled_modes" in ui_handlers_js
     assert "function getUserFacingGridModes(metadata)" in ui_handlers_js
     assert "function hasUserFacingGridModes(metadata)" in ui_handlers_js
@@ -95,6 +98,10 @@ def test_grid_start_page_label_and_marker_are_compact():
     assert "grid_fast_objectives" in ui_handlers_js
     assert "applyQueueGridConfig" in queue_js
     assert "grid_slow_refinement_enabled" in queue_js
+    assert "grid_v2_planning_policy" in ui_handlers_js
+    assert "data-grid-block-name" not in index_html
+    assert "td.textContent = String(value)" in ui_handlers_js
+    assert "planned_candidate_count" in queue_js
     assert results_html.index('id="optuna-settings-section"') < results_html.index("Optuna Settings")
     assert results_html.index('id="optuna-settings-section"') > results_html.index("Status &amp; Controls")
     assert "setElementVisible('optuna-settings-section', gridRows.length === 0)" in results_tables_js
@@ -624,6 +631,50 @@ def test_s03_regime_er_grid_preview_uses_logical_modes_not_internal_variants(cli
     assert "emergency" not in modes
     assert preview["mode_space_sizes"] == {"cc_only": 7_200, "tbands_only": 20_000, "both": 720_000}
     assert preview["full_candidate_count"] == 747_200
+
+
+def test_s03_regime_er_budgeted_grid_preview_uses_generic_logical_block_allocation(client):
+    response = client.post(
+        "/api/grid/preview",
+        json=_s03_regime_er_grid_preview_payload(
+            grid_v2_planning_policy="sampled",
+            grid_budget=1_000,
+            grid_allocation_method="manual",
+            grid_manual_percents={"cc_only": 20, "tbands_only": 30, "both": 50},
+        ),
+    )
+
+    assert response.status_code == 200
+    preview = response.get_json()["preview"]
+    assert preview["requested_planning_policy"] == "sampled"
+    assert preview["effective_planning_policy"] == "sampled"
+    assert preview["planned_candidate_count"] == 1_000
+    assert preview["mode_budgets"] == {"cc_only": 200, "tbands_only": 300, "both": 500}
+    assert [row["mode"] for row in preview["modes"]] == ["cc_only", "tbands_only", "both"]
+
+
+def test_s03_regime_er_budgeted_grid_preview_rejects_unsafe_budget_and_unknown_manual_block(client):
+    too_small = client.post(
+        "/api/grid/preview",
+        json=_s03_regime_er_grid_preview_payload(
+            grid_v2_planning_policy="sampled",
+            grid_budget=2,
+        ),
+    )
+    unknown = client.post(
+        "/api/grid/preview",
+        json=_s03_regime_er_grid_preview_payload(
+            grid_v2_planning_policy="sampled",
+            grid_budget=100,
+            grid_allocation_method="manual",
+            grid_manual_percents={"cc_only": 20, "tbands_only": 30, "both": 40, "ghost": 10},
+        ),
+    )
+
+    assert too_small.status_code == 400
+    assert "non-empty planning blocks" in too_small.get_json()["error"]
+    assert unknown.status_code == 400
+    assert "ghost" in unknown.get_json()["error"]
 
 
 def test_s03_regime_er_grid_preview_uses_posted_numeric_ranges(client):
@@ -3341,6 +3392,39 @@ def test_grid_settings_saved_wfa_v2_full_enumeration_labels():
 
     assert view["is_wfa_grid"] is True
     _assert_saved_v2_full_enumeration_grid_settings(view)
+
+
+def test_grid_settings_prefers_v2_planning_json_over_ambiguous_legacy_columns():
+    study = _standalone_grid_study(
+        grid_requested_budget=999,
+        grid_actual_budget=888,
+        grid_coverage_pct=88.8,
+        grid_summary={
+            "requested_budget": 100,
+            "actual_budget": 50,
+            "grid": {
+                "planning": {
+                    "requested_policy": "sampled",
+                    "effective_policy": "sampled",
+                    "requested_budget": 100,
+                    "planned_candidate_count": 50,
+                },
+                "preview": {
+                    "full_candidate_count": 1_000,
+                    "planned_candidate_count": 50,
+                    "coverage_pct": 5.0,
+                    "requested_planning_policy": "sampled",
+                    "effective_planning_policy": "sampled",
+                },
+            },
+        },
+    )
+
+    rows = _grid_settings_rows(build_grid_settings_view(study))
+    assert rows["Planning"] == "sampled"
+    assert rows["Budget"] == "50 candidates"
+    assert rows["Parameter Space"] == "1k combinations"
+    assert rows["Coverage"] == "5.0%"
 
 
 def test_grid_settings_constraints_standalone_two_enabled():

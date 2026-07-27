@@ -1246,6 +1246,10 @@ function applyQueueGridConfig(config) {
   }
   if (!isGrid) return;
 
+  if (Object.prototype.hasOwnProperty.call(config, 'grid_v2_planning_policy')) {
+    setInputValue('gridV2PlanningPolicy', config.grid_v2_planning_policy || 'full');
+  }
+
   if (Object.prototype.hasOwnProperty.call(config, 'grid_budget')) {
     setInputValue('gridBudget', config.grid_budget);
   }
@@ -1275,6 +1279,21 @@ function applyQueueGridConfig(config) {
   if (Object.prototype.hasOwnProperty.call(manual, 'cc_only')) setInputValue('gridManualCc', manual.cc_only);
   if (Object.prototype.hasOwnProperty.call(manual, 'tbands_only')) setInputValue('gridManualTbands', manual.tbands_only);
   if (Object.prototype.hasOwnProperty.call(manual, 'both')) setInputValue('gridManualBoth', manual.both);
+  window.pendingGridV2ManualPercents = { ...manual };
+  if (
+    String(config.grid_v2_planning_policy || '')
+    && typeof syncGridV2ManualAllocation === 'function'
+    && Object.keys(manual).length
+  ) {
+    const previewModes = Array.isArray(window.lastGridPreview?.modes)
+      ? window.lastGridPreview.modes
+      : Object.keys(manual).map((name) => ({ mode: name, label: name }));
+    syncGridV2ManualAllocation(previewModes);
+  }
+  document.querySelectorAll('#gridV2ManualAllocation input[data-grid-block-name]').forEach((input) => {
+    const blockName = String(input.dataset.gridBlockName || '');
+    if (Object.prototype.hasOwnProperty.call(manual, blockName)) input.value = manual[blockName];
+  });
   if (Object.prototype.hasOwnProperty.call(config, 'grid_diversity_enabled')) {
     setCheckboxValue('gridDiversityEnabled', Boolean(config.grid_diversity_enabled));
   }
@@ -1832,9 +1851,24 @@ function formatQueueCompactTrialCount(rawCount) {
   return String(Math.round(count));
 }
 
+function getQueueGridPlannedFacts(item) {
+  const planned = Number(
+    item?.planned_candidate_count
+    ?? item?.config?.planned_candidate_count
+  );
+  if (Number.isFinite(planned) && planned > 0) {
+    return { count: planned, source: 'planned' };
+  }
+  return {
+    count: Number(item?.config?.grid_budget || 200000),
+    source: 'legacy budget'
+  };
+}
+
 function buildQueueAutoSetBudgetLabel(item) {
   if (item?.config?.optimization_mode === 'grid') {
-    return `${formatQueueCompactTrialCount(item?.config?.grid_budget || 0)}c`;
+    const facts = getQueueGridPlannedFacts(item);
+    return `${formatQueueCompactTrialCount(facts.count)}c ${facts.source}`;
   }
   const budgetMode = String(item?.config?.optuna_budget_mode || 'trials').trim().toLowerCase();
   if (budgetMode === 'time') {
@@ -2015,6 +2049,20 @@ function collectQueueItem() {
   const config = typeof buildCurrentOptimizerConfig === 'function'
     ? buildCurrentOptimizerConfig(state)
     : buildOptunaConfig(state);
+  if (config.optimization_mode === 'grid') {
+    const preview = window.lastGridPreview;
+    const previewPolicy = String(preview?.requested_planning_policy || '');
+    if (
+      preview
+      && window.lastGridPreviewConfigKey === getGridPreviewConfigKey(config)
+      && previewPolicy === String(config.grid_v2_planning_policy || 'full')
+      && Number(preview.planned_candidate_count) > 0
+    ) {
+      config.planned_candidate_count = Number(preview.planned_candidate_count);
+      config.planned_candidate_policy = String(preview.effective_planning_policy || previewPolicy);
+      config.planning_policy_version = String(preview.planning_policy_version || '');
+    }
+  }
   const hasEnabledParams = Object.values(config.enabled_params || {}).some(Boolean);
   if (!hasEnabledParams) {
     showQueueError('Please enable at least one parameter to optimize.');
@@ -2045,6 +2093,11 @@ function collectQueueItem() {
     successCount: 0,
     failureCount: 0
   };
+  if (config.optimization_mode === 'grid' && Number(config.planned_candidate_count) > 0) {
+    item.planned_candidate_count = Number(config.planned_candidate_count);
+    item.planned_candidate_policy = config.planned_candidate_policy;
+    item.planning_policy_version = config.planning_policy_version;
+  }
 
   item.studySet = buildQueueStudySetState(item, {
     configured: true,
@@ -2109,7 +2162,8 @@ function generateQueueLabel(item) {
 
   let budgetLabel;
   if (item.config?.optimization_mode === 'grid' || item.mode === 'grid') {
-    budgetLabel = String(item.config?.grid_budget || 200000) + 'c';
+    const facts = getQueueGridPlannedFacts(item);
+    budgetLabel = String(facts.count) + 'c ' + facts.source;
   } else {
     const budgetMode = item.config?.optuna_budget_mode || 'trials';
     if (budgetMode === 'trials') {
@@ -2218,8 +2272,10 @@ function buildQueueTooltip(item) {
   }
 
   if (item.mode === 'grid' || item.config?.optimization_mode === 'grid') {
-    const candidates = Number(item.config?.grid_budget || 200000).toLocaleString('en-US');
-    lines.push('Budget: ' + candidates + ' candidates (LHS by mode)');
+    const facts = getQueueGridPlannedFacts(item);
+    const candidates = Number(facts.count).toLocaleString('en-US');
+    const policy = item.planned_candidate_policy || item.config?.grid_v2_planning_policy || 'legacy';
+    lines.push('Candidates: ' + candidates + ' (' + facts.source + ', policy: ' + policy + ')');
   } else {
     const budgetMode = item.config?.optuna_budget_mode || 'trials';
     const sampler = (item.config?.sampler || 'tpe').toUpperCase();
@@ -2534,11 +2590,15 @@ function buildStateForItem(item, status) {
       sanitizeTradesThreshold: item.config?.sanitize_trades_threshold
     },
     grid: item.config?.optimization_mode === 'grid' ? {
+      planningPolicy: item.config?.grid_v2_planning_policy,
+      plannedCandidates: getQueueGridPlannedFacts(item).count,
+      planningCountSource: getQueueGridPlannedFacts(item).source,
       budget: item.config?.grid_budget,
       seed: item.config?.grid_seed,
       topCandidates: item.config?.grid_top_candidates,
       enabledModes: item.config?.grid_enabled_modes,
       allocationMethod: item.config?.grid_allocation_method,
+      manualPercents: item.config?.grid_manual_percents,
       fastObjectives: item.config?.grid_fast_objectives,
       fastPrimaryObjective: item.config?.grid_fast_primary_objective,
       slowRefinementEnabled: item.config?.grid_slow_refinement_enabled,
@@ -2708,7 +2768,7 @@ async function runQueue() {
         if (optunaProgressFill) optunaProgressFill.style.width = '0%';
         if (optunaProgressText) {
           if (item.mode === 'grid' || item.config?.optimization_mode === 'grid') {
-            const candidates = Number(item.config?.grid_budget || 200000);
+            const candidates = getQueueGridPlannedFacts(item).count;
             optunaProgressText.textContent = 'Candidate: 0 / ' + candidates.toLocaleString('en-US') + ' (0%)';
           } else {
             const budgetMode = item.config?.optuna_budget_mode;

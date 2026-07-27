@@ -100,6 +100,7 @@ class OptimizationConfig:
     coverage_mode: bool = False
 
     # Grid mode settings
+    grid_v2_planning_policy: str = "full"
     grid_budget: int = 200_000
     grid_seed: int = 42
     grid_top_candidates: int = 10

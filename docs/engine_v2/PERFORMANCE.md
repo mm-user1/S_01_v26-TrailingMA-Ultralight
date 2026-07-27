@@ -8,6 +8,22 @@ Benchmark numbers are machine-dependent. Always record the machine, CPU, Python
 version, Numba version, thread environment, command, worker count, candidate
 count, and the full Grid V2 timings dict before comparing runs.
 
+## Deterministic Budgeted Planning
+
+For `grid_v2_planning_policy=sampled` with requested `K < N`, planning builds
+only K candidate-table rows. The balanced discrete LHS columns, semantic dedup,
+mixed-radix top-up, ordering, semantic keys, and diagnostics are all O(K) in
+memory; preview computes N and allocation by closed-form domain products and
+does not build the population. A saturated request (`K >= N`) intentionally
+uses the exact full builder, so its cost is the historical O(N) cost.
+
+Benchmark reports must record requested/effective policy, full N, requested K,
+delivered K, seed, allocation method, per-block targets/delivery, planner and
+sampler versions, plan fingerprint, workers, and cold/warm JIT state. Compare
+planning, signal/data builds, stack, compiled kernel, ranking, and total wall
+time separately. Sampled execution uses mapping config packing; full execution
+retains the certified table-packing path when compatible.
+
 ## Required Commands
 
 Direct Grid V2 benchmark from the in-repository SUI baseline payload:

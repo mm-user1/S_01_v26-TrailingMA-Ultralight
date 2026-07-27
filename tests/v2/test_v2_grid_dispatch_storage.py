@@ -250,6 +250,23 @@ def test_grid_v2_preview_payload_has_full_enumeration_rows_and_select_subset_cou
     assert all(row["generation"] == "Full enumeration" for row in preview["modes"])
 
 
+def test_grid_v2_budgeted_preview_reports_requested_effective_and_per_block_facts():
+    config = _v2_grid_config()
+    config.grid_enabled_modes = ["bracket", "trail"]
+    config.grid_v2_planning_policy = "sampled"
+    config.grid_budget = 100
+    config.grid_seed = 77
+    preview = preview_grid_parameter_space(config)
+
+    assert preview["profile"] == "full_enumeration_v2"
+    assert preview["requested_planning_policy"] == "sampled"
+    assert preview["effective_planning_policy"] == "sampled"
+    assert preview["full_candidate_count"] == 48_480
+    assert preview["planned_candidate_count"] == preview["actual_budget"] == 100
+    assert sum(preview["mode_budgets"].values()) == 100
+    assert all(row["generation"] == "Budgeted deterministic sample" for row in preview["modes"])
+
+
 def test_grid_v2_execution_uses_reduced_select_domain():
     config = _v2_grid_config()
     config.grid_enabled_modes = ["trail"]
@@ -282,6 +299,31 @@ def test_grid_v2_storage_roundtrip_uses_existing_grid_schema():
     assert len(loaded["trials"]) == 2
     assert all(trial["candidate_id"] for trial in loaded["trials"])
     assert all(trial["semantic_key"] for trial in loaded["trials"])
+
+
+def test_grid_v2_budgeted_dispatch_and_storage_roundtrip_are_factual():
+    with _temporary_active_db("grid_v2_budgeted_storage_roundtrip"):
+        config = _v2_grid_config(save_size=True)
+        config.grid_v2_planning_policy = "sampled"
+        config.grid_budget = 2
+        config.grid_seed = 77
+        results, study_id = run_grid_optimization(config, save_study=True)
+        loaded = load_study_from_db(study_id)
+
+    assert study_id and loaded is not None
+    summary = config.grid_summary
+    assert summary["requested_budget"] == 2
+    assert summary["full_candidate_count"] == 5
+    assert summary["grid_v2_planning_policy"] == "sampled"
+    assert summary["grid_v2_effective_planning_policy"] == "sampled"
+    assert summary["actual_budget"] == 2
+    if compiled_batch_available():
+        assert summary["grid"]["compiled_config_packing"] == "mapping"
+    assert loaded["study"]["n_trials"] == 2
+    assert loaded["study"]["total_trials"] == 2
+    assert loaded["study"]["grid_requested_budget"] == 2
+    assert loaded["study"]["grid_actual_budget"] == 2
+    assert len(results) == 2
 
 
 def test_s06_b2_single_backtest_backend_path_matches_direct_strategy():

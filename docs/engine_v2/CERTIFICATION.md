@@ -80,6 +80,27 @@ Grid V2 entry points live in `src/core/grid_v2.py`:
 - `run_grid_v2(...)`
 - `deterministic_candidate_subset_indices(...)`
 
+Deterministic budgeted planning certification (TZ48):
+
+- `grid_v2_planning_policy` has canonical values `full|sampled` and defaults to
+  `full`; V1 Grid is outside this contract.
+- `grid_v2_planning_v1` uses `ordered_block_allocator_v1` and
+  `balanced_discrete_lhs_pcg64_v1`. Named BLAKE2b substreams drive only raw
+  PCG64 draws, rejection-sampled integer choices, and explicit Fisher-Yates.
+- Sampled `K < N` planning is O(K), assigns IDs after canonical mixed-radix
+  ordering, reports per-block allocation/collision/top-up diagnostics, and is
+  deterministic across worker counts. Sampled table config packing is
+  conservatively disabled; mapping packing remains its parity-safe path.
+- Full policy and sampled `K >= N` use the exact pre-TZ48 full builder/order.
+  Existing S06 default remains 48,480 candidates with semantic-key digest
+  `f1aa8bba4099d07f4d0d2865a72bf6537767329f3fdd9b324f07986b8b8369e4`.
+- Semantic keys exclude planning inputs. Plan fingerprints cover effective
+  planning identity plus ordered semantic keys. WFA reuse excludes runtime
+  dates only and preserves the sampled table/fingerprint across window rebases.
+- Existing JSON columns store additive planning facts; no schema migration was
+  added. For Grid studies, `n_trials` and `total_trials` are delivered counts,
+  while `grid_requested_budget` remains configured intent.
+
 Grid V2 has two execution tiers:
 
 - reference tier: loops candidates through the shared public V2 runner;

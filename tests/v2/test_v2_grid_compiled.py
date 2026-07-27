@@ -281,6 +281,38 @@ def test_compiled_grid_v2_worker_count_is_deterministic(prepared_data, hooks):
         _assert_rows_equal(left, right)
 
 
+def test_sampled_position_grid_compiled_rows_match_reference(prepared_data, hooks):
+    df, trade_start_idx = prepared_data
+    base_params = merged_reference_params("reference_b_trend_bracket")
+    common = {
+        "enabled_variants": ("bracket",),
+        "enabled_axes": ("stopX", "stopRR"),
+        "planning_policy": "sampled",
+        "requested_budget": 7,
+        "seed": 77,
+        "top_n": 2,
+    }
+    compiled_plan = build_grid_v2_plan(
+        _config_with_rounding("none"),
+        GridV2Settings(**common, prefer_compiled=True),
+        base_params=base_params,
+    )
+    reference_plan = build_grid_v2_plan(
+        _config_with_rounding("none"),
+        GridV2Settings(**common, prefer_compiled=False),
+        base_params=base_params,
+    )
+
+    compiled = execute_grid_v2_candidates(compiled_plan, df, trade_start_idx, hooks)
+    reference = execute_grid_v2_candidates(reference_plan, df, trade_start_idx, hooks)
+
+    assert compiled_plan.planned_candidate_count == 7
+    assert compiled_plan.candidate_table.semantic_keys_by_row == reference_plan.candidate_table.semantic_keys_by_row
+    assert compiled.metadata["compiled_config_packing"] == "mapping"
+    for compiled_row, reference_row in zip(compiled.rows, reference.rows):
+        _assert_rows_equal(compiled_row, reference_row)
+
+
 def test_compiled_grid_v2_stacked_batch_matches_grouped_batch(prepared_data, hooks):
     df, trade_start_idx = prepared_data
     base_params = merged_reference_params("reference_b_trend_bracket")

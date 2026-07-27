@@ -33,6 +33,7 @@ from core.grid_engine import (
     default_grid_enabled_modes,
     format_compact_count,
     format_coverage_pct,
+    normalize_grid_v2_planning_policy,
     parse_grid_budget,
     preview_grid_parameter_space,
     supports_grid_v2,
@@ -1198,6 +1199,7 @@ def _derive_grid_preview(config: Dict[str, Any], study: Dict[str, Any]) -> Dict[
     payload = deepcopy(config)
     grid_config = _parse_json_dict(payload.get("grid_config"))
     aliases = {
+        "grid_v2_planning_policy": ("planning_policy",),
         "grid_budget": ("budget",),
         "grid_seed": ("seed",),
         "grid_top_candidates": ("top_candidates",),
@@ -1270,18 +1272,23 @@ def build_grid_settings_view(study: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not preview:
         preview = _derive_grid_preview(config, study)
 
+    grid_section = _parse_json_dict(grid_summary.get("grid"))
+    planning_summary = _parse_json_dict(grid_section.get("planning"))
     requested_budget = _grid_setting_number(
-        study.get("grid_requested_budget")
-        or grid_summary.get("requested_budget")
+        grid_summary.get("requested_budget")
+        or planning_summary.get("requested_budget")
+        or preview.get("requested_budget")
+        or study.get("grid_requested_budget")
         or _grid_config_value(config, "grid_budget", "budget", "gridBudget")
     )
     actual_budget = _grid_setting_number(
-        study.get("grid_actual_budget")
-        or grid_summary.get("actual_budget")
+        grid_summary.get("actual_budget")
+        or planning_summary.get("planned_candidate_count")
+        or preview.get("planned_candidate_count")
         or preview.get("actual_budget")
+        or study.get("grid_actual_budget")
         or requested_budget
     )
-    grid_section = _parse_json_dict(grid_summary.get("grid"))
     allocation_summary = _parse_json_dict(grid_section.get("allocation"))
     total_space = _grid_setting_number(
         preview.get("total_space")
@@ -1292,9 +1299,9 @@ def build_grid_settings_view(study: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         or grid_section.get("full_candidate_count")
         or grid_section.get("candidate_count")
     )
-    coverage_pct = _grid_setting_number(study.get("grid_coverage_pct"), integer=False)
+    coverage_pct = _grid_setting_number(preview.get("coverage_pct"), integer=False)
     if coverage_pct is None:
-        coverage_pct = _grid_setting_number(preview.get("coverage_pct"), integer=False)
+        coverage_pct = _grid_setting_number(study.get("grid_coverage_pct"), integer=False)
     seed = _grid_setting_number(_grid_config_value(config, "grid_seed", "seed", "gridSeed"))
     top_candidates = _grid_setting_number(
         study.get("grid_top_candidates")
@@ -1393,8 +1400,21 @@ def build_grid_settings_view(study: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             )
             generations.add(generation.lower())
 
-    if _is_full_enumeration_profile(preview.get("profile")):
+    requested_policy = str(
+        planning_summary.get("requested_policy")
+        or preview.get("requested_planning_policy")
+        or _grid_config_value(config, "grid_v2_planning_policy", "planning_policy")
+        or ""
+    ).strip().lower()
+    effective_policy = str(
+        planning_summary.get("effective_policy")
+        or preview.get("effective_planning_policy")
+        or ""
+    ).strip().lower()
+    if effective_policy == "full":
         sampling_label = "Full enumeration"
+    elif effective_policy == "sampled":
+        sampling_label = "Budgeted deterministic sample"
     elif generations and generations <= {"full", "full enumeration", "disabled"}:
         sampling_label = "Full enumeration"
     elif any("lhs" in item for item in generations):
@@ -1402,13 +1422,21 @@ def build_grid_settings_view(study: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     elif generations:
         sampling_label = "Mixed by mode"
     else:
-        sampling_label = "-"
+        sampling_label = "Legacy budget (policy unavailable)"
     is_full_enumeration = (
         _is_full_enumeration_profile(preview.get("profile"))
         or _is_full_enumeration_allocation(allocation_method)
     )
 
     rows = [
+        {
+            "key": "Planning",
+            "val": (
+                f"{requested_policy or 'legacy'} → {effective_policy}"
+                if effective_policy and requested_policy != effective_policy
+                else (effective_policy or requested_policy or "Legacy budget")
+            ),
+        },
         {
             "key": "Budget",
             "val": f"{format_compact_count(actual_budget)} candidates" if actual_budget is not None else "-",
@@ -2345,6 +2373,15 @@ def _build_optimization_config(
         )
     except ValueError as exc:
         raise ValueError(str(exc))
+    if supports_grid_v2(strategy_id):
+        grid_v2_planning_policy = normalize_grid_v2_planning_policy(
+            payload.get(
+                "grid_v2_planning_policy",
+                payload.get("gridV2PlanningPolicy", "full"),
+            )
+        )
+    else:
+        grid_v2_planning_policy = "full"
     try:
         grid_seed = int(payload.get("grid_seed", payload.get("gridSeed", 42)))
     except (TypeError, ValueError):
@@ -2392,11 +2429,14 @@ def _build_optimization_config(
     manual_raw = payload.get("grid_manual_percents", payload.get("gridManualPercents", {}))
     grid_manual_percents: Dict[str, float] = {}
     if isinstance(manual_raw, dict):
-        for key in ("cc_only", "tbands_only", "both"):
+        for raw_key, raw_percent in manual_raw.items():
+            key = str(raw_key)
             try:
-                grid_manual_percents[key] = float(manual_raw.get(key, 0.0) or 0.0)
+                grid_manual_percents[key] = float(raw_percent or 0.0)
             except (TypeError, ValueError):
                 raise ValueError("Grid manual allocation percentages must be numeric.")
+    elif manual_raw not in (None, ""):
+        raise ValueError("Grid manual allocation percentages must be an object.")
     grid_diversity_enabled = _parse_bool(
         payload.get("grid_diversity_enabled", payload.get("gridDiversityEnabled", True)),
         True,
@@ -2516,6 +2556,7 @@ def _build_optimization_config(
         swapping_prob=swapping_prob if swapping_prob is not None else 0.5,
         n_startup_trials=n_startup_trials,
         coverage_mode=coverage_mode,
+        grid_v2_planning_policy=grid_v2_planning_policy,
         grid_budget=grid_budget,
         grid_seed=grid_seed,
         grid_top_candidates=grid_top_candidates,

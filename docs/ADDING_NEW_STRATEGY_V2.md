@@ -284,6 +284,29 @@ declarations. Compiled Grid V2 config packing is also core-owned and table
 driven when compatible with the strategy normalizer; no new Phase 2.6.3 or
 Phase 2.6.3.1 strategy hook is required.
 
+`grid_v2_planning_policy` defaults to `full`. The `full` policy and a sampled
+request whose budget covers the full valid space both use the exact historical
+full builder and candidate order. The `sampled` policy with `K < N` allocates K
+across the planner's ordered logical blocks and samples each discrete Cartesian
+block with the versioned balanced-LHS PCG64 contract in
+`core/grid_v2_sampling.py`. Strategy packages do not implement or override this
+sampler.
+
+For sampled eligibility, each planning block must have a fixed active schema,
+no `depends_on` parent may be a varied axis, inactive-axis dedup must be off,
+and every pair of blocks must be provably disjoint in semantic identity. A
+logical `grid_mode_name` alone is not a discriminator. Strategy authors should
+model logical blocks with differing execution variants/modes or a differing
+fixed active parameter, as the S03 boolean logical modes do. Unsupported
+layouts fail preview and execution explicitly.
+
+Candidate IDs are local to the resulting plan. Semantic keys continue to
+describe only strategy/execution/active-parameter semantics and never include
+planning policy, budget, seed, allocation, or worker count. Selected candidates
+still rerun through the public reference runner. Sampled execution currently
+uses mapping config packing; the structurally certified table packer remains
+the full-plan fast path.
+
 Candidate rows have both `variant_name` and `grid_mode_name`. For user-facing
 variant strategies such as S06 B2, both are normally the same values
 (`bracket`/`trail`). For internal-variant strategies such as S03 Regime-ER B2,
@@ -339,10 +362,10 @@ both        = 720,000
 total       = 747,200
 ```
 
-Every candidate is signal-role heavy, so even a corrected full-enumeration run
-can exceed `grid_v2_max_cache_mb=512` on the SUI pilot dataset. Do not hide that
-by raising defaults, weakening estimates, or adding sampling in a strategy
-import patch.
+Every candidate is signal-role heavy, so a full-enumeration run can exceed
+`grid_v2_max_cache_mb=512` on the SUI pilot dataset. Use the generic sampled
+planning policy when a bounded research run is intended; do not add sampling
+inside a strategy package or weaken the memory estimate.
 
 When comparing candidate counts across tools or baselines, document the enabled
 axes, enabled variants, `{param}_options` subsets, budget, and whether the UI

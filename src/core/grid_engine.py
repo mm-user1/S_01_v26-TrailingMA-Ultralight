@@ -176,9 +176,11 @@ def get_grid_v2_backend_metadata(strategy_id: str) -> Dict[str, Any]:
         "compiled_unavailable_reason": compiled_unavailable_reason(),
         "numba_available": compiled_available,
         "numba_import_error": compiled_unavailable_reason(),
-        "supports_partial_coverage": False,
-        "supports_seed": False,
-        "supports_mode_allocation": False,
+        "supports_partial_coverage": True,
+        "supports_seed": True,
+        "supports_mode_allocation": True,
+        "planning_policies": ["full", "sampled"],
+        "default_planning_policy": "full",
         "retain_all_fast_results": True,
         "modes": [
             {"id": name, "label": name, "default_enabled": True}
@@ -218,6 +220,25 @@ def parse_grid_budget(value: Any) -> int:
     if budget <= 0:
         raise ValueError("Grid candidates must be greater than zero.")
     return budget
+
+
+def normalize_grid_v2_planning_policy(value: Any) -> str:
+    """Normalize the single public Grid V2 planning-policy contract."""
+
+    policy = str(value or "full").strip().lower().replace("-", "_")
+    aliases = {
+        "full": "full",
+        "full_enumeration": "full",
+        "full_enumeration_v2": "full",
+        "sampled": "sampled",
+        "budgeted": "sampled",
+        "budget": "sampled",
+        "partial": "sampled",
+    }
+    normalized = aliases.get(policy)
+    if normalized is None:
+        raise ValueError("Grid V2 planning policy must be 'full' or 'sampled'.")
+    return normalized
 
 
 def format_compact_count(value: Any) -> str:
@@ -272,62 +293,6 @@ def _normalize_allocation_method(value: Any) -> str:
     return aliases.get(method, method)
 
 
-def _mode_order_index(mode: str) -> int:
-    try:
-        return MODE_ORDER.index(mode)
-    except ValueError:
-        return len(MODE_ORDER)
-
-
-def _quota_weights(
-    mode_space_sizes: Dict[str, int],
-    method: str,
-    min_quota: float,
-    manual_percents: Dict[str, float],
-) -> Dict[str, float]:
-    enabled_modes = [mode for mode in MODE_ORDER if int(mode_space_sizes.get(mode, 0)) > 0]
-    if not enabled_modes:
-        raise ValueError("Grid parameter space is empty.")
-
-    if method == "manual":
-        total_pct = 0.0
-        quotas: Dict[str, float] = {}
-        for mode in MODE_ORDER:
-            pct = float(manual_percents.get(mode, 0.0) or 0.0)
-            if pct < 0:
-                raise ValueError("Manual Grid allocation percentages must be non-negative.")
-            if int(mode_space_sizes.get(mode, 0)) <= 0 and pct > 0:
-                raise ValueError(f"Manual Grid allocation assigns budget to disabled mode '{mode}'.")
-            quotas[mode] = pct / 100.0
-            if mode in enabled_modes:
-                total_pct += pct
-        if abs(total_pct - 100.0) > 1e-6:
-            raise ValueError("Manual Grid allocation must sum to 100% across enabled modes.")
-        return quotas
-
-    if method == "auto_sqrt_space":
-        weights = {mode: math.sqrt(float(mode_space_sizes[mode])) for mode in enabled_modes}
-        min_q = max(0.0, float(min_quota))
-        if min_q * len(enabled_modes) >= 1.0 and len(enabled_modes) > 1:
-            raise ValueError("Grid min quota is too high for the number of enabled modes.")
-        base = min_q if len(enabled_modes) > 1 else 0.0
-        remaining = max(0.0, 1.0 - base * len(enabled_modes))
-    elif method == "proportional_space":
-        weights = {mode: float(mode_space_sizes[mode]) for mode in enabled_modes}
-        base = 0.0
-        remaining = 1.0
-    else:
-        raise ValueError(f"Unsupported Grid allocation method: {method}")
-
-    total_weight = sum(weights.values())
-    if total_weight <= 0:
-        raise ValueError("Grid allocation weights are empty.")
-    quotas = {mode: 0.0 for mode in MODE_ORDER}
-    for mode in enabled_modes:
-        quotas[mode] = base + remaining * (weights[mode] / total_weight)
-    return quotas
-
-
 def allocate_mode_budgets(
     mode_space_sizes: Dict[str, int],
     requested_budget: int,
@@ -336,8 +301,34 @@ def allocate_mode_budgets(
     min_quota: float = 0.10,
     manual_percents: Optional[Dict[str, float]] = None,
 ) -> GridAllocation:
+    return allocate_ordered_block_budgets(
+        MODE_ORDER,
+        mode_space_sizes,
+        requested_budget,
+        method=method,
+        min_quota=min_quota,
+        manual_percents=manual_percents,
+        reject_unknown_manual=False,
+    )
+
+
+def allocate_ordered_block_budgets(
+    block_order: Sequence[str],
+    block_space_sizes: Mapping[str, int],
+    requested_budget: int,
+    *,
+    method: str = "auto_sqrt_space",
+    min_quota: float = 0.10,
+    manual_percents: Optional[Mapping[str, float]] = None,
+    reject_unknown_manual: bool = True,
+) -> GridAllocation:
+    """Allocate a deterministic budget across an explicitly ordered block set."""
+
+    ordered = tuple(str(name) for name in block_order)
+    if not ordered or len(set(ordered)) != len(ordered):
+        raise ValueError("Grid block order must contain unique block identifiers.")
     requested = parse_grid_budget(requested_budget)
-    sizes = {mode: max(0, int(mode_space_sizes.get(mode, 0) or 0)) for mode in MODE_ORDER}
+    sizes = {name: max(0, int(block_space_sizes.get(name, 0) or 0)) for name in ordered}
     total_space = sum(sizes.values())
     if total_space <= 0:
         raise ValueError("Grid parameter space is empty.")
@@ -345,14 +336,58 @@ def allocate_mode_budgets(
     actual_budget = min(requested, total_space)
     method = _normalize_allocation_method(method)
     manual = dict(manual_percents or {})
-    quotas = _quota_weights(sizes, method, min_quota, manual)
+    if reject_unknown_manual:
+        unknown_positive = sorted(
+            str(name)
+            for name, percent in manual.items()
+            if str(name) not in sizes and float(percent or 0.0) > 0.0
+        )
+        if unknown_positive:
+            raise ValueError(
+                "Manual Grid allocation names unknown block(s): " + ", ".join(unknown_positive)
+            )
+
+    enabled = [name for name in ordered if sizes[name] > 0]
+    if method == "manual":
+        quotas = {}
+        total_pct = 0.0
+        for name in ordered:
+            percent = float(manual.get(name, 0.0) or 0.0)
+            if percent < 0:
+                raise ValueError("Manual Grid allocation percentages must be non-negative.")
+            if sizes[name] <= 0 and percent > 0:
+                raise ValueError(f"Manual Grid allocation assigns budget to disabled mode '{name}'.")
+            quotas[name] = percent / 100.0
+            if name in enabled:
+                total_pct += percent
+        if abs(total_pct - 100.0) > 1e-6:
+            raise ValueError("Manual Grid allocation must sum to 100% across enabled modes.")
+    elif method in {"auto_sqrt_space", "proportional_space"}:
+        if method == "auto_sqrt_space":
+            weights = {name: math.sqrt(float(sizes[name])) for name in enabled}
+            min_q = max(0.0, float(min_quota))
+            if min_q * len(enabled) >= 1.0 and len(enabled) > 1:
+                raise ValueError("Grid min quota is too high for the number of enabled modes.")
+            base = min_q if len(enabled) > 1 else 0.0
+            remaining_weight = max(0.0, 1.0 - base * len(enabled))
+        else:
+            weights = {name: float(sizes[name]) for name in enabled}
+            base = 0.0
+            remaining_weight = 1.0
+        total_weight = sum(weights.values())
+        quotas = {name: 0.0 for name in ordered}
+        for name in enabled:
+            quotas[name] = base + remaining_weight * (weights[name] / total_weight)
+    else:
+        raise ValueError(f"Unsupported Grid allocation method: {method}")
 
     if actual_budget >= total_space:
         budgets = dict(sizes)
     else:
-        budgets = {mode: 0 for mode in MODE_ORDER}
+        budgets = {name: 0 for name in ordered}
         remaining = actual_budget
-        available = {mode for mode in MODE_ORDER if sizes[mode] > 0}
+        available = {name for name in ordered if sizes[name] > 0}
+        order_index = {name: index for index, name in enumerate(ordered)}
 
         while remaining > 0 and available:
             quota_sum = sum(max(0.0, quotas.get(mode, 0.0)) for mode in available)
@@ -383,7 +418,7 @@ def allocate_mode_budgets(
                 key=lambda mode: (
                     -(desired.get(mode, 0.0) - math.floor(desired.get(mode, 0.0))),
                     -quotas.get(mode, 0.0),
-                    _mode_order_index(mode),
+                    order_index[mode],
                 )
             )
             progressed = False
@@ -398,7 +433,7 @@ def allocate_mode_budgets(
 
             available = {mode for mode in available if budgets[mode] < sizes[mode]}
             if not progressed and remaining > 0 and available:
-                mode = sorted(available, key=_mode_order_index)[0]
+                mode = sorted(available, key=order_index.__getitem__)[0]
                 take = min(remaining, sizes[mode] - budgets[mode])
                 budgets[mode] += take
                 remaining -= take
@@ -406,7 +441,7 @@ def allocate_mode_budgets(
     actual = sum(budgets.values())
     coverage = {
         mode: (budgets[mode] / sizes[mode] * 100.0) if sizes[mode] > 0 else 0.0
-        for mode in MODE_ORDER
+        for mode in ordered
     }
     return GridAllocation(
         requested_budget=requested,
@@ -415,7 +450,7 @@ def allocate_mode_budgets(
         mode_space_sizes=sizes,
         mode_budgets=budgets,
         mode_coverage_pct=coverage,
-        target_mode_quotas={mode: float(quotas.get(mode, 0.0)) for mode in MODE_ORDER},
+        target_mode_quotas={mode: float(quotas.get(mode, 0.0)) for mode in ordered},
         allocation_method=method,
         allocation_params={
             "min_quota": float(min_quota),
@@ -471,6 +506,19 @@ def _grid_v2_settings_from_config(config: OptimizationConfig):
         enabled_variants=enabled_variants,
         enabled_axes=enabled_axes or None,
         prefer_compiled=bool(getattr(config, "grid_v2_prefer_compiled", True)),
+        planning_policy=normalize_grid_v2_planning_policy(
+            getattr(config, "grid_v2_planning_policy", "full")
+        ),
+        requested_budget=parse_grid_budget(getattr(config, "grid_budget", 200_000)),
+        seed=getattr(config, "grid_seed", 42),
+        allocation_method=getattr(config, "grid_allocation_method", "auto_sqrt_space"),
+        min_quota=float(getattr(config, "grid_min_quota", 0.10) or 0.0),
+        manual_percents=tuple(
+            sorted(
+                (str(name), float(percent))
+                for name, percent in dict(getattr(config, "grid_manual_percents", {}) or {}).items()
+            )
+        ),
         primary_metric=(
             getattr(config, "grid_fast_primary_objective", None)
             or (getattr(config, "grid_fast_objectives", None) or getattr(config, "objectives", None) or ["net_profit_pct"])[0]
@@ -789,25 +837,45 @@ def _preview_grid_v2_parameter_space(config: OptimizationConfig) -> Dict[str, An
         settings=settings,
         base_params=getattr(config, "fixed_params", {}) or {},
     )
-    total = int(preview.deduped_candidate_count or preview.enumerated_candidate_count)
-    modes = _grid_v2_preview_modes(preview.per_variant_counts, preview.mode_labels)
+    full_total = int(preview.full_valid_candidate_count or preview.full_raw_candidate_count)
+    planned_total = int(preview.planned_candidate_count)
+    modes = _grid_v2_preview_modes(preview.per_block_counts)
     return {
         "engine": "v2",
         "profile": "full_enumeration_v2",
-        "full_candidate_count": total,
-        "candidate_count": total,
-        "total_space": total,
-        "total_space_label": format_compact_count(total),
-        "requested_budget": total,
-        "requested_budget_label": format_compact_count(total),
-        "actual_budget": total,
-        "actual_budget_label": format_compact_count(total),
-        "coverage_pct": 100.0,
-        "coverage_label": format_coverage_pct(100.0),
+        "planning_policy_version": preview.planning_policy_version,
+        "sampler_version": preview.sampler_version,
+        "allocator_version": preview.allocator_version,
+        "requested_planning_policy": preview.requested_planning_policy,
+        "effective_planning_policy": preview.effective_planning_policy,
+        "effective_policy_reason": preview.effective_policy_reason,
+        "budget_is_operative": preview.budget_is_operative,
+        "full_raw_candidate_count": preview.full_raw_candidate_count,
+        "full_valid_candidate_count": preview.full_valid_candidate_count,
+        "full_candidate_count": full_total,
+        "planned_candidate_count": planned_total,
+        "candidate_count": planned_total,
+        "total_space": full_total,
+        "total_space_label": format_compact_count(full_total),
+        "requested_budget": preview.requested_budget,
+        "requested_budget_label": format_compact_count(preview.requested_budget),
+        "actual_budget": planned_total,
+        "actual_budget_label": format_compact_count(planned_total),
+        "coverage_pct": preview.coverage_pct,
+        "coverage_label": format_coverage_pct(preview.coverage_pct),
         "modes": modes,
-        "mode_space_sizes": dict(preview.per_variant_counts),
-        "mode_budgets": dict(preview.per_variant_counts),
-        "mode_coverage_pct": {name: 100.0 for name in preview.per_variant_counts},
+        "mode_space_sizes": {
+            name: int(facts["full_count"]) for name, facts in preview.per_block_counts.items()
+        },
+        "mode_budgets": {
+            name: int(facts["planned_count"]) for name, facts in preview.per_block_counts.items()
+        },
+        "mode_coverage_pct": {
+            name: (float(facts["planned_count"]) / float(facts["full_count"]) * 100.0)
+            if int(facts["full_count"]) else 0.0
+            for name, facts in preview.per_block_counts.items()
+        },
+        "per_block_counts": dict(preview.per_block_counts),
         "mode_labels": dict(preview.mode_labels),
         "axis_names_by_variant": {
             name: list(values) for name, values in preview.axis_names_by_variant.items()
@@ -815,25 +883,27 @@ def _preview_grid_v2_parameter_space(config: OptimizationConfig) -> Dict[str, An
     }
 
 
-def _grid_v2_preview_modes(
-    per_variant_counts: Mapping[str, int],
-    mode_labels: Mapping[str, str] | None = None,
-) -> List[Dict[str, Any]]:
+def _grid_v2_preview_modes(per_block_counts: Mapping[str, Mapping[str, Any]]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
-    labels = mode_labels or {}
-    for name, count_raw in per_variant_counts.items():
-        count = int(count_raw)
+    for name, facts in per_block_counts.items():
+        count = int(facts["full_count"])
+        budget = int(facts["planned_count"])
+        coverage = (budget / count * 100.0) if count else 0.0
         rows.append(
             {
                 "mode": name,
-                "label": labels.get(name, name),
+                "label": str(facts.get("label", name)),
                 "space_size": count,
                 "space_label": format_compact_count(count),
-                "budget": count,
-                "budget_label": format_compact_count(count),
-                "coverage_pct": 100.0,
-                "coverage_label": format_coverage_pct(100.0),
-                "generation": "Full enumeration",
+                "budget": budget,
+                "budget_label": format_compact_count(budget),
+                "coverage_pct": coverage,
+                "coverage_label": format_coverage_pct(coverage),
+                "generation": (
+                    "Full enumeration"
+                    if str(facts.get("generation_mode")) == "full_enumeration_v2"
+                    else "Budgeted deterministic sample"
+                ),
             }
         )
     return rows
@@ -1354,7 +1424,12 @@ def _resolve_csv_path_for_storage(csv_file: Any) -> str:
     return ""
 
 
-def _grid_v2_result_from_row(row: Any, *, metric_tier: str) -> OptimizationResult:
+def _grid_v2_result_from_row(
+    row: Any,
+    *,
+    metric_tier: str,
+    generation_mode: str = "full_enumeration_v2",
+) -> OptimizationResult:
     profit_factor = float(row.profit_factor)
     result = OptimizationResult(
         params=row.params,
@@ -1381,7 +1456,7 @@ def _grid_v2_result_from_row(row: Any, *, metric_tier: str) -> OptimizationResul
     setattr(result, "variant_name", row.variant_name)
     setattr(result, "grid_mode_name", row.grid_mode_name)
     setattr(result, "diversity_group", row.grid_mode_name)
-    setattr(result, "grid_generation_mode", "full_enumeration_v2")
+    setattr(result, "grid_generation_mode", generation_mode)
     setattr(result, "grid_backend_kind", row.backend_kind)
     setattr(result, "grid_v2_engine_version", "grid_v2_phase2_5")
     setattr(result, "metric_tier", metric_tier)
@@ -1463,7 +1538,16 @@ def _grid_v2_slow_result(
     result.avg_loss = (
         result.gross_loss / result.losing_trades if result.losing_trades else 0.0
     )
-    fast_result = _grid_v2_result_from_row(row, metric_tier="fast")
+    generation_mode = str(
+        plan.per_block_counts.get(row.grid_mode_name, {}).get(
+            "generation_mode", "full_enumeration_v2"
+        )
+    )
+    fast_result = _grid_v2_result_from_row(
+        row,
+        metric_tier="fast",
+        generation_mode=generation_mode,
+    )
     for attr in (
         "engine",
         "candidate_id",
@@ -1649,7 +1733,15 @@ def _run_grid_v2_optimization(
     )
     fast_materialization_started = time.time()
     all_fast_results = [
-        _grid_v2_result_from_row(row, metric_tier=metric_tier)
+        _grid_v2_result_from_row(
+            row,
+            metric_tier=metric_tier,
+            generation_mode=str(
+                plan.per_block_counts.get(row.grid_mode_name, {}).get(
+                    "generation_mode", "full_enumeration_v2"
+                )
+            ),
+        )
         for row in run_result.rows
     ]
     timings["fast_result_materialization_seconds"] = time.time() - fast_materialization_started
@@ -1720,6 +1812,12 @@ def _run_grid_v2_optimization(
     )
     requested_budget = parse_grid_budget(getattr(config, "grid_budget", plan.deduped_candidate_count))
     actual_budget = len(run_result.rows)
+    planning_metadata = dict(plan.metadata.get("planning") or {})
+    budget_is_operative = bool(planning_metadata.get("budget_is_operative"))
+    full_candidate_count = int(plan.full_valid_candidate_count or plan.full_raw_candidate_count)
+    coverage_pct = (
+        actual_budget / full_candidate_count * 100.0 if full_candidate_count else 0.0
+    )
     dsr_metadata = {
         "enabled": False,
         "status": "unavailable_deferred",
@@ -1757,14 +1855,21 @@ def _run_grid_v2_optimization(
         "grid_slow_primary_objective": selection_config.slow_primary_objective,
         "requested_budget": requested_budget,
         "actual_budget": actual_budget,
-        "unused_budget": max(0, requested_budget - actual_budget),
+        "unused_budget": max(0, requested_budget - actual_budget) if budget_is_operative else 0,
+        "budget_is_operative": budget_is_operative,
         "total_trials": actual_budget,
         "completed_trials": len(ranked_fast),
         "pruned_trials": 0,
         "candidate_count": plan.deduped_candidate_count,
         "valid_candidate_count": len(ranked_fast),
         "selected_candidate_count": len(ranked_selected),
-        "full_candidate_count": plan.deduped_candidate_count,
+        "full_candidate_count": full_candidate_count,
+        "full_raw_candidate_count": plan.full_raw_candidate_count,
+        "full_valid_candidate_count": plan.full_valid_candidate_count,
+        "planned_candidate_count": plan.planned_candidate_count,
+        "grid_v2_planning_policy": planning_metadata.get("requested_policy", "full"),
+        "grid_v2_effective_planning_policy": planning_metadata.get("effective_policy", "full"),
+        "grid_v2_plan_fingerprint": plan.plan_fingerprint,
         "objective_selected_count": objective_selected_count,
         "dsr_selected_count": 0,
         "union_selected_count": len(ranked_selected),
@@ -1819,6 +1924,8 @@ def _run_grid_v2_optimization(
             "valid_candidate_count": len(ranked_fast),
             "selected_candidate_count": len(ranked_selected),
             "per_variant_counts": dict(plan.per_variant_counts),
+            "per_block_counts": dict(plan.per_block_counts),
+            "planning": planning_metadata,
             "mode_labels": dict(plan.metadata.get("grid_mode_labels") or {}),
             "resolved_internal_variants": dict(plan.metadata.get("resolved_internal_variants") or {}),
             "cache_estimate": cache_estimate,
@@ -1832,18 +1939,35 @@ def _run_grid_v2_optimization(
             "slow_objectives": selection_config.slow_objectives,
             "slow_primary_objective": selection_config.slow_primary_objective,
             "preview": {
-                "full_candidate_count": plan.deduped_candidate_count,
-                "coverage_pct": 100.0,
+                "full_candidate_count": full_candidate_count,
+                "full_raw_candidate_count": plan.full_raw_candidate_count,
+                "full_valid_candidate_count": plan.full_valid_candidate_count,
+                "planned_candidate_count": plan.planned_candidate_count,
+                "requested_planning_policy": planning_metadata.get("requested_policy", "full"),
+                "effective_planning_policy": planning_metadata.get("effective_policy", "full"),
+                "effective_policy_reason": planning_metadata.get("effective_policy_reason"),
+                "planning_policy_version": planning_metadata.get("planning_policy_version"),
+                "coverage_pct": coverage_pct,
             },
             "allocation": {
                 "requested_budget": requested_budget,
                 "actual_budget": actual_budget,
-                "unused_budget": max(0, requested_budget - actual_budget),
-                "mode_space_sizes": dict(plan.per_variant_counts),
-                "mode_budgets": dict(plan.per_variant_counts),
-                "mode_coverage_pct": {name: 100.0 for name in plan.per_variant_counts},
+                "unused_budget": max(0, requested_budget - actual_budget) if budget_is_operative else 0,
+                "budget_is_operative": budget_is_operative,
+                "mode_space_sizes": {
+                    name: int(facts["full_count"]) for name, facts in plan.per_block_counts.items()
+                },
+                "mode_budgets": {
+                    name: int(facts["delivered_count"]) for name, facts in plan.per_block_counts.items()
+                },
+                "mode_coverage_pct": {
+                    name: (float(facts["delivered_count"]) / float(facts["full_count"]) * 100.0)
+                    if int(facts["full_count"]) else 0.0
+                    for name, facts in plan.per_block_counts.items()
+                },
                 "mode_labels": dict(plan.metadata.get("grid_mode_labels") or {}),
-                "allocation_method": "full_enumeration_v2",
+                "allocation_method": planning_metadata.get("effective_allocation_method")
+                or "full_enumeration_v2",
             },
             "optional_axis_settings": {
                 "enabled_axes": list(settings.enabled_axes) if settings.enabled_axes is not None else None,
@@ -1853,7 +1977,7 @@ def _run_grid_v2_optimization(
             "dsr_metric_computation_enabled": False,
             "dsr": dsr_metadata,
             "guardrail_aggregate_summary": _grid_v2_guardrail_aggregate(run_result.rows),
-            "full_candidate_count": plan.deduped_candidate_count,
+            "full_candidate_count": full_candidate_count,
             "objective_selected_count": objective_selected_count,
             "dsr_selected_count": 0,
             "union_selected_count": len(ranked_selected),

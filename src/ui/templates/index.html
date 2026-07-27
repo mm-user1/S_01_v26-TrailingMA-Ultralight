@@ -597,6 +597,13 @@
                   </div>
                   <div class="collapsible-content">
                     <div class="grid-settings-grid">
+                      <div class="form-group vertical" id="gridV2PlanningPolicyRow" style="display: none;">
+                        <label for="gridV2PlanningPolicy">Planning</label>
+                        <select id="gridV2PlanningPolicy">
+                          <option value="full" selected>Full enumeration</option>
+                          <option value="sampled">Budgeted deterministic sample</option>
+                        </select>
+                      </div>
                       <div class="form-group vertical" id="gridBudgetRow">
                         <label for="gridBudget">Grid candidates</label>
                         <input type="text" id="gridBudget" value="200k" autocomplete="off" />
@@ -606,7 +613,7 @@
                         <label for="gridSeed">Seed</label>
                         <input type="number" id="gridSeed" min="0" max="2147483647" step="1" value="42" />
                       </div>
-                      <div class="form-group vertical">
+                      <div class="form-group vertical" id="gridSamplingMethodRow">
                         <label for="gridSamplingMethod">Sampling method</label>
                         <input type="text" id="gridSamplingMethod" value="LHS by mode" readonly />
                       </div>
@@ -758,6 +765,7 @@
                         <input type="number" id="gridManualBoth" min="0" max="100" step="1" value="34" />
                       </div>
                     </div>
+                    <div id="gridV2ManualAllocation" class="grid-manual-allocation" style="display: none;"></div>
                     </div>
 
                     <div class="grid-preview-summary" id="gridPreviewSummary">

@@ -347,6 +347,21 @@ backend advertises capability via `get_backend_metadata()` (normalized by
 
 **Key behavioral rules:**
 
+- **Generic V2 full/budgeted planning**
+  - V2 retains backend profile `full_enumeration_v2`, but planning is selected
+    explicitly by `grid_v2_planning_policy`: missing/`full` preserves exact
+    legacy enumeration; `sampled` requests a deterministic budgeted plan.
+  - The sampled path is core-owned and generic across ordered logical blocks.
+    It uses versioned ordered allocation plus balanced discrete LHS driven by
+    named raw-PCG64 substreams, deterministic mixed-radix dedup/top-up, and
+    canonical per-block ordering. It builds O(K) rows, not the full N rows.
+  - Sampled plans reject inactive-axis dedup, varied dependency parents, and
+    block layouts whose semantic disjointness cannot be proved. `K >= N` uses
+    the unchanged full builder; seed/allocation are then non-operative.
+  - Preview/run/WFA/Queue/storage report full, requested, planned/delivered,
+    effective policy, versions, per-block facts, and plan fingerprint. V1 Grid,
+    Optuna, semantic-key payloads, and selected reference reruns are unchanged.
+
 - **Mode-aware parameter space (per backend profile)**
   - S03 (`sampled_by_mode`): splits the search into `cc_only` / `tbands_only` /
     `both` and allocates a budget across them; default generation is "LHS by
@@ -421,7 +436,7 @@ backend advertises capability via `get_backend_metadata()` (normalized by
 - Strategy selection and parameter configuration
 - Optimizer mode selector: **Optuna** or **Grid**
 - Optuna settings (objectives + primary objective, budget, sampler, pruner, constraints)
-- Grid settings (candidate budget, seed, LHS-by-mode sampling, top candidates, fast + optional slow objective sets, mode allocation, diversity, advanced)
+- Grid settings (V2 Full/Budgeted planning, candidate budget, seed, top candidates, fast + optional slow objective sets, mode allocation, diversity, advanced)
 - Grid preview panel calls `POST /api/grid/preview` to show parameter space size, mode allocation and coverage
 - Initial Search Coverage mode toggle (Optuna) with coverage analysis and warmup auto-fill
 - Trials Log toggle for Optuna trial-level logging control

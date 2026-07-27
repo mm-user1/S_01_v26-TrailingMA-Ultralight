@@ -2711,6 +2711,9 @@ class WalkForwardEngine:
             swapping_prob=self.base_config_template.get("swapping_prob", 0.5),
             n_startup_trials=self.base_config_template.get("n_startup_trials", 20),
             coverage_mode=bool(self.base_config_template.get("coverage_mode", False)),
+            grid_v2_planning_policy=self.base_config_template.get(
+                "grid_v2_planning_policy", "full"
+            ),
             grid_budget=self.base_config_template.get("grid_budget", 200_000),
             grid_seed=self.base_config_template.get("grid_seed", 42),
             grid_top_candidates=self.base_config_template.get("grid_top_candidates", 10),

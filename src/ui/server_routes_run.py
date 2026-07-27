@@ -488,6 +488,9 @@ def register_routes(app):
             "grid_budget": int(getattr(optimization_config, "grid_budget", 200000)),
             "grid_seed": int(getattr(optimization_config, "grid_seed", 42)),
             "grid_top_candidates": int(getattr(optimization_config, "grid_top_candidates", 10)),
+            "grid_v2_planning_policy": getattr(
+                optimization_config, "grid_v2_planning_policy", "full"
+            ),
             "grid_enabled_modes": list(
                 getattr(optimization_config, "grid_enabled_modes", []) or []
             ),
@@ -541,6 +544,9 @@ def register_routes(app):
         base_template["optuna_config"] = json.loads(json.dumps(optuna_settings))
         if optimizer_mode == "grid":
             base_template["grid_config"] = {
+                "planning_policy": getattr(
+                    optimization_config, "grid_v2_planning_policy", "full"
+                ),
                 "budget": int(getattr(optimization_config, "grid_budget", 200000)),
                 "seed": int(getattr(optimization_config, "grid_seed", 42)),
                 "top_candidates": int(getattr(optimization_config, "grid_top_candidates", 10)),
@@ -549,6 +555,9 @@ def register_routes(app):
                 ),
                 "allocation_method": getattr(optimization_config, "grid_allocation_method", "auto_sqrt_space"),
                 "min_quota": float(getattr(optimization_config, "grid_min_quota", 0.10)),
+                "manual_percents": json.loads(
+                    json.dumps(getattr(optimization_config, "grid_manual_percents", {}) or {})
+                ),
                 "fast_objectives": list(getattr(optimization_config, "grid_fast_objectives", []) or []),
                 "fast_primary_objective": getattr(optimization_config, "grid_fast_primary_objective", None),
                 "slow_refinement_enabled": bool(

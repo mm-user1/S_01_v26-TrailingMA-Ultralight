@@ -2646,7 +2646,7 @@ def save_grid_study_to_db(
                     dumps(constraints_payload) if constraints_payload else None,
                     "grid",
                     "candidates",
-                    requested_budget,
+                    actual_budget,
                     actual_budget,
                     int(grid_summary.get("completed_trials") or len(trial_results or [])),
                     0,
