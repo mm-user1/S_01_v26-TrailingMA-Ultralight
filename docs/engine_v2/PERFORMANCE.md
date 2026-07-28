@@ -17,6 +17,22 @@ memory; preview computes N and allocation by closed-form domain products and
 does not build the population. A saturated request (`K >= N`) intentionally
 uses the exact full builder, so its cost is the historical O(N) cost.
 
+The `grid_v2_plan_identity_v2` fingerprint implementation consumes ordered
+semantic keys as a one-pass stream and uses constant additional memory. Isolated
+Windows `tracemalloc` measurements from the TZ60 implementation report were:
+
+| Key stream | Time | Peak traced memory |
+|---|---:|---:|
+| Real S06 default, 48,480 keys | 0.100283s | 0.014645 MB |
+| One-pass generator, 200,000 S06-length keys | 0.683079s | 0.015377 MB |
+
+The earlier aggregate-JSON implementation measured 81.090 MB peak for the same
+48,480-key S06 sequence. These are isolated fingerprint measurements after the
+candidate table already exists, not end-to-end planning or execution results.
+CI therefore verifies the one-pass structural contract rather than an absolute
+machine-dependent memory threshold. A separate O(K) planning test covers
+`N=300,000,000` with `K=50,000` without enumerating N.
+
 Benchmark reports must record requested/effective policy, full N, requested K,
 delivered K, seed, allocation method, per-block targets/delivery, planner and
 sampler versions, plan fingerprint, workers, and cold/warm JIT state. Compare

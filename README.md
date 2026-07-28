@@ -9,7 +9,9 @@ Config-driven backtesting and Optuna optimization platform for cryptocurrency tr
 - **Studies browser** - Web UI for browsing, opening, and managing historical optimization studies
 - **Multi-strategy support** - S01 Trailing MA, S03 Reversal, S04 StochRSI, and S06 R-Trend included, easily extensible
 - **Optuna optimization** - Single- and multi-objective optimization (1-6 objectives) with Pareto front results, primary-objective sorting, and multiple samplers (Random, TPE/MOTPE, NSGA-II/NSGA-III)
-- **Grid optimization** - Per-strategy Numba backends: S03 uses budgeted seeded LHS/full generation; S06 uses deterministic 100% Bracket/Trail enumeration
+- **Grid optimization** - Legacy V1 backends retain strategy-owned generation;
+  Backtester V2 supports exact full enumeration or generic deterministic
+  budgeted planning across ordered logical blocks
 - **Initial Search Coverage** - Optional systematic parameter space exploration during Optuna startup with configurable coverage block sizes
 - **Soft constraints** - Configure feasibility rules (e.g., Total Trades >= 30). Results show feasible/infeasible indicators; infeasible trials are deprioritized, not discarded. Shared by Optuna and Grid.
 - **Bool group rules** - Declare invalid boolean parameter combinations (e.g., `at_least_one_true`) in strategy `config.json` to reduce wasted trials
@@ -41,13 +43,19 @@ python server.py
 
 Open http://127.0.0.1:5000 in your browser.
 
-S06 R-Trend v02 supports Backtest, Optuna, fixed/adaptive WFA, and Fast Grid.
-Its Grid profile enumerates every selected Bracket/Trail combination: 48,480
+The Backtester V1 S06 R-Trend v02 strategy supports Backtest, Optuna,
+fixed/adaptive WFA, and Fast Grid. Its V1 Grid profile enumerates every selected
+Bracket/Trail combination: 48,480
 by default, or up to 436,320 when both optional Threshold OS/OB axes are
 enabled (`20, 30, 40`). Entry Mode and Long/Short controls remain fixed per
 run. Selected IS candidates are always slow-validated, and WFA OOS remains
 authoritative slow execution. Disable `stopRR` optimization manually for
 Trail-only Optuna/WFA studies because it is inactive in Trail mode.
+
+Imported Backtester V2 strategies use the core-owned Grid V2 planner. Its
+`full` policy preserves the certified historical candidate population and
+order; its `sampled` policy uses deterministic balanced discrete LHS when the
+requested budget is smaller than the valid space.
 
 ## Project Structure
 

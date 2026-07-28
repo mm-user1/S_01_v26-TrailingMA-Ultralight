@@ -91,12 +91,24 @@ Deterministic budgeted planning certification (TZ48):
   ordering, reports per-block allocation/collision/top-up diagnostics, and is
   deterministic across worker counts. Sampled table config packing is
   conservatively disabled; mapping packing remains its parity-safe path.
+- Automatic sampled allocation requires `K` to cover every enabled non-empty
+  block and reconciles rounded zero targets to deterministic one-row coverage.
+  Manual allocation accepts explicit zero-percent blocks and `K` below the block
+  count. Existing capacity/reflow rules remain authoritative, so manual `0%` is
+  a weight rather than an unconditional block exclusion.
 - Full policy and sampled `K >= N` use the exact pre-TZ48 full builder/order.
   Existing S06 default remains 48,480 candidates with semantic-key digest
   `f1aa8bba4099d07f4d0d2865a72bf6537767329f3fdd9b324f07986b8b8369e4`.
-- Semantic keys exclude planning inputs. Plan fingerprints cover effective
-  planning identity plus ordered semantic keys. WFA reuse excludes runtime
-  dates only and preserves the sampled table/fingerprint across window rebases.
+- Semantic keys exclude planning inputs. Plan fingerprints use identity schema
+  `grid_v2_plan_identity_v2`, cover effective planning identity plus ordered
+  semantic keys, and include normalized execution modes. The fingerprint hashes
+  the ordered key stream incrementally with constant additional memory.
+- WFA reuse excludes runtime dates only, includes execution-mode identity, and
+  preserves the sampled table/fingerprint across window rebases.
+- `full_enumeration_v2` is the static backend profile, not the effective plan
+  policy. Preview, stored summaries, and sidebar rendering use authoritative
+  effective-policy/allocation facts; effective-full plans hide non-operative
+  seed/allocation inputs, while effective-sampled plans expose them.
 - Existing JSON columns store additive planning facts; no schema migration was
   added. For Grid studies, `n_trials` and `total_trials` are delivered counts,
   while `grid_requested_budget` remains configured intent.
@@ -205,9 +217,10 @@ Phase 2.6.4 certification notes:
 - WFA Grid V2 uses a WFA-local `GridV2PlanReuseCache`. There is no global cache
   and no persisted `OptimizationConfig` cache field.
 - The cache key includes the Grid V2 engine version, effective strategy config,
-  all `GridV2Settings`, and fixed params with only `start`, `end`, and
-  `dateFilter` removed. Defensive hit validation checks the candidate-shaping
-  domain, variant, active/inactive, and axis layout before reuse.
+  all `GridV2Settings`, normalized parsed execution modes, and fixed params with
+  only `start`, `end`, and `dateFilter` removed. Defensive hit validation checks
+  the candidate-shaping domain, variant/mode, active/inactive, and axis layout
+  before reuse.
 - Cache hits reuse the immutable candidate identity/table core, then create a
   fresh rebased plan/table view with current-window `seed_params_by_variant`.
   Cached plan/table objects are not mutated in place, and rebased lazy caches

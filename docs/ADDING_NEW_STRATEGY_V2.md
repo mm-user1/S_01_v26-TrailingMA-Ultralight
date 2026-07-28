@@ -292,6 +292,20 @@ block with the versioned balanced-LHS PCG64 contract in
 `core/grid_v2_sampling.py`. Strategy packages do not implement or override this
 sampler.
 
+The static backend profile `full_enumeration_v2` identifies the Grid V2 backend
+contract; it does not identify the effective policy of an individual plan. UI,
+Queue, rerun, and WFA code must use `effective_planning_policy` and the effective
+allocation facts when deciding whether budget, seed, or sampled-plan metadata is
+operative. Stored study summaries use the equivalent
+`grid_v2_effective_planning_policy` field where applicable.
+
+Automatic sampled allocation requires `K` to be at least the number of enabled
+non-empty logical blocks and deterministically gives every such block at least
+one row. Manual allocation may explicitly assign `0%` and may use `K` below the
+block count. Manual percentages are allocation weights rather than hard exclusion
+flags: normal capacity reflow can assign rows to a zero-percent block after all
+positively weighted blocks have reached their capacities.
+
 For sampled eligibility, each planning block must have a fixed active schema,
 no `depends_on` parent may be a varied axis, inactive-axis dedup must be off,
 and every pair of blocks must be provably disjoint in semantic identity. A
@@ -306,6 +320,11 @@ planning policy, budget, seed, allocation, or worker count. Selected candidates
 still rerun through the public reference runner. Sampled execution currently
 uses mapping config packing; the structurally certified table packer remains
 the full-plan fast path.
+
+Plan fingerprints use identity schema `grid_v2_plan_identity_v2`. The identity
+includes normalized execution modes, so mode changes invalidate WFA plan reuse
+even when other planning inputs are unchanged. Ordered semantic keys are hashed
+incrementally; do not reintroduce an aggregate JSON payload or copied key list.
 
 Candidate rows have both `variant_name` and `grid_mode_name`. For user-facing
 variant strategies such as S06 B2, both are normally the same values
@@ -368,9 +387,13 @@ planning policy when a bounded research run is intended; do not add sampling
 inside a strategy package or weaken the memory estimate.
 
 When comparing candidate counts across tools or baselines, document the enabled
-axes, enabled variants, `{param}_options` subsets, budget, and whether the UI
-preview profile is `full_enumeration` or `full_enumeration_v2`. Both full
-enumeration preview profiles should be treated as complete enumeration rows.
+axes, enabled variants, `{param}_options` subsets, requested/effective planning
+policy, full space, delivered budget, seed, allocation method, and static backend
+profile. Do not infer full enumeration from the profile name:
+`full_enumeration_v2` can produce either a full or sampled Grid V2 plan. Treat a
+plan as full only when its authoritative effective policy/allocation facts say
+that it is full. Legacy V1 `full_enumeration` remains a separate strategy-owned
+profile.
 
 ## Adding Unsupported Modes Later
 

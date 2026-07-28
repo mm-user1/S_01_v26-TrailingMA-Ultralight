@@ -6,10 +6,10 @@ Config-driven backtesting and Optuna optimization platform for cryptocurrency tr
 
 ```
 project-root/
-|-- CLAUDE.md                 # AI assistant guidance
+|-- AGENTS.md                 # Codex bootstrap; points to CLAUDE.md
+|-- CLAUDE.md                 # Authoritative AI/development guidance
 |-- README.md                 # Quick start guide
 |-- requirements.txt          # Python dependencies
-|-- agents.md                 # GPT Codex agent instructions
 |-- docs/                     # Documentation
 |   |-- PROJECT_OVERVIEW.md   # This file
 |   `-- ADDING_NEW_STRATEGY.md # Strategy development guide
@@ -164,7 +164,7 @@ project-root/
 4. **Dual Optimizer Modes (Optuna + Grid)**
    - Two optimization modes share constraints, objectives, scoring, and the `trials` table:
      - **Optuna** (Bayesian/evolutionary): single- and multi-objective (1-6 objectives), Pareto front, soft constraints, samplers (Random, TPE/MOTPE, NSGA-II, NSGA-III), budgets (n_trials/timeout/patience), pruning (single-objective only), Initial Search Coverage, trial deduplication.
-     - **Grid** (deterministic): shared discovery/ranking/storage dispatches to a strategy-owned `fast_grid.py`. Backend metadata (`get_fast_grid_backend_metadata`) supplies ordered modes (with `default_enabled`, used to default a missing `grid_enabled_modes` — no per-strategy server hardcode) and a `diversity_group_fields` shape preserved end-to-end (`normalize_diversity_group_fields`). S03 v10/v11 retain budgeted seeded LHS/full generation for `cc_only`/`tbands_only`/`both`; v11 adds optional Emergency SL and V1 fast Grid support. S06 uses 100% enumeration for selectable `bracket`/`trail` modes: 48,480 default combinations and up to 436,320 with optional Threshold OS/OB axes (`20, 30, 40`). Selected candidates always pass through the slow strategy; WFA OOS is also slow-authoritative. Soft constraints are shared with Optuna and surfaced in the Grid Settings sidebar on Results and Analytics. The multi-objective/Pareto Grid path is supported but can be substantially more expensive than single-objective ranking.
+     - **Grid** (deterministic): shared discovery/ranking/storage supports two planning generations. Backtester V1 dispatches to strategy-owned `fast_grid.py` backends: S03 v10/v11 retain budgeted seeded LHS/full generation for `cc_only`/`tbands_only`/`both`, while S06 retains 100% enumeration for selectable `bracket`/`trail` modes (48,480 default combinations; up to 436,320 with optional Threshold OS/OB axes). Backtester V2 uses a generic core-owned planner with explicit `full|sampled` policy. Full preserves the certified historical population/order; sampled allocates a bounded budget across ordered logical blocks and uses deterministic balanced discrete LHS in O(K) planning memory. The static `full_enumeration_v2` backend profile does not imply the effective policy of a run. Both generations share objectives, soft constraints, ranking, storage, selected-candidate reference validation, and slow-authoritative WFA OOS execution.
    - **Bool group rules**: strategy `config.json` can declare invalid boolean combinations (e.g., `at_least_one_true`) to reduce wasted trials
    - **Parameter dependencies**: numeric params can declare `depends_on` to be skipped when a parent bool is false
    - **In-memory backend**: `InMemoryJournalBackend` replaces file-based journal storage for faster multiprocess Optuna optimization
@@ -482,8 +482,8 @@ pytest tests/ -v
 
 | File | Purpose |
 |------|---------|
-| `CLAUDE.md` | AI assistant instructions (for Claude models) |
-| `agents.md` | GPT Codex agent instructions |
+| `CLAUDE.md` | Authoritative project instructions for all coding agents |
+| `AGENTS.md` | Codex bootstrap that requires reading `CLAUDE.md` |
 | `docs/ADDING_NEW_STRATEGY.md` | How to add new strategies |
 | `data/baseline/` | Regression test reference data |
 | `tools/generate_baseline_s01.py` | Regenerate S01 baseline |

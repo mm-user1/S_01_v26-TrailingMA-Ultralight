@@ -2,6 +2,30 @@
 
 Guidance for Claude Code (claude.ai/code) when working with this repository.
 
+## Shared Agent Rules
+
+These rules apply to every coding agent working in this repository:
+
+- Act as an experienced Python and Pine Script developer with trading and
+  crypto algorithmic-trading expertise.
+- Work strictly to the given specification. Do not make unapproved deviations.
+- Keep implementation code efficient, fast, clear, concise, and logically
+  organized.
+- Keep the GUI on its established light theme unless the user explicitly
+  requests a different design.
+- **Windows only:** always use
+  `C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe` for Python
+  commands and tests, for example
+  `C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest -q`.
+  This absolute interpreter requirement does not apply on Linux/VPS hosts;
+  there, use the Python environment configured for that host and repository.
+
+Repository directory roles:
+
+- `./data` contains examples, market data, and related inputs.
+- `./docs` contains documentation, plans, and reference material.
+- `./src` is the main application source directory.
+
 ## Project: Merlin
 
 Cryptocurrency trading strategy backtesting and Optuna optimization platform with a Flask SPA frontend.
@@ -361,8 +385,20 @@ backend advertises capability via `get_backend_metadata()` (normalized by
   - Preview/run/WFA/Queue/storage report full, requested, planned/delivered,
     effective policy, versions, per-block facts, and plan fingerprint. V1 Grid,
     Optuna, semantic-key payloads, and selected reference reruns are unchanged.
+  - `full_enumeration_v2` is a static backend profile, not proof that a specific
+    plan is full. Use `effective_planning_policy` and the effective allocation
+    facts to distinguish full from sampled execution.
+  - For automatic sampled allocation, the budget must cover every enabled
+    non-empty block and each such block receives at least one candidate. Manual
+    allocation may use zero-percent blocks and may use a budget smaller than the
+    block count. Capacity reflow can still place candidates into a zero-percent
+    block after positively weighted blocks are exhausted.
+  - Plan identity uses `grid_v2_plan_identity_v2`, includes normalized execution
+    modes, and feeds the WFA reuse identity. The plan fingerprint streams ordered
+    semantic keys with constant additional memory instead of materializing a
+    second key collection.
 
-- **Mode-aware parameter space (per backend profile)**
+- **Legacy V1 strategy-owned generation profiles**
   - S03 (`sampled_by_mode`): splits the search into `cc_only` / `tbands_only` /
     `both` and allocates a budget across them; default generation is "LHS by
     mode" (seeded by `gridSeed`), falling back to full enumeration when a mode
@@ -370,7 +406,9 @@ backend advertises capability via `get_backend_metadata()` (normalized by
   - S06 (`full_enumeration`): deterministically enumerates every selected
     `bracket` / `trail` combination — 48,480 by default, up to 436,320 when both
     optional Threshold OS/OB axes (`20, 30, 40`) are enabled. No seed/budget
-    sampling; an explicitly empty mode selection is an error.
+    sampling in V1; an explicitly empty mode selection is an error. Imported V2
+    strategies using equivalent execution variants remain eligible for generic
+    V2 budgeted planning.
   - Missing `grid_enabled_modes` defaults to the backend's `default_enabled`
     modes (`default_grid_enabled_modes`) — no per-strategy server hardcode.
   - Allocation, mode budgets, and coverage % are surfaced through the Start page
