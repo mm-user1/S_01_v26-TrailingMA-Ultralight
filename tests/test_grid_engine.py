@@ -123,6 +123,14 @@ def test_mode_allocation_caps_and_redistributes_deterministically():
     assert full.unused_budget == 1_000_000 - 107
     assert full.mode_budgets == {"cc_only": 2, "tbands_only": 5, "both": 100}
 
+    legacy_manual = allocate_mode_budgets(
+        {"cc_only": 2, "tbands_only": 5, "both": 100},
+        1,
+        method="manual",
+        manual_percents={"cc_only": 0, "tbands_only": 0, "both": 100, "legacy_unknown": 50},
+    )
+    assert legacy_manual.mode_budgets == {"cc_only": 0, "tbands_only": 0, "both": 1}
+
 
 def test_s03_parameter_space_uses_modes_dependency_collapse_and_offset():
     config = _grid_config()

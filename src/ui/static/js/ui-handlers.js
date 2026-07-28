@@ -2136,14 +2136,32 @@ function syncGridAllocationUi() {
 function syncGridV2ManualAllocation(modes) {
   const container = document.getElementById('gridV2ManualAllocation');
   if (!container || !isGridV2Profile(getEnabledGridMetadata().profile)) return;
-  const prior = Object.fromEntries(
-    Array.from(container.querySelectorAll('input[data-grid-block-name]'))
-      .map((input) => [input.dataset.gridBlockName, input.value])
-  );
+  const normalizedModes = (Array.isArray(modes) ? modes : []).filter((mode) => String(mode?.mode || '').trim());
+  const blockNames = normalizedModes.map((mode) => String(mode.mode).trim());
+  const existingInputs = Array.from(container.querySelectorAll('input[data-grid-block-name]'));
+  const existingBlockNames = existingInputs.map((input) => input.dataset.gridBlockName);
+  const sameOrderedBlocks = blockNames.length === existingBlockNames.length
+    && blockNames.every((name, index) => name === existingBlockNames[index]);
   const pending = window.pendingGridV2ManualPercents && typeof window.pendingGridV2ManualPercents === 'object'
     ? window.pendingGridV2ManualPercents
     : {};
-  const normalizedModes = (Array.isArray(modes) ? modes : []).filter((mode) => String(mode?.mode || '').trim());
+  if (sameOrderedBlocks) {
+    normalizedModes.forEach((mode, index) => {
+      const input = existingInputs[index];
+      const label = input.closest('.form-group')?.querySelector('label');
+      if (label) label.textContent = `${mode.label || blockNames[index]} %`;
+      if (Object.prototype.hasOwnProperty.call(pending, blockNames[index])) {
+        input.value = pending[blockNames[index]];
+      }
+    });
+    window.pendingGridV2ManualPercents = null;
+    syncGridAllocationUi();
+    return;
+  }
+  const prior = Object.fromEntries(
+    existingInputs
+      .map((input) => [input.dataset.gridBlockName, input.value])
+  );
   const defaultPercent = normalizedModes.length ? 100 / normalizedModes.length : 0;
   container.replaceChildren();
   normalizedModes.forEach((mode, index) => {
@@ -2161,7 +2179,9 @@ function syncGridV2ManualAllocation(modes) {
     const fallback = index === normalizedModes.length - 1
       ? 100 - Math.floor(defaultPercent * 100) / 100 * (normalizedModes.length - 1)
       : Math.floor(defaultPercent * 100) / 100;
-    input.value = prior[blockName] ?? pending[blockName] ?? String(Number(fallback.toFixed(2)));
+    input.value = Object.prototype.hasOwnProperty.call(pending, blockName)
+      ? pending[blockName]
+      : prior[blockName] ?? String(Number(fallback.toFixed(2)));
     label.htmlFor = input.id;
     label.textContent = `${mode.label || blockName} %`;
     group.append(label, input);

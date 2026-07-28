@@ -1274,6 +1274,7 @@ def build_grid_settings_view(study: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     grid_section = _parse_json_dict(grid_summary.get("grid"))
     planning_summary = _parse_json_dict(grid_section.get("planning"))
+    backend_summary = _parse_json_dict(grid_section.get("backend"))
     requested_budget = _grid_setting_number(
         grid_summary.get("requested_budget")
         or planning_summary.get("requested_budget")
@@ -1319,12 +1320,14 @@ def build_grid_settings_view(study: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         _grid_config_value(config, "grid_strict_validation", "gridStrictValidation"),
         True,
     )
-    allocation_method = (
+    reported_allocation_method = (
         preview.get("allocation_method")
         or allocation_summary.get("allocation_method")
+        or planning_summary.get("effective_allocation_method")
         or _grid_config_value(config, "grid_allocation_method", "allocation_method", "gridAllocationMethod")
         or "auto_sqrt_space"
     )
+    allocation_method = reported_allocation_method
     legacy_objectives = _grid_objective_list(config, "objectives", fallback=["net_profit_pct"])
     fast_objectives = _grid_objective_list(
         config,
@@ -1412,9 +1415,12 @@ def build_grid_settings_view(study: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         or ""
     ).strip().lower()
     if effective_policy == "full":
+        allocation_method = "full_enumeration_v2"
         sampling_label = "Full enumeration"
+        is_full_enumeration = True
     elif effective_policy == "sampled":
         sampling_label = "Budgeted deterministic sample"
+        is_full_enumeration = False
     elif generations and generations <= {"full", "full enumeration", "disabled"}:
         sampling_label = "Full enumeration"
     elif any("lhs" in item for item in generations):
@@ -1423,9 +1429,55 @@ def build_grid_settings_view(study: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         sampling_label = "Mixed by mode"
     else:
         sampling_label = "Legacy budget (policy unavailable)"
-    is_full_enumeration = (
-        _is_full_enumeration_profile(preview.get("profile"))
-        or _is_full_enumeration_allocation(allocation_method)
+    if effective_policy not in {"full", "sampled"}:
+        is_full_enumeration = not effective_policy and (
+            any(
+                _is_full_enumeration_profile(profile)
+                for profile in (
+                    preview.get("profile"),
+                    backend_summary.get("profile"),
+                    grid_section.get("profile"),
+                    grid_summary.get("profile"),
+                )
+            )
+            or _is_full_enumeration_allocation(reported_allocation_method)
+        )
+
+    v2_profile_or_allocation_markers = (
+        preview.get("profile"),
+        backend_summary.get("profile"),
+        grid_section.get("profile"),
+        grid_summary.get("profile"),
+        reported_allocation_method,
+    )
+    v2_plan_version_markers = (
+        planning_summary.get("plan_identity_schema_version"),
+        planning_summary.get("planning_policy_version"),
+        preview.get("plan_identity_schema_version"),
+        preview.get("planning_policy_version"),
+        grid_section.get("plan_identity_schema_version"),
+        grid_section.get("planning_policy_version"),
+        grid_summary.get("plan_identity_schema_version"),
+        grid_summary.get("planning_policy_version"),
+    )
+    is_v2_grid = (
+        any(
+            str(engine or "").strip().lower() == "v2"
+            for engine in (
+                preview.get("engine"),
+                grid_summary.get("engine"),
+                backend_summary.get("engine"),
+            )
+        )
+        or bool(
+            grid_summary.get("grid_v2_plan_fingerprint")
+            or grid_section.get("grid_v2_plan_fingerprint")
+        )
+        or any(marker not in (None, "") for marker in v2_plan_version_markers)
+        or any(
+            str(marker or "").strip().lower() == "full_enumeration_v2"
+            for marker in v2_profile_or_allocation_markers
+        )
     )
 
     rows = [
@@ -1457,7 +1509,7 @@ def build_grid_settings_view(study: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "val": (
                 (
                     f"On, max {diversity_max} / strategy group"
-                    if is_full_enumeration
+                    if is_full_enumeration or is_v2_grid
                     else f"On, max {diversity_max} / Mode+MA+Period"
                 )
                 if diversity_enabled

@@ -846,10 +846,12 @@ def _preview_grid_v2_parameter_space(config: OptimizationConfig) -> Dict[str, An
         "planning_policy_version": preview.planning_policy_version,
         "sampler_version": preview.sampler_version,
         "allocator_version": preview.allocator_version,
+        "plan_identity_schema_version": preview.plan_identity_schema_version,
         "requested_planning_policy": preview.requested_planning_policy,
         "effective_planning_policy": preview.effective_planning_policy,
         "effective_policy_reason": preview.effective_policy_reason,
         "budget_is_operative": preview.budget_is_operative,
+        "allocation_method": preview.effective_allocation_method,
         "full_raw_candidate_count": preview.full_raw_candidate_count,
         "full_valid_candidate_count": preview.full_valid_candidate_count,
         "full_candidate_count": full_total,
@@ -1947,6 +1949,11 @@ def _run_grid_v2_optimization(
                 "effective_planning_policy": planning_metadata.get("effective_policy", "full"),
                 "effective_policy_reason": planning_metadata.get("effective_policy_reason"),
                 "planning_policy_version": planning_metadata.get("planning_policy_version"),
+                "plan_identity_schema_version": planning_metadata.get(
+                    "plan_identity_schema_version"
+                ),
+                "allocation_method": planning_metadata.get("effective_allocation_method")
+                or "full_enumeration_v2",
                 "coverage_pct": coverage_pct,
             },
             "allocation": {

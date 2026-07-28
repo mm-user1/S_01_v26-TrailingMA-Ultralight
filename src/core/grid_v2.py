@@ -13,7 +13,7 @@ import itertools
 import json
 import math
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from decimal import Decimal, InvalidOperation
@@ -83,6 +83,7 @@ from core.grid_v2_sampling import (
 
 
 GRID_V2_ENGINE_VERSION = "grid_v2_phase2_5"
+GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION = "grid_v2_plan_identity_v2"
 REFERENCE_BATCH_KIND = "reference"
 _BOOL_SIGNAL_ARRAYS = 2
 _SIGNAL_TOPOLOGY_BOOL_SIGNAL_ARRAYS = 4
@@ -125,9 +126,9 @@ class GridV2Settings:
     primary_metric: str = "net_profit_pct"
     include_inactive_axes_for_dedup: bool = False
     planning_policy: str = "full"
-    requested_budget: int = 1000
+    requested_budget: int = 200_000
     seed: int = 42
-    allocation_method: str = "proportional"
+    allocation_method: str = "auto_sqrt_space"
     min_quota: float = 0.10
     manual_percents: tuple[tuple[str, float], ...] = ()
 
@@ -565,6 +566,8 @@ class GridV2CountPreview:
     budget_is_operative: bool = False
     coverage_pct: float = 100.0
     per_block_counts: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    effective_allocation_method: str = "full_enumeration_v2"
+    plan_identity_schema_version: str = GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION
     planning_policy_version: str = GRID_V2_PLANNING_POLICY_VERSION
     sampler_version: str | None = None
     allocator_version: str = GRID_V2_ALLOCATOR_VERSION
@@ -893,15 +896,11 @@ def build_grid_v2_plan(
     effective_fingerprint_identity = dict(planning_identity)
     effective_fingerprint_identity.pop("requested_policy", None)
     effective_fingerprint_identity.pop("effective_policy_reason", None)
-    fingerprint_payload = {
-        "planning_policy_version": GRID_V2_PLANNING_POLICY_VERSION,
-        "effective_policy": prelude.planning.effective_policy,
-        "planning_identity": effective_fingerprint_identity,
-        "semantic_keys": list(candidate_table.semantic_keys_by_row or ()),
-    }
-    plan_fingerprint = hashlib.blake2b(
-        _stable_json(fingerprint_payload).encode("utf-8"), digest_size=32
-    ).hexdigest()
+    plan_fingerprint = _grid_v2_plan_fingerprint(
+        planning_identity=effective_fingerprint_identity,
+        effective_policy=prelude.planning.effective_policy,
+        semantic_keys=candidate_table.semantic_keys_by_row or (),
+    )
 
     metadata = {
         "backend_kind": COMPILED_BATCH_KIND if compiled_batch_available() else REFERENCE_BATCH_KIND,
@@ -922,6 +921,7 @@ def build_grid_v2_plan(
         "resolved_internal_variants": dict(candidate_table.variant_name_by_grid_mode),
         "semantic_dedup_count": candidate_table.semantic_dedup_count,
         "planning": {
+            "plan_identity_schema_version": GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION,
             "planning_policy_version": GRID_V2_PLANNING_POLICY_VERSION,
             "sampler_version": (
                 GRID_V2_SAMPLER_VERSION if prelude.planning.effective_policy == "sampled" else None
@@ -1124,7 +1124,7 @@ def _resolve_grid_v2_planning(
             planned_candidate_count=full_count,
             budget_is_operative=False,
             effective_seed=None,
-            effective_allocation_method=None,
+            effective_allocation_method="full_enumeration_v2",
             effective_min_quota=None,
             effective_manual_percents=(),
             target_counts=full_targets,
@@ -1145,14 +1145,14 @@ def _resolve_grid_v2_planning(
             planned_candidate_count=full_count,
             budget_is_operative=False,
             effective_seed=None,
-            effective_allocation_method=None,
+            effective_allocation_method="full_enumeration_v2",
             effective_min_quota=None,
             effective_manual_percents=(),
             target_counts=full_targets,
             allocation_metadata={},
         )
 
-    _prove_sampled_blocks_semantically_disjoint(profile, domains, blocks)
+    _prove_sampled_blocks_semantically_disjoint(profile, blocks)
     allocation = allocate_ordered_block_budgets(
         [block.name for block in blocks],
         full_targets,
@@ -1163,16 +1163,15 @@ def _resolve_grid_v2_planning(
         reject_unknown_manual=True,
     )
     nonempty_blocks = sum(1 for count in full_targets.values() if count > 0)
-    if settings.requested_budget < nonempty_blocks:
+    if allocation.allocation_method != "manual" and allocation.actual_budget < nonempty_blocks:
         raise ValueError(
             "Sampled Grid V2 budget must be at least the number of non-empty planning blocks "
-            f"({nonempty_blocks})."
+            f"({nonempty_blocks}); increase the budget or disable blocks."
         )
-    zero_targets = [name for name, count in allocation.mode_budgets.items() if full_targets[name] > 0 and count <= 0]
-    if zero_targets:
-        raise ValueError(
-            "Sampled Grid V2 allocation assigned zero candidates to non-empty block(s): "
-            + ", ".join(zero_targets)
+    if allocation.allocation_method != "manual":
+        allocation = _reconcile_grid_v2_automatic_allocation(
+            allocation,
+            block_order=tuple(block.name for block in blocks),
         )
     return _GridV2PlanningResolution(
         requested_policy="sampled",
@@ -1188,6 +1187,44 @@ def _resolve_grid_v2_planning(
         target_counts=dict(allocation.mode_budgets),
         allocation_metadata=asdict(allocation),
     )
+
+
+def _reconcile_grid_v2_automatic_allocation(
+    allocation: Any,
+    *,
+    block_order: Sequence[str],
+) -> Any:
+    """Give every non-empty V2 automatic block one row without changing successes."""
+
+    if allocation.allocation_method not in {"auto_sqrt_space", "proportional_space"}:
+        return allocation
+    ordered = tuple(str(name) for name in block_order)
+    budgets = dict(allocation.mode_budgets)
+    sizes = dict(allocation.mode_space_sizes)
+    zero_targets = [name for name in ordered if sizes.get(name, 0) > 0 and budgets.get(name, 0) <= 0]
+    if not zero_targets:
+        return allocation
+
+    order_index = {name: index for index, name in enumerate(ordered)}
+    for zero_name in zero_targets:
+        donors = [name for name in ordered if budgets.get(name, 0) > 1]
+        if not donors:
+            raise RuntimeError("Grid V2 automatic allocation could not cover every non-empty block.")
+        donor = min(donors, key=lambda name: (-int(budgets[name]), order_index[name]))
+        budgets[zero_name] = 1
+        budgets[donor] -= 1
+
+    if sum(budgets.values()) != allocation.actual_budget:
+        raise RuntimeError("Grid V2 automatic allocation reconciliation changed the total budget.")
+    if any(budgets[name] < 1 for name in ordered if sizes.get(name, 0) > 0):
+        raise RuntimeError("Grid V2 automatic allocation left a non-empty block uncovered.")
+    if any(budgets[name] > sizes.get(name, 0) for name in ordered):
+        raise RuntimeError("Grid V2 automatic allocation exceeded a block capacity.")
+    coverage = {
+        name: (budgets[name] / sizes[name] * 100.0) if sizes.get(name, 0) > 0 else 0.0
+        for name in ordered
+    }
+    return replace(allocation, mode_budgets=budgets, mode_coverage_pct=coverage)
 
 
 def _validate_sampled_dependency_axes(
@@ -1211,7 +1248,6 @@ def _validate_sampled_dependency_axes(
 
 def _prove_sampled_blocks_semantically_disjoint(
     profile: ExecutionProfile,
-    domains: Mapping[str, GridV2ParameterDomain],
     blocks: Sequence[_GridV2PlanBlock],
 ) -> None:
     for left_index, left in enumerate(blocks):
@@ -1232,15 +1268,6 @@ def _prove_sampled_blocks_semantically_disjoint(
             )
             if fixed_discriminator:
                 continue
-            disjoint_axis = False
-            for name in set(left.axis_names) & set(right.axis_names) & shared_active:
-                left_values = {_hashable_jsonable_value(value) for value in domains[name].values}
-                right_values = {_hashable_jsonable_value(value) for value in domains[name].values}
-                if left_values.isdisjoint(right_values):
-                    disjoint_axis = True
-                    break
-            if disjoint_axis:
-                continue
             raise ValueError(
                 "Sampled Grid V2 cannot prove semantic disjointness between planning blocks "
                 f"'{left.name}' and '{right.name}'. Block names/grid_mode alone are not semantic identity."
@@ -1259,6 +1286,7 @@ def _grid_v2_planning_identity_payload(prelude: _GridV2PlanPrelude) -> dict[str,
     planning = prelude.planning
     return {
         "engine": GRID_V2_ENGINE_VERSION,
+        "plan_identity_schema_version": GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION,
         "planning_policy_version": GRID_V2_PLANNING_POLICY_VERSION,
         "sampler_version": GRID_V2_SAMPLER_VERSION,
         "allocator_version": GRID_V2_ALLOCATOR_VERSION,
@@ -1279,6 +1307,12 @@ def _grid_v2_planning_identity_payload(prelude: _GridV2PlanPrelude) -> dict[str,
             {
                 "name": block.name,
                 "variant_name": block.variant_name,
+                "modes": [
+                    [str(name), _jsonable_value(value)]
+                    for name, value in sorted(
+                        prelude.profile.variants[block.variant_name].modes.items()
+                    )
+                ],
                 "label": block.label,
                 "active_names": list(block.active_names),
                 "inactive_names": list(block.inactive_names),
@@ -1292,6 +1326,27 @@ def _grid_v2_planning_identity_payload(prelude: _GridV2PlanPrelude) -> dict[str,
             for block in prelude.blocks
         ],
     }
+
+
+def _grid_v2_plan_fingerprint(
+    *,
+    planning_identity: Mapping[str, Any],
+    effective_policy: str,
+    semantic_keys: Iterable[str],
+) -> str:
+    """Hash canonical plan identity and ordered keys with constant extra memory."""
+
+    header = {
+        "effective_policy": str(effective_policy),
+        "plan_identity_schema_version": GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION,
+        "planning_identity": dict(planning_identity),
+    }
+    digest = hashlib.blake2b(digest_size=32)
+    digest.update(_stable_json(header).encode("utf-8"))
+    for semantic_key in semantic_keys:
+        digest.update(b"\n")
+        digest.update(str(semantic_key).encode("utf-8"))
+    return digest.hexdigest()
 
 
 def _domain_identity_signature(domains: Mapping[str, GridV2ParameterDomain]) -> tuple[Any, ...]:
@@ -1330,6 +1385,15 @@ def _rebase_grid_v2_plan(cached_plan: GridV2Plan, prelude: _GridV2PlanPrelude) -
         grid_mode_names=tuple(block.name for block in prelude.blocks),
         grid_mode_labels=prelude.mode_labels,
         variant_name_by_grid_mode={block.name: block.variant_name for block in prelude.blocks},
+        mode_tuples_by_variant=tuple(
+            tuple(
+                sorted(
+                    (str(name), str(value))
+                    for name, value in prelude.profile.variants[variant].modes.items()
+                )
+            )
+            for variant in prelude.selected_variants
+        ),
         seed_params_by_variant=prelude.seed_params_by_variant,
         active_names_by_variant=prelude.active_names_by_variant,
         inactive_names_by_variant=prelude.inactive_names_by_variant,
@@ -1349,6 +1413,7 @@ def _rebase_grid_v2_plan(cached_plan: GridV2Plan, prelude: _GridV2PlanPrelude) -
     planning_metadata = dict(metadata.get("planning", {}))
     planning_metadata.update(
         {
+            "plan_identity_schema_version": GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION,
             "requested_policy": prelude.planning.requested_policy,
             "effective_policy": prelude.planning.effective_policy,
             "effective_policy_reason": prelude.planning.effective_policy_reason,
@@ -1665,6 +1730,8 @@ def preview_grid_v2_counts(
         budget_is_operative=prelude.planning.budget_is_operative,
         coverage_pct=(planned / prelude.raw_candidate_count * 100.0) if prelude.raw_candidate_count else 0.0,
         per_block_counts=per_block,
+        effective_allocation_method=prelude.planning.effective_allocation_method
+        or "full_enumeration_v2",
         sampler_version=(
             GRID_V2_SAMPLER_VERSION if prelude.planning.effective_policy == "sampled" else None
         ),
@@ -3767,6 +3834,7 @@ def _slow_enrich_selected(
 
 __all__ = [
     "GRID_V2_ENGINE_VERSION",
+    "GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION",
     "COMPILED_BATCH_KIND",
     "REFERENCE_BATCH_KIND",
     "CandidateMappingRecord",

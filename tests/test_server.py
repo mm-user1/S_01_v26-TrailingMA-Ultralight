@@ -99,6 +99,12 @@ def test_grid_start_page_label_and_marker_are_compact():
     assert "applyQueueGridConfig" in queue_js
     assert "grid_slow_refinement_enabled" in queue_js
     assert "grid_v2_planning_policy" in ui_handlers_js
+    assert "const sameOrderedBlocks = blockNames.length === existingBlockNames.length" in ui_handlers_js
+    assert "if (sameOrderedBlocks)" in ui_handlers_js
+    assert ui_handlers_js.index("if (sameOrderedBlocks)") < ui_handlers_js.index("container.replaceChildren()")
+    assert "Object.prototype.hasOwnProperty.call(pending, blockNames[index])" in ui_handlers_js
+    assert "Object.prototype.hasOwnProperty.call(pending, blockName)" in ui_handlers_js
+    assert "Object.prototype.hasOwnProperty.call(manual, blockName)" in queue_js
     assert "data-grid-block-name" not in index_html
     assert "td.textContent = String(value)" in ui_handlers_js
     assert "planned_candidate_count" in queue_js
@@ -631,6 +637,7 @@ def test_s03_regime_er_grid_preview_uses_logical_modes_not_internal_variants(cli
     assert "emergency" not in modes
     assert preview["mode_space_sizes"] == {"cc_only": 7_200, "tbands_only": 20_000, "both": 720_000}
     assert preview["full_candidate_count"] == 747_200
+    assert preview["allocation_method"] == "full_enumeration_v2"
 
 
 def test_s03_regime_er_budgeted_grid_preview_uses_generic_logical_block_allocation(client):
@@ -649,8 +656,27 @@ def test_s03_regime_er_budgeted_grid_preview_uses_generic_logical_block_allocati
     assert preview["requested_planning_policy"] == "sampled"
     assert preview["effective_planning_policy"] == "sampled"
     assert preview["planned_candidate_count"] == 1_000
+    assert preview["allocation_method"] == "manual"
     assert preview["mode_budgets"] == {"cc_only": 200, "tbands_only": 300, "both": 500}
     assert [row["mode"] for row in preview["modes"]] == ["cc_only", "tbands_only", "both"]
+
+
+def test_s03_regime_er_manual_zero_percentages_round_trip_through_preview_api(client):
+    response = client.post(
+        "/api/grid/preview",
+        json=_s03_regime_er_grid_preview_payload(
+            grid_v2_planning_policy="sampled",
+            grid_budget=1,
+            grid_allocation_method="manual",
+            grid_manual_percents={"cc_only": 0, "tbands_only": 0, "both": 100},
+        ),
+    )
+
+    assert response.status_code == 200
+    preview = response.get_json()["preview"]
+    assert preview["allocation_method"] == "manual"
+    assert preview["planned_candidate_count"] == 1
+    assert preview["mode_budgets"] == {"cc_only": 0, "tbands_only": 0, "both": 1}
 
 
 def test_s03_regime_er_budgeted_grid_preview_rejects_unsafe_budget_and_unknown_manual_block(client):
@@ -3392,6 +3418,129 @@ def test_grid_settings_saved_wfa_v2_full_enumeration_labels():
 
     assert view["is_wfa_grid"] is True
     _assert_saved_v2_full_enumeration_grid_settings(view)
+
+
+def test_grid_settings_s03_v1_keeps_mode_ma_period_diversity_wording():
+    study = _standalone_grid_study(
+        config_json={
+            "strategy_id": "s03_reversal_v10",
+            "grid_v2_planning_policy": "full",
+            "grid_allocation_method": "auto_sqrt_space",
+            "grid_budget": 10,
+            "grid_seed": 42,
+            "grid_diversity_enabled": True,
+            "grid_diversity_max_per_group": 2,
+        },
+    )
+
+    rows = _grid_settings_rows(build_grid_settings_view(study))
+
+    assert rows["Diversity"] == "On, max 2 / Mode+MA+Period"
+
+
+def test_grid_settings_effective_full_overrides_configured_automatic_allocation():
+    study = _standalone_grid_study(
+        config_json={
+            "grid_v2_planning_policy": "sampled",
+            "grid_allocation_method": "auto_sqrt_space",
+            "grid_budget": 100_000,
+        },
+        grid_summary={
+            "engine": "v2",
+            "grid_v2_plan_fingerprint": "current-v2-plan",
+            "grid": {
+                "backend": {"engine": "v2", "profile": "full_enumeration_v2"},
+                "planning": {
+                    "requested_policy": "sampled",
+                    "effective_policy": "full",
+                    "effective_allocation_method": "full_enumeration_v2",
+                    "planned_candidate_count": 30,
+                    "requested_budget": 100_000,
+                    "plan_identity_schema_version": "grid_v2_plan_identity_v2",
+                    "planning_policy_version": "grid_v2_planning_policy_v2",
+                },
+                "preview": {
+                    "full_candidate_count": 30,
+                    "planned_candidate_count": 30,
+                    "coverage_pct": 100.0,
+                },
+            },
+        },
+    )
+
+    view = build_grid_settings_view(study)
+    rows = _grid_settings_rows(view)
+    allocation_rows = _grid_settings_allocation_rows(view)
+    assert rows["Planning"].startswith("sampled")
+    assert rows["Planning"].endswith("full")
+    assert rows["Diversity"] == "On, max 2 / strategy group"
+    assert "Seed" not in rows
+    assert allocation_rows["Allocation"] == "Full enumeration"
+
+
+def test_grid_settings_sampled_v2_uses_generic_diversity_wording():
+    study = _standalone_grid_study(
+        config_json={
+            "grid_v2_planning_policy": "sampled",
+            "grid_allocation_method": "proportional_space",
+            "grid_seed": 42,
+            "grid_diversity_enabled": True,
+            "grid_diversity_max_per_group": 2,
+        },
+        grid_summary={
+            "grid": {
+                "planning": {"requested_policy": "sampled", "effective_policy": "sampled"},
+                "preview": {
+                    "engine": "v2",
+                    "profile": "full_enumeration_v2",
+                    "full_candidate_count": 100,
+                    "planned_candidate_count": 10,
+                },
+                "allocation": {"allocation_method": "proportional_space"},
+            },
+        },
+    )
+
+    rows = _grid_settings_rows(build_grid_settings_view(study))
+    assert rows["Diversity"] == "On, max 2 / strategy group"
+    assert rows["Seed"] == "42"
+
+
+@pytest.mark.parametrize(
+    ("marker_section", "marker_key", "marker_value"),
+    [
+        ("preview", "engine", "v2"),
+        ("summary", "engine", "v2"),
+        ("backend", "engine", "v2"),
+        ("summary", "grid_v2_plan_fingerprint", "v2-plan-fingerprint"),
+        ("planning", "plan_identity_schema_version", "grid_v2_plan_identity_v2"),
+        ("planning", "planning_policy_version", "grid_v2_planning_policy_v2"),
+        ("preview", "profile", "full_enumeration_v2"),
+        ("backend", "profile", "full_enumeration_v2"),
+        ("allocation", "allocation_method", "full_enumeration_v2"),
+    ],
+)
+def test_grid_settings_recognizes_authoritative_v2_markers(
+    marker_section,
+    marker_key,
+    marker_value,
+):
+    grid_summary = {
+        "grid": {
+            "backend": {},
+            "planning": {"requested_policy": "sampled", "effective_policy": "sampled"},
+            "preview": {"full_candidate_count": 100, "planned_candidate_count": 10},
+            "allocation": {"allocation_method": "proportional_space"},
+        },
+    }
+    marker_target = grid_summary if marker_section == "summary" else grid_summary["grid"][marker_section]
+    marker_target[marker_key] = marker_value
+    study = _standalone_grid_study(grid_summary=grid_summary)
+
+    rows = _grid_settings_rows(build_grid_settings_view(study))
+
+    assert rows["Diversity"] == "On, max 2 / strategy group"
+    assert rows["Seed"] == "42"
 
 
 def test_grid_settings_prefers_v2_planning_json_over_ambiguous_legacy_columns():

@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 
 import numpy as np
 import pytest
 
-from core.grid_engine import normalize_grid_v2_planning_policy
+from core.grid_engine import allocate_ordered_block_budgets, normalize_grid_v2_planning_policy
 from core.grid_v2 import (
+    GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION,
     GridV2PlanReuseCache,
     GridV2Settings,
     _can_use_table_config_packer,
+    _grid_v2_plan_fingerprint,
+    _reconcile_grid_v2_automatic_allocation,
+    _stable_json,
     build_grid_v2_plan,
     preview_grid_v2_counts,
 )
@@ -59,6 +64,7 @@ def _small_config() -> dict:
             "stopX": {"type": "float", "default": 2.0, "role": "execution"},
             "riskPerTrade": {"type": "float", "default": 2.0, "role": "execution"},
             "contractSize": {"type": "float", "default": 0.01, "role": "execution"},
+            "tickSize": {"type": "float", "default": 0.01, "role": "execution"},
             "stopMaxDays": {"type": "int", "default": 4, "role": "execution"},
         },
     }
@@ -87,6 +93,12 @@ def test_planning_policy_normalizer_accepts_documented_aliases_and_rejects_unkno
     assert normalize_grid_v2_planning_policy("budgeted") == "sampled"
     with pytest.raises(ValueError, match="full.*sampled"):
         normalize_grid_v2_planning_policy("random")
+
+
+def test_grid_v2_direct_defaults_match_public_contract():
+    settings = GridV2Settings()
+    assert settings.requested_budget == 200_000
+    assert settings.allocation_method == "auto_sqrt_space"
 
 
 def test_versioned_raw_pcg64_primitives_have_pinned_golden_outputs():
@@ -158,6 +170,18 @@ def test_sampled_semantic_keys_are_unchanged_and_saturated_budget_uses_exact_ful
     assert saturated.metadata["planning"]["effective_policy"] == "full"
     assert saturated.metadata["planning"]["effective_policy_reason"] == "budget_covers_full_space"
     assert saturated.plan_fingerprint == full.plan_fingerprint
+    for plan in (full, saturated):
+        planning = plan.metadata["planning"]
+        assert planning["effective_allocation_method"] == "full_enumeration_v2"
+        assert planning["effective_seed"] is None
+        assert planning["effective_min_quota"] is None
+        assert planning["effective_manual_percents"] == {}
+        assert planning["plan_identity_schema_version"] == GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION
+    assert preview_grid_v2_counts(config).effective_allocation_method == "full_enumeration_v2"
+    assert (
+        preview_grid_v2_counts(config, _sampled_settings(budget=30, seed=999)).effective_allocation_method
+        == "full_enumeration_v2"
+    )
 
 
 def test_preview_reports_full_requested_planned_and_coverage_without_building_population():
@@ -167,6 +191,123 @@ def test_preview_reports_full_requested_planned_and_coverage_without_building_po
     assert preview.effective_planning_policy == "sampled"
     assert preview.coverage_pct == pytest.approx(11 / 30 * 100.0)
     assert preview.per_block_counts["default"]["planned_count"] == 11
+    assert preview.effective_allocation_method == "proportional_space"
+
+
+def test_streaming_fingerprint_matches_small_canonical_reference_without_sequence_copy():
+    plan = build_grid_v2_plan(_small_config(), _sampled_settings())
+    identity = dict(plan.metadata["planning"]["identity"])
+    identity.pop("requested_policy", None)
+    identity.pop("effective_policy_reason", None)
+    header = {
+        "effective_policy": "sampled",
+        "plan_identity_schema_version": GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION,
+        "planning_identity": identity,
+    }
+    keys = plan.candidate_table.semantic_keys_by_row or ()
+    canonical = _stable_json(header) + "".join(f"\n{key}" for key in keys)
+    expected = hashlib.blake2b(canonical.encode("utf-8"), digest_size=32).hexdigest()
+
+    class OnePassKeys:
+        def __iter__(self):
+            yield from keys
+
+        def __len__(self):
+            raise AssertionError("streaming fingerprint must not size or copy the key stream")
+
+    assert plan.plan_fingerprint == expected
+    assert _grid_v2_plan_fingerprint(
+        planning_identity=identity,
+        effective_policy="sampled",
+        semantic_keys=OnePassKeys(),
+    ) == expected
+
+
+def test_v2_allocation_reconciles_only_automatic_zero_targets_in_declared_order():
+    initial = allocate_ordered_block_budgets(
+        ("small", "large_a", "large_b"),
+        {"small": 1, "large_a": 100, "large_b": 100},
+        3,
+        method="proportional_space",
+    )
+    assert initial.mode_budgets == {"small": 0, "large_a": 2, "large_b": 1}
+    reconciled = _reconcile_grid_v2_automatic_allocation(
+        initial,
+        block_order=("small", "large_a", "large_b"),
+    )
+    assert reconciled.mode_budgets == {"small": 1, "large_a": 1, "large_b": 1}
+    assert reconciled.actual_budget == sum(reconciled.mode_budgets.values()) == 3
+    assert all(reconciled.mode_budgets[name] <= reconciled.mode_space_sizes[name] for name in reconciled.mode_budgets)
+
+
+def test_s06_sampled_allocation_edges_and_previously_successful_outputs_are_stable():
+    config = load_config()
+
+    def counts(budget, method, manual=()):
+        preview = preview_grid_v2_counts(
+            config,
+            GridV2Settings(
+                planning_policy="sampled",
+                requested_budget=budget,
+                allocation_method=method,
+                manual_percents=manual,
+            ),
+        )
+        return dict(preview.per_variant_counts)
+
+    assert counts(50, "proportional_space") == {"bracket": 1, "trail": 49}
+    assert counts(2, "auto_sqrt_space") == {"bracket": 1, "trail": 1}
+    assert counts(1_000, "manual", (("bracket", 0.0), ("trail", 100.0))) == {
+        "bracket": 0,
+        "trail": 1_000,
+    }
+    assert counts(1, "manual", (("bracket", 0.0), ("trail", 100.0))) == {
+        "bracket": 0,
+        "trail": 1,
+    }
+    assert counts(1_000, "manual", (("bracket", 50.0), ("trail", 50.0))) == {
+        "bracket": 480,
+        "trail": 520,
+    }
+    assert counts(1_000, "auto_sqrt_space") == {"bracket": 173, "trail": 827}
+    assert counts(1_000, "proportional_space") == {"bracket": 10, "trail": 990}
+    with pytest.raises(ValueError, match="increase the budget or disable blocks"):
+        counts(1, "auto_sqrt_space")
+
+
+def test_s06_manual_allocation_validation_remains_fail_closed():
+    config = load_config()
+
+    def preview(manual, *, enabled_variants=None):
+        return preview_grid_v2_counts(
+            config,
+            GridV2Settings(
+                planning_policy="sampled",
+                requested_budget=100,
+                allocation_method="manual",
+                manual_percents=manual,
+                enabled_variants=enabled_variants,
+            ),
+        )
+
+    with pytest.raises(ValueError, match="ghost"):
+        preview((("bracket", 90.0), ("trail", 0.0), ("ghost", 10.0)))
+    with pytest.raises(ValueError, match="trail"):
+        preview((("bracket", 50.0), ("trail", 50.0)), enabled_variants=("bracket",))
+    with pytest.raises(ValueError, match="sum to 100"):
+        preview((("bracket", 40.0), ("trail", 50.0)))
+    with pytest.raises(ValueError, match="non-negative"):
+        preview((("bracket", -1.0), ("trail", 101.0)))
+    with pytest.raises(ValueError, match="finite"):
+        preview((("bracket", float("inf")), ("trail", 0.0)))
+    with pytest.raises(ValueError, match="disabled mode 'empty'"):
+        allocate_ordered_block_budgets(
+            ("active", "empty"),
+            {"active": 10, "empty": 0},
+            5,
+            method="manual",
+            manual_percents={"active": 50.0, "empty": 50.0},
+        )
 
 
 def test_sampled_planning_scales_with_delivered_population_not_full_space():
@@ -227,6 +368,40 @@ def test_sampled_plan_reuse_rebases_runtime_and_invalidates_seed_and_budget():
     )
     assert seed.hit is False
     assert budget.hit is False
+
+
+def test_plan_reuse_invalidates_normalized_modes_and_matches_fresh_plans():
+    config = _small_config()
+    settings = _sampled_settings()
+    cache = GridV2PlanReuseCache()
+    strict = cache.get_or_build(config, settings=settings)
+
+    boundary_config = copy.deepcopy(config)
+    boundary_config["execution"]["boundary"] = "none"
+    boundary = cache.get_or_build(boundary_config, settings=settings)
+    boundary_fresh = build_grid_v2_plan(boundary_config, settings)
+    runtime = cache.get_or_build(
+        boundary_config,
+        settings=settings,
+        base_params={"dateFilter": True, "start": "2025-03-01Z", "end": "2025-04-01Z"},
+    )
+
+    rounding_config = copy.deepcopy(boundary_config)
+    rounding_config["execution"]["priceRounding"] = "tick_outward"
+    rounding = cache.get_or_build(rounding_config, settings=settings)
+    rounding_fresh = build_grid_v2_plan(rounding_config, settings)
+
+    assert strict.hit is False
+    assert boundary.hit is False
+    assert runtime.hit is True
+    assert rounding.hit is False
+    for cached, fresh in ((boundary.plan, boundary_fresh), (rounding.plan, rounding_fresh)):
+        assert cached.plan_fingerprint == fresh.plan_fingerprint
+        assert cached.candidate_table.semantic_keys_by_row == fresh.candidate_table.semantic_keys_by_row
+        assert cached.candidate_table.mode_tuples_by_variant == fresh.candidate_table.mode_tuples_by_variant
+        assert cached.profile == fresh.profile
+    assert boundary.plan.plan_fingerprint != strict.plan.plan_fingerprint
+    assert rounding.plan.plan_fingerprint != boundary.plan.plan_fingerprint
 
 
 def test_full_plan_reuse_ignores_nonoperative_seed_and_sampled_table_packer_is_disabled():
