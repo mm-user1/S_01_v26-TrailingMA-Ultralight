@@ -3,18 +3,47 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Optional
 
 from .contracts import ExecutionProfile, ModeBinding, VariantSelector, VariantSpec
+from .diagnostics import V2Diagnostic, V2ValidationError
+from .execution_modes import ExecutionModeValidationError, validate_execution_modes
+from .runtime_contract import (
+    V2_RESERVED_RUNTIME_PARAM_NAMES,
+    V2RuntimeValidationError,
+    validate_v2_runtime_declarations,
+)
 
 
-class ProfileValidationError(ValueError):
+class ProfileValidationError(V2ValidationError):
     """Raised when a V2 config cannot be parsed as an execution profile."""
+
+    def __init__(
+        self,
+        diagnostic: V2Diagnostic | Iterable[V2Diagnostic] | str,
+        *,
+        strategy_id: str = "<unknown strategy>",
+        path: str = "execution",
+        variant: str | None = None,
+        code: str = "V2_PROFILE_VALIDATION_ERROR",
+    ) -> None:
+        if isinstance(diagnostic, str):
+            diagnostic = V2Diagnostic(
+                severity="error",
+                code=code,
+                strategy_id=strategy_id,
+                path=path,
+                variant=variant,
+                message=diagnostic,
+            )
+        super().__init__(diagnostic)
 
 
 VALID_PARAMETER_ROLES = {"signal", "execution", "runtime"}
 
+# Binding metadata remains the authority for active execution parameters. Mode
+# and combination support is validated once by execution_modes.py.
 MODE_PARAMETER_BINDINGS: tuple[ModeBinding, ...] = (
     ModeBinding("topology", "signal_reversal", "phase34"),
     ModeBinding("entryOrder", "market_next_open", "phase1"),
@@ -23,56 +52,43 @@ MODE_PARAMETER_BINDINGS: tuple[ModeBinding, ...] = (
     ModeBinding("stop", "emergency_pct", "phase34", ("emergencySlPct", "emergencySlUpdateBars")),
     ModeBinding("target", "rr", "phase1", ("stopRR",)),
     ModeBinding("target", "none", "phase1"),
-    ModeBinding(
-        "trail",
-        "ma",
-        "phase1",
-        ("trailRR", "trailMAType", "trailMALength", "trailMAOffsetEx"),
-        ("ma",),
-    ),
+    ModeBinding("trail", "ma", "phase1", ("trailRR", "trailMAType", "trailMALength", "trailMAOffsetEx"), ("ma",)),
     ModeBinding("trail", "none", "phase1"),
+    ModeBinding("trailActivation", "rr", "phase1"),
+    ModeBinding("trailActivation", "none", "phase1"),
     ModeBinding("sizing", "risk_per_trade", "phase1", ("riskPerTrade", "contractSize")),
+    ModeBinding("sizing", "fixed_pct_equity", "phase34", ("positionPct", "contractSize")),
     ModeBinding("maxDays", "true", "phase1", ("stopMaxDays",), ("timestamps",)),
+    ModeBinding("maxDays", "false", "phase1"),
+    ModeBinding("boundary", "strict_close", "phase1"),
+    ModeBinding("boundary", "none", "phase1"),
     ModeBinding("priceRounding", "none", "phase1"),
     ModeBinding("priceRounding", "tick_outward", "phase1", ("tickSize",)),
-    ModeBinding(
-        "margin",
-        "report_only",
-        "phase1",
-        ("leverage", "maintenanceMarginPct", "markPriceSource"),
-        ("mark_price",),
-    ),
+    # report_only observes the leverage implied by fills; it has no configured
+    # leverage or maintenance inputs.  Those belong to the deferred simulated
+    # margin policy below.
+    ModeBinding("margin", "report_only", "phase1", (), ("mark_price",)),
     ModeBinding("margin", "off", "phase1"),
-    ModeBinding(
-        "margin",
-        "simulate",
-        "later",
-        ("leverage", "maintenanceMarginPct", "markPriceSource"),
-        ("mark_price",),
-    ),
+    ModeBinding("exitOnSignal", "true", "phase34"),
+    # Explicitly known but uncertified values remain unavailable.
+    ModeBinding("margin", "simulate", "later", ("leverage", "maintenanceMarginPct", "markPriceSource"), ("mark_price",)),
     ModeBinding("stop", "atr", "later", ("stopX", "stopMaxPct"), ("atr",)),
     ModeBinding("stop", "swing", "later", ("stopLP", "stopMaxPct"), ("rolling_low_high",)),
     ModeBinding("stop", "pct", "later", ("stopPct", "stopMaxPct")),
     ModeBinding("trail", "atr", "later", ("trailRR", "trailAtrMult"), ("atr",)),
-    ModeBinding("sizing", "fixed_pct_equity", "phase34", ("positionPct", "contractSize")),
-    ModeBinding("exitOnSignal", "true", "phase34"),
 )
-
-_BINDINGS_BY_KEY = {
-    (binding.mode_field, binding.mode_value): binding
-    for binding in MODE_PARAMETER_BINDINGS
+_BINDINGS_BY_KEY = {(binding.mode_field, binding.mode_value): binding for binding in MODE_PARAMETER_BINDINGS}
+_TOPOLOGY_WIDE_EXECUTION_PARAMS = {
+    "position": frozenset({"initialCapital", "commissionPct", "enableLong", "enableShort"}),
+    "signal_reversal": frozenset({"initialCapital", "commissionPct", "enableLong", "enableShort"}),
 }
 
 
 def is_v2_config(config: Mapping[str, Any]) -> bool:
-    """Return whether a strategy config opts into Backtester V2."""
-
     return str(config.get("engine", "v1")).strip().lower() == "v2"
 
 
 def canonical_selector_key(value: Any) -> str:
-    """Canonical string form used by variant selector mappings."""
-
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int) and not isinstance(value, bool):
@@ -87,42 +103,63 @@ def canonical_selector_key(value: Any) -> str:
 
 
 def _canonical_mapping_key(value: Any) -> str:
-    """Canonical selector mapping key, including JSON object-key strings."""
-
     if not isinstance(value, str):
         return canonical_selector_key(value)
-
     raw = value.strip()
     lower = raw.lower()
     if lower in {"true", "false"}:
         return lower
-
     try:
-        parsed_int = int(raw, 10)
+        return str(int(raw, 10))
     except ValueError:
-        parsed_int = None
-    else:
-        return str(parsed_int)
-
+        pass
     try:
-        parsed_float = float(raw)
+        parsed = float(raw)
     except ValueError:
         return value
-    if not math.isfinite(parsed_float):
+    if not math.isfinite(parsed):
         return value
-    if parsed_float.is_integer():
-        return str(int(parsed_float))
-    return repr(parsed_float)
+    return str(int(parsed)) if parsed.is_integer() else repr(parsed)
 
 
 def _strategy_label(config: Mapping[str, Any]) -> str:
     return str(config.get("id") or "<unknown strategy>")
 
 
+def _error(
+    strategy_id: str,
+    message: str,
+    *,
+    path: str,
+    code: str,
+    variant: str | None = None,
+) -> ProfileValidationError:
+    return ProfileValidationError(
+        V2Diagnostic("error", code, strategy_id, path, variant, message)
+    )
+
+
+def _warning(
+    strategy_id: str,
+    message: str,
+    *,
+    path: str,
+    code: str,
+    variant: str | None = None,
+) -> V2Diagnostic:
+    return V2Diagnostic("warning", code, strategy_id, path, variant, message)
+
+
 def _parameters(config: Mapping[str, Any]) -> Mapping[str, Any]:
     params = config.get("parameters", {})
     if not isinstance(params, Mapping):
-        raise ProfileValidationError(f"{_strategy_label(config)}: parameters must be a mapping.")
+        strategy_id = _strategy_label(config)
+        raise _error(
+            strategy_id,
+            f"{strategy_id}: parameters must be a mapping.",
+            path="parameters",
+            code="V2_INVALID_PROFILE",
+        )
     return params
 
 
@@ -137,85 +174,127 @@ def _role_for(name: str, spec: Any, strategy_id: str, *, required: bool) -> Opti
     role = spec.get("role") if isinstance(spec, Mapping) else None
     if role is None:
         if required:
-            raise ProfileValidationError(
-                f"{strategy_id}: optimized parameter '{name}' must declare role "
-                "('signal', 'execution', or 'runtime')."
+            raise _error(
+                strategy_id,
+                f"{strategy_id}: optimized parameter '{name}' must declare role ('signal', 'execution', or 'runtime').",
+                path=f"parameters.{name}.role",
+                code="V2_INVALID_PARAMETER_ROLE",
             )
         return None
     normalized = str(role).strip().lower()
     if normalized not in VALID_PARAMETER_ROLES:
-        raise ProfileValidationError(
-            f"{strategy_id}: parameter '{name}' has invalid role '{role}'. "
-            f"Expected one of {sorted(VALID_PARAMETER_ROLES)}."
+        raise _error(
+            strategy_id,
+            f"{strategy_id}: parameter '{name}' has invalid role '{role}'. Expected one of {sorted(VALID_PARAMETER_ROLES)}.",
+            path=f"parameters.{name}.role",
+            code="V2_INVALID_PARAMETER_ROLE",
         )
     return normalized
 
 
-def _dependency_names(depends_on: Any) -> tuple[str, ...]:
+def _dependency_names(
+    depends_on: Any,
+    *,
+    strategy_id: str,
+    parameter_name: str,
+) -> tuple[str, ...]:
     if depends_on in (None, ""):
         return ()
     if isinstance(depends_on, str):
         return (depends_on,)
-    if isinstance(depends_on, Iterable):
+    if isinstance(depends_on, Sequence) and not isinstance(depends_on, (str, bytes, bytearray)):
         return tuple(str(item) for item in depends_on)
-    raise ProfileValidationError("depends_on must be a string or list of strings.")
+    raise _error(
+        strategy_id,
+        f"{strategy_id}: parameter '{parameter_name}' depends_on must be a string or list of strings.",
+        path=f"parameters.{parameter_name}.depends_on",
+        code="V2_INVALID_DEPENDENCY",
+    )
+
+
+def _validate_dependencies(
+    *,
+    strategy_id: str,
+    params: Mapping[str, Any],
+    roles: Mapping[str, Optional[str]],
+) -> None:
+    graph: dict[str, tuple[str, ...]] = {}
+    for raw_name, raw_spec in params.items():
+        name = str(raw_name)
+        if not isinstance(raw_spec, Mapping) or "depends_on" not in raw_spec:
+            continue
+        parents = _dependency_names(
+            raw_spec.get("depends_on"),
+            strategy_id=strategy_id,
+            parameter_name=name,
+        )
+        if len(set(parents)) != len(parents):
+            raise _error(strategy_id, f"{strategy_id}: parameter '{name}' has duplicate depends_on parents.", path=f"parameters.{name}.depends_on", code="V2_INVALID_DEPENDENCY")
+        if name in parents:
+            raise _error(strategy_id, f"{strategy_id}: parameter '{name}' cannot depend on itself.", path=f"parameters.{name}.depends_on", code="V2_INVALID_DEPENDENCY")
+        child_role = roles.get(name)
+        if child_role is None:
+            raise _error(strategy_id, f"{strategy_id}: parameter '{name}' uses depends_on and must declare a role.", path=f"parameters.{name}.depends_on", code="V2_INVALID_DEPENDENCY")
+        if child_role == "runtime":
+            raise _error(strategy_id, f"{strategy_id}: runtime parameter '{name}' cannot use depends_on.", path=f"parameters.{name}.depends_on", code="V2_INVALID_DEPENDENCY")
+        for parent in parents:
+            if parent not in params:
+                raise _error(strategy_id, f"{strategy_id}: parameter '{name}' depends on unknown parameter '{parent}'.", path=f"parameters.{name}.depends_on", code="V2_INVALID_DEPENDENCY")
+            parent_spec = params[parent]
+            parent_role = roles.get(parent)
+            if parent_role is None:
+                raise _error(strategy_id, f"{strategy_id}: dependency parent '{parent}' must declare a role.", path=f"parameters.{name}.depends_on", code="V2_INVALID_DEPENDENCY")
+            if parent_role == "runtime" or parent in V2_RESERVED_RUNTIME_PARAM_NAMES:
+                raise _error(strategy_id, f"{strategy_id}: runtime parameter '{parent}' cannot be a depends_on parent.", path=f"parameters.{name}.depends_on", code="V2_INVALID_DEPENDENCY")
+            if parent_role != child_role:
+                raise _error(strategy_id, f"{strategy_id}: cross-role depends_on is not supported in V2 ('{name}' role={child_role}, '{parent}' role={parent_role}).", path=f"parameters.{name}.depends_on", code="V2_INVALID_DEPENDENCY")
+            parent_type = str(parent_spec.get("type") or "").strip().lower() if isinstance(parent_spec, Mapping) else ""
+            if parent_type != "bool":
+                raise _error(strategy_id, f"{strategy_id}: depends_on parent '{parent}' for '{name}' must be boolean.", path=f"parameters.{name}.depends_on", code="V2_INVALID_DEPENDENCY")
+        graph[name] = parents
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in visited:
+            return
+        if name in visiting:
+            raise _error(strategy_id, f"{strategy_id}: depends_on contains a cycle at '{name}'.", path=f"parameters.{name}.depends_on", code="V2_INVALID_DEPENDENCY")
+        visiting.add(name)
+        for parent in graph.get(name, ()):
+            visit(parent)
+        visiting.remove(name)
+        visited.add(name)
+
+    for name in graph:
+        visit(name)
 
 
 def validate_parameter_roles(config: Mapping[str, Any]) -> None:
-    """Validate explicit V2 roles and reject cross-role dependencies.
-
-    This is intentionally a no-op for V1 configs so legacy strategy discovery
-    and runtime paths do not inherit V2 validation.
-    """
+    """Validate V2 roles/dependencies; V1 remains an exact no-op."""
 
     if not is_v2_config(config):
         return
-
+    try:
+        validate_v2_runtime_declarations(config)
+    except V2RuntimeValidationError as exc:
+        raise ProfileValidationError(exc.diagnostics) from exc
     strategy_id = _strategy_label(config)
     params = _parameters(config)
-    roles: dict[str, Optional[str]] = {}
-    for name, spec in params.items():
-        roles[str(name)] = _role_for(str(name), spec, strategy_id, required=_is_optimized(spec))
-
-    for name, spec in params.items():
-        if not isinstance(spec, Mapping) or "depends_on" not in spec:
-            continue
-        child = str(name)
-        child_role = roles.get(child)
-        if child_role is None:
-            raise ProfileValidationError(
-                f"{strategy_id}: parameter '{child}' uses depends_on and must declare a role."
-            )
-        for parent in _dependency_names(spec.get("depends_on")):
-            if parent not in params:
-                raise ProfileValidationError(
-                    f"{strategy_id}: parameter '{child}' depends on unknown parameter '{parent}'."
-                )
-            parent_role = roles.get(parent)
-            if parent_role is None:
-                raise ProfileValidationError(
-                    f"{strategy_id}: dependency parent '{parent}' must declare a role."
-                )
-            if parent_role != child_role:
-                raise ProfileValidationError(
-                    f"{strategy_id}: cross-role depends_on is not supported in V2 "
-                    f"('{child}' role={child_role}, '{parent}' role={parent_role})."
-                )
+    roles = {str(name): _role_for(str(name), spec, strategy_id, required=_is_optimized(spec)) for name, spec in params.items()}
+    _validate_dependencies(strategy_id=strategy_id, params=params, roles=roles)
 
 
 def _parameter_defaults(params: Mapping[str, Any]) -> dict[str, Any]:
-    defaults: dict[str, Any] = {}
-    for name, spec in params.items():
-        if isinstance(spec, Mapping) and "default" in spec:
-            defaults[str(name)] = spec["default"]
-    return defaults
+    return {str(name): spec["default"] for name, spec in params.items() if isinstance(spec, Mapping) and "default" in spec}
 
 
 def _parameter_roles(config: Mapping[str, Any]) -> dict[str, str]:
     if not is_v2_config(config):
         return {}
-    roles: dict[str, str] = {}
     strategy_id = _strategy_label(config)
+    roles: dict[str, str] = {}
     for name, spec in _parameters(config).items():
         role = _role_for(str(name), spec, strategy_id, required=_is_optimized(spec))
         if role is not None:
@@ -224,71 +303,82 @@ def _parameter_roles(config: Mapping[str, Any]) -> dict[str, str]:
 
 
 def _base_modes(execution: Mapping[str, Any]) -> dict[str, str]:
-    excluded = {"variantSelector", "variants"}
-    return {
-        str(key): canonical_selector_key(value)
-        for key, value in execution.items()
-        if key not in excluded
-    }
+    return {str(key): canonical_selector_key(value) for key, value in execution.items() if key not in {"variantSelector", "variants"}}
 
 
-def _parse_variants(execution: Mapping[str, Any], base_modes: Mapping[str, str]) -> dict[str, VariantSpec]:
-    raw_variants = execution.get("variants")
-    if raw_variants is None:
-        return {"default": VariantSpec(name="default", modes=dict(base_modes))}
-    if not isinstance(raw_variants, Mapping) or not raw_variants:
-        raise ProfileValidationError("execution.variants must be a non-empty mapping when present.")
-
+def _parse_variants(
+    execution: Mapping[str, Any],
+    base_modes: Mapping[str, str],
+    strategy_id: str,
+) -> dict[str, VariantSpec]:
+    raw = execution.get("variants")
+    if raw is None:
+        return {"default": VariantSpec("default", dict(base_modes))}
+    if not isinstance(raw, Mapping) or not raw:
+        raise _error(
+            strategy_id,
+            f"{strategy_id}: execution.variants must be a non-empty mapping when present.",
+            path="execution.variants",
+            code="V2_INVALID_PROFILE",
+        )
     variants: dict[str, VariantSpec] = {}
-    for name, payload in raw_variants.items():
+    for name, payload in raw.items():
         if not isinstance(payload, Mapping):
-            raise ProfileValidationError(f"execution variant '{name}' must be a mapping.")
+            raise _error(
+                strategy_id,
+                f"{strategy_id}: execution variant '{name}' must be a mapping.",
+                path=f"execution.variants.{name}",
+                variant=str(name),
+                code="V2_INVALID_PROFILE",
+            )
         modes = dict(base_modes)
         modes.update({str(key): canonical_selector_key(value) for key, value in payload.items()})
-        variants[str(name)] = VariantSpec(name=str(name), modes=modes)
+        variants[str(name)] = VariantSpec(str(name), modes)
     return variants
 
 
 def _parse_selector(
     execution: Mapping[str, Any],
     variants: Mapping[str, VariantSpec],
-    parameter_names: Iterable[str],
+    params: Mapping[str, Any],
+    roles: Mapping[str, str],
     strategy_id: str,
 ) -> Optional[VariantSelector]:
-    raw_selector = execution.get("variantSelector")
-    if raw_selector is None:
+    raw = execution.get("variantSelector")
+    if raw is None:
         if len(variants) > 1:
-            raise ProfileValidationError("execution.variantSelector is required for multiple variants.")
+            raise _error(strategy_id, f"{strategy_id}: execution.variantSelector is required for multiple variants.", path="execution.variantSelector", code="V2_INVALID_SELECTOR")
         return None
-    if not isinstance(raw_selector, Mapping):
-        raise ProfileValidationError("execution.variantSelector must be a mapping.")
-    selector_param = raw_selector.get("param")
-    if not selector_param:
-        raise ProfileValidationError("execution.variantSelector.param is required.")
-    declared_params = set(parameter_names)
-    if declared_params and str(selector_param) not in declared_params:
-        raise ProfileValidationError(
-            f"{strategy_id}: variantSelector parameter '{selector_param}' is not "
-            "declared in parameters."
-        )
-    raw_mapping = raw_selector.get("mapping")
+    if not isinstance(raw, Mapping):
+        raise _error(strategy_id, f"{strategy_id}: execution.variantSelector must be a mapping.", path="execution.variantSelector", code="V2_INVALID_SELECTOR")
+    selector_param = str(raw.get("param") or "")
+    if not selector_param or selector_param not in params:
+        raise _error(strategy_id, f"{strategy_id}: variantSelector parameter '{selector_param}' is not declared in parameters.", path="execution.variantSelector.param", code="V2_INVALID_SELECTOR")
+    selector_spec = params[selector_param]
+    selector_type = str(selector_spec.get("type") or "").strip().lower() if isinstance(selector_spec, Mapping) else ""
+    if selector_param in V2_RESERVED_RUNTIME_PARAM_NAMES or roles.get(selector_param) != "execution" or selector_type not in {"bool", "select", "options"}:
+        raise _error(strategy_id, f"{strategy_id}: variantSelector parameter '{selector_param}' must be a non-runtime bool/select execution parameter.", path="execution.variantSelector.param", code="V2_INVALID_SELECTOR")
+    if isinstance(selector_spec, Mapping) and "depends_on" in selector_spec:
+        raise _error(strategy_id, f"{strategy_id}: variantSelector parameter '{selector_param}' cannot use depends_on.", path=f"parameters.{selector_param}.depends_on", code="V2_INVALID_SELECTOR")
+    raw_mapping = raw.get("mapping")
     if not isinstance(raw_mapping, Mapping) or not raw_mapping:
-        raise ProfileValidationError("execution.variantSelector.mapping must be a non-empty mapping.")
-
+        raise _error(strategy_id, f"{strategy_id}: execution.variantSelector.mapping must be a non-empty mapping.", path="execution.variantSelector.mapping", code="V2_INVALID_SELECTOR")
     mapping: dict[str, str] = {}
-    for raw_key, raw_variant_name in raw_mapping.items():
+    for raw_key, raw_variant in raw_mapping.items():
         key = _canonical_mapping_key(raw_key)
-        variant_name = str(raw_variant_name)
-        if variant_name not in variants:
-            raise ProfileValidationError(
-                f"execution.variantSelector maps '{key}' to unknown variant '{variant_name}'."
-            )
-        mapping[key] = variant_name
-    return VariantSelector(
-        param=str(selector_param),
-        mapping=mapping,
-        user_facing=raw_selector.get("userFacing", True) is not False,
-    )
+        if key in mapping:
+            raise _error(strategy_id, f"{strategy_id}: variantSelector has duplicate normalized key '{key}'.", path="execution.variantSelector.mapping", code="V2_INVALID_SELECTOR")
+        variant = str(raw_variant)
+        if variant not in variants:
+            raise _error(strategy_id, f"{strategy_id}: execution.variantSelector maps '{key}' to unknown variant '{variant}'.", path="execution.variantSelector.mapping", code="V2_INVALID_SELECTOR")
+        mapping[key] = variant
+    unreachable = [name for name in variants if name not in set(mapping.values())]
+    if unreachable:
+        raise _error(strategy_id, f"{strategy_id}: variantSelector cannot reach variant(s) {unreachable}.", path="execution.variantSelector.mapping", code="V2_INVALID_SELECTOR")
+    user_facing = raw.get("userFacing", True)
+    if not isinstance(user_facing, bool):
+        raise _error(strategy_id, f"{strategy_id}: variantSelector.userFacing must be boolean.", path="execution.variantSelector.userFacing", code="V2_INVALID_SELECTOR")
+    return VariantSelector(selector_param, mapping, user_facing)
 
 
 def _binding_for(mode_field: str, mode_value: Any) -> Optional[ModeBinding]:
@@ -297,85 +387,105 @@ def _binding_for(mode_field: str, mode_value: Any) -> Optional[ModeBinding]:
 
 def _consumed_params_for_modes(modes: Mapping[str, Any]) -> set[str]:
     consumed: set[str] = set()
-    for mode_field, mode_value in modes.items():
-        binding = _binding_for(str(mode_field), mode_value)
+    for field, value in modes.items():
+        binding = _binding_for(field, value)
         if binding is not None:
             consumed.update(binding.consumes_params)
     return consumed
 
 
-def _all_bound_params(variants: Mapping[str, VariantSpec]) -> set[str]:
-    bound: set[str] = set()
-    for variant in variants.values():
-        bound.update(_consumed_params_for_modes(variant.modes))
-    return bound
-
-
-def _all_known_mode_params() -> set[str]:
-    bound: set[str] = set()
-    for binding in MODE_PARAMETER_BINDINGS:
-        bound.update(binding.consumes_params)
-    return bound
+def _validate_variants(
+    *,
+    strategy_id: str,
+    variants: Mapping[str, VariantSpec],
+    params: Mapping[str, Any],
+) -> Mapping[str, str]:
+    families: dict[str, str] = {}
+    for name, variant in variants.items():
+        try:
+            family = validate_execution_modes(variant.modes)
+        except ExecutionModeValidationError as exc:
+            raise _error(strategy_id, f"{strategy_id}: variant '{name}': {exc}", path=f"execution.variants.{name}.{exc.field}", variant=name, code="V2_UNSUPPORTED_EXECUTION_MODE") from exc
+        families[name] = family
+        for field, value in variant.modes.items():
+            binding = _binding_for(field, value)
+            if binding is None:
+                continue
+            if binding.status == "later":
+                raise _error(strategy_id, f"{strategy_id}: variant '{name}' uses uncertified {field}={value!r}.", path=f"execution.variants.{name}.{field}", variant=name, code="V2_UNSUPPORTED_EXECUTION_MODE")
+            missing = [param for param in binding.consumes_params if param not in params]
+            if missing:
+                raise _error(strategy_id, f"{strategy_id}: variant '{name}' mode {field}={value!r} consumes undeclared parameter(s) {missing}.", path=f"execution.variants.{name}.{field}", variant=name, code="V2_UNDECLARED_CONSUMED_PARAMETER")
+    return families
 
 
 def _variant_independent_params(
     *,
+    strategy_id: str,
+    params: Mapping[str, Any],
     roles: Mapping[str, str],
     variants: Mapping[str, VariantSpec],
+    families: Mapping[str, str],
     selector: Optional[VariantSelector],
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    warnings: list[str] = []
-    independent: set[str] = {
-        name
-        for name, role in roles.items()
-        if role == "signal"
-    }
+) -> tuple[tuple[str, ...], tuple[V2Diagnostic, ...]]:
+    diagnostics: list[V2Diagnostic] = []
+    independent = {name for name, role in roles.items() if role == "signal"}
     if selector is not None:
         independent.add(selector.param)
-
-    bound_params = _all_bound_params(variants)
-    known_mode_params = _all_known_mode_params()
-    for name, role in roles.items():
-        if role != "execution" or name in bound_params or name in independent:
-            continue
-        if name in known_mode_params:
-            continue
-        independent.add(name)
-        warnings.append(
-            f"execution parameter '{name}' is not consumed by any mode binding; "
-            "treating it as variant-independent active."
+    variant_consumed = set().union(
+        *(_consumed_params_for_modes(variant.modes) for variant in variants.values())
+    )
+    topology_consumed: set[str] = set()
+    for family in set(families.values()):
+        topology_consumed.update(
+            name
+            for name in _TOPOLOGY_WIDE_EXECUTION_PARAMS[family]
+            if roles.get(name) == "execution"
         )
-    return tuple(sorted(independent)), tuple(warnings)
+    bound = variant_consumed | topology_consumed
+    independent.update(topology_consumed)
+
+    for name, role in roles.items():
+        if role != "execution" or name in bound or (selector is not None and name == selector.param):
+            continue
+        if _is_optimized(params.get(name)):
+            raise _error(strategy_id, f"{strategy_id}: optimized execution parameter '{name}' has no consumer in any supported variant.", path=f"parameters.{name}", code="V2_UNBOUND_OPTIMIZED_EXECUTION_PARAM")
+        diagnostics.append(
+            _warning(
+                strategy_id,
+                f"{strategy_id}: fixed execution parameter '{name}' has no consumer and is excluded from semantic identity.",
+                path=f"parameters.{name}",
+                code="V2_UNBOUND_FIXED_EXECUTION_PARAM",
+            )
+        )
+    return tuple(name for name in params if name in independent), tuple(diagnostics)
 
 
 def parse_execution_profile(config: Mapping[str, Any]) -> ExecutionProfile:
-    """Parse a V2 strategy config into an execution profile.
-
-    The parser is data-driven and performs no runtime dispatch.
-    """
+    """Parse and fully validate a V2 execution profile once, before hot paths."""
 
     if not isinstance(config, Mapping):
         raise ProfileValidationError("strategy config must be a mapping.")
     validate_parameter_roles(config)
-
     strategy_id = _strategy_label(config)
     engine = str(config.get("engine", "v1")).strip().lower()
-    execution = config.get("execution", {})
-    if execution is None:
-        execution = {}
+    execution = config.get("execution", {}) or {}
     if not isinstance(execution, Mapping):
-        raise ProfileValidationError(f"{strategy_id}: execution must be a mapping.")
-
+        raise _error(strategy_id, f"{strategy_id}: execution must be a mapping.", path="execution", code="V2_INVALID_PROFILE")
     params = _parameters(config)
     parameter_names = tuple(str(name) for name in params)
     defaults = _parameter_defaults(params)
     roles = _parameter_roles(config)
     base_modes = _base_modes(execution)
-    variants = _parse_variants(execution, base_modes)
-    selector = _parse_selector(execution, variants, parameter_names, strategy_id)
-    independent, warnings = _variant_independent_params(
+    variants = _parse_variants(execution, base_modes, strategy_id)
+    selector = _parse_selector(execution, variants, params, roles, strategy_id)
+    families = _validate_variants(strategy_id=strategy_id, variants=variants, params=params)
+    independent, diagnostics = _variant_independent_params(
+        strategy_id=strategy_id,
+        params=params,
         roles=roles,
         variants=variants,
+        families=families,
         selector=selector,
     )
     return ExecutionProfile(
@@ -388,83 +498,54 @@ def parse_execution_profile(config: Mapping[str, Any]) -> ExecutionProfile:
         parameter_names=parameter_names,
         parameter_roles=roles,
         variant_independent_params=independent,
-        validation_warnings=warnings,
+        validation_warnings=tuple(item.message for item in diagnostics),
+        diagnostics=diagnostics,
     )
 
 
 def resolve_variant(profile: ExecutionProfile, params: Mapping[str, Any]) -> VariantSpec:
-    """Resolve the active variant for a parameter set."""
-
     selector = profile.variant_selector
     if selector is None:
         if len(profile.variants) != 1:
-            raise ProfileValidationError(
-                f"{profile.strategy_id}: profile has multiple variants but no selector."
-            )
+            raise ProfileValidationError(f"{profile.strategy_id}: profile has multiple variants but no selector.")
         return next(iter(profile.variants.values()))
-
     if selector.param in params:
         raw_value = params[selector.param]
     elif selector.param in profile.parameter_defaults:
         raw_value = profile.parameter_defaults[selector.param]
     else:
-        raise ProfileValidationError(
-            f"{profile.strategy_id}: selector parameter '{selector.param}' missing "
-            "from params and has no config default."
-        )
-
+        raise ProfileValidationError(f"{profile.strategy_id}: selector parameter '{selector.param}' missing from params and has no config default.")
     key = canonical_selector_key(raw_value)
     variant_name = selector.mapping.get(key)
     if variant_name is None:
-        raise ProfileValidationError(
-            f"{profile.strategy_id}: selector parameter '{selector.param}' value "
-            f"{raw_value!r} maps to '{key}', which is not in variantSelector.mapping."
-        )
+        raise ProfileValidationError(f"{profile.strategy_id}: selector parameter '{selector.param}' value {raw_value!r} maps to '{key}', which is not in variantSelector.mapping.")
     return profile.variants[variant_name]
 
 
 def active_mode_values(profile: ExecutionProfile, params: Mapping[str, Any]) -> dict[str, str]:
-    """Return mode field/value pairs for the resolved variant."""
-
     return dict(resolve_variant(profile, params).modes)
 
 
 def active_parameter_names(profile: ExecutionProfile, params: Mapping[str, Any]) -> set[str]:
-    """Return parameter names active for semantic identity and candidate packing."""
-
     active = set(profile.variant_independent_params)
-    modes = active_mode_values(profile, params)
     declared = set(profile.parameter_names)
-    for consumed in _consumed_params_for_modes(modes):
-        if consumed in declared:
-            active.add(consumed)
-    return {
-        name
-        for name in active
-        if profile.parameter_roles.get(name) != "runtime"
-    }
+    active.update(name for name in _consumed_params_for_modes(active_mode_values(profile, params)) if name in declared)
+    return {name for name in active if profile.parameter_roles.get(name) != "runtime"}
 
 
 def inactive_parameter_names(profile: ExecutionProfile, params: Mapping[str, Any]) -> set[str]:
-    """Return configured non-runtime params inactive for the resolved variant."""
-
-    candidates = {
-        name
-        for name in profile.parameter_names
-        if profile.parameter_roles.get(name) != "runtime"
-    }
+    candidates = {name for name in profile.parameter_names if profile.parameter_roles.get(name) != "runtime"}
     return candidates - active_parameter_names(profile, params)
 
 
 def mode_binding_for(mode_field: str, mode_value: Any) -> Optional[ModeBinding]:
-    """Return binding metadata for a profile mode field/value pair."""
-
     return _binding_for(mode_field, mode_value)
 
 
 __all__ = [
     "MODE_PARAMETER_BINDINGS",
     "ProfileValidationError",
+    "VALID_PARAMETER_ROLES",
     "active_mode_values",
     "active_parameter_names",
     "canonical_selector_key",

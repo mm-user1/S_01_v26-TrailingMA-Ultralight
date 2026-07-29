@@ -13,6 +13,7 @@ from core.backtest_engine import StrategyResult
 from .contracts import GuardrailSummary, StandingState
 from .kernel import ExecutionData, KernelConfig, KernelResult, run_reference_kernel
 from .kernel_signal import SignalKernelConfig, run_signal_reversal_kernel
+from .execution_modes import resolve_position_mode_state, resolve_signal_reversal_mode_state
 from .price_rounding import PRICE_ROUNDING_NONE, PRICE_ROUNDING_TICK_OUTWARD, validate_tick_size
 from .profile import active_mode_values
 
@@ -50,62 +51,6 @@ def _timestamp(value: Any) -> Optional[pd.Timestamp]:
     return ts.tz_convert("UTC")
 
 
-def _require_mode(modes: Mapping[str, str], name: str, expected: str) -> None:
-    actual = modes.get(name)
-    if actual != expected:
-        raise ValueError(f"Unsupported Phase-1 execution mode {name}={actual!r}; expected {expected!r}.")
-
-
-def _require_signal_mode(modes: Mapping[str, str], name: str, expected: str) -> None:
-    actual = modes.get(name)
-    if actual != expected:
-        raise ValueError(f"Unsupported signal_reversal execution mode {name}={actual!r}; expected {expected!r}.")
-
-
-def _require_signal_absent_or(modes: Mapping[str, str], name: str, allowed: set[str]) -> str:
-    actual = modes.get(name)
-    if actual is None:
-        return ""
-    if actual not in allowed:
-        expected = ", ".join(repr(value) for value in sorted(allowed))
-        raise ValueError(f"Unsupported signal_reversal execution mode {name}={actual!r}; expected one of {expected}.")
-    return actual
-
-
-def _validate_bool_mode(name: str, value: str) -> bool:
-    if value == "true":
-        return True
-    if value == "false":
-        return False
-    raise ValueError(f"Unsupported Phase-1 execution mode {name}={value!r}; expected 'true' or 'false'.")
-
-
-def _validate_phase1_exit_topology(
-    *,
-    target_mode: str,
-    trail_mode: str,
-    trail_activation_mode: str,
-) -> None:
-    if trail_activation_mode not in {"none", "rr"}:
-        raise ValueError(f"Unsupported Phase-1 trailActivation mode: {trail_activation_mode!r}.")
-
-    valid_target_exit = (
-        target_mode == "rr"
-        and trail_mode == "none"
-        and trail_activation_mode == "none"
-    )
-    valid_ma_exit = (
-        target_mode == "none"
-        and trail_mode == "ma"
-        and trail_activation_mode == "rr"
-    )
-    if not (valid_target_exit or valid_ma_exit):
-        raise ValueError(
-            "Phase 1 supports exactly one exit topology: target=rr with no trailing mode "
-            "or target=none with moving-average trailing mode and trailActivation=rr."
-        )
-
-
 def _validate_price_rounding_mode(mode: str, params: Mapping[str, Any]) -> tuple[str, float]:
     if mode == PRICE_ROUNDING_NONE:
         return mode, float("nan")
@@ -125,36 +70,14 @@ def build_kernel_config(
     """Convert a parsed execution profile and params into kernel settings."""
 
     modes = active_mode_values(profile, params)
-    _require_mode(modes, "entryOrder", "market_next_open")
-    _require_mode(modes, "stop", "atr_swing")
-    _require_mode(modes, "sizing", "risk_per_trade")
-
-    margin_mode = modes.get("margin", "off")
-    if margin_mode not in {"off", "report_only"}:
-        raise ValueError(f"Unsupported Phase-1 margin mode: {margin_mode!r}.")
-
-    boundary_mode = modes.get("boundary", "strict_close")
-    if boundary_mode not in {"strict_close", "none"}:
-        raise ValueError(f"Unsupported Phase-1 boundary mode: {boundary_mode!r}.")
-
-    target_mode = modes.get("target", "none")
-    trail_mode = modes.get("trail", "none")
-    if target_mode not in {"rr", "none"}:
-        raise ValueError(f"Unsupported Phase-1 target mode: {target_mode!r}.")
-    if trail_mode not in {"ma", "none"}:
-        raise ValueError(f"Unsupported Phase-1 trail mode: {trail_mode!r}.")
-
-    trail_activation_mode = modes.get("trailActivation", "none")
-    _validate_phase1_exit_topology(
-        target_mode=target_mode,
-        trail_mode=trail_mode,
-        trail_activation_mode=trail_activation_mode,
-    )
-
-    max_days_mode = modes.get("maxDays", "false")
-    max_days_enabled = _validate_bool_mode("maxDays", max_days_mode)
+    mode_state = resolve_position_mode_state(modes)
+    target_mode = mode_state.target_mode
+    trail_mode = mode_state.trail_mode
+    trail_activation_mode = mode_state.trail_activation_mode
+    margin_mode = mode_state.margin_mode
+    boundary_mode = mode_state.boundary_mode
     price_rounding_mode, tick_size = _validate_price_rounding_mode(
-        modes.get("priceRounding", PRICE_ROUNDING_NONE),
+        mode_state.price_rounding_mode,
         params,
     )
     return KernelConfig(
@@ -172,7 +95,7 @@ def build_kernel_config(
         trail_mode=trail_mode,
         trail_activation_mode=trail_activation_mode,
         trail_activation_rr=float(params.get("trailRR", 1.0)),
-        max_days_enabled=max_days_enabled,
+        max_days_enabled=mode_state.max_days_enabled,
         boundary_mode=boundary_mode,
         margin_mode=margin_mode,
         trade_start_idx=trade_start_idx,
@@ -193,26 +116,9 @@ def build_signal_kernel_config(
     """Convert a signal_reversal profile and params into kernel settings."""
 
     modes = active_mode_values(profile, params)
-    _require_signal_mode(modes, "topology", "signal_reversal")
-    _require_signal_mode(modes, "entryOrder", "market_next_open")
-    _require_signal_mode(modes, "sizing", "fixed_pct_equity")
-    _require_signal_mode(modes, "exitOnSignal", "true")
-
-    stop_mode = modes.get("stop", "none")
-    if stop_mode not in {"none", "emergency_pct"}:
-        raise ValueError(
-            f"Unsupported signal_reversal execution mode stop={stop_mode!r}; "
-            "expected 'none' or 'emergency_pct'."
-        )
-    boundary_mode = modes.get("boundary", "strict_close")
-    if boundary_mode not in {"strict_close", "none"}:
-        raise ValueError(f"Unsupported signal_reversal boundary mode: {boundary_mode!r}.")
-    _require_signal_mode(modes, "priceRounding", PRICE_ROUNDING_NONE)
-    _require_signal_absent_or(modes, "target", {"none"})
-    _require_signal_absent_or(modes, "trail", {"none"})
-    _require_signal_absent_or(modes, "trailActivation", {"none"})
-    _require_signal_absent_or(modes, "maxDays", {"false"})
-    _require_signal_absent_or(modes, "margin", {"off"})
+    mode_state = resolve_signal_reversal_mode_state(modes)
+    stop_mode = mode_state.stop_mode
+    boundary_mode = mode_state.boundary_mode
 
     return SignalKernelConfig(
         initial_capital=float(params.get("initialCapital", 100.0)),

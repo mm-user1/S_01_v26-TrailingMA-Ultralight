@@ -275,8 +275,8 @@ def _collapse_config():
                 "mapping": {"false": "with_target", "true": "without_target"},
             },
             "variants": {
-                "with_target": {"target": "rr", "trail": "none"},
-                "without_target": {"target": "none", "trail": "none"},
+                "with_target": {"target": "rr", "trail": "none", "trailActivation": "none"},
+                "without_target": {"target": "none", "trail": "ma", "trailActivation": "rr"},
             },
         },
         "parameters": {
@@ -291,6 +291,10 @@ def _collapse_config():
             "stopX": {"type": "float", "default": 2.0, "role": "execution", "optimize": {"enabled": False}},
             "stopLP": {"type": "int", "default": 2, "role": "execution", "optimize": {"enabled": False}},
             "stopMaxPct": {"type": "float", "default": 10.0, "role": "execution", "optimize": {"enabled": False}},
+            "trailRR": {"type": "float", "default": 1.0, "role": "execution", "optimize": {"enabled": False}},
+            "trailMAType": {"type": "select", "default": "SMA", "role": "execution", "optimize": {"enabled": False}},
+            "trailMALength": {"type": "int", "default": 150, "role": "execution", "optimize": {"enabled": False}},
+            "trailMAOffsetEx": {"type": "float", "default": 0.0, "role": "execution", "optimize": {"enabled": False}},
             "riskPerTrade": {"type": "float", "default": 2.0, "role": "execution", "optimize": {"enabled": False}},
             "contractSize": {"type": "float", "default": 0.01, "role": "execution", "optimize": {"enabled": False}},
             "stopMaxDays": {"type": "int", "default": 4, "role": "execution", "optimize": {"enabled": False}},

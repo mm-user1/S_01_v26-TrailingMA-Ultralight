@@ -4,10 +4,7 @@ from core.engine_v2.profile import parse_execution_profile
 from core.engine_v2.runner import build_kernel_config
 
 
-TOPOLOGY_ERROR = (
-    "Phase 1 supports exactly one exit topology: target=rr with no trailing mode "
-    "or target=none with moving-average trailing mode and trailActivation=rr."
-)
+TOPOLOGY_ERROR = "Position/bracket supports target=rr"
 
 
 def _profile(*, target, trail, trail_activation=None, max_days=True):
@@ -35,6 +32,9 @@ def _profile(*, target, trail, trail_activation=None, max_days=True):
                 "stopMaxPct": {"type": "float", "default": 6.0, "role": "execution", "optimize": {"enabled": False}},
                 "stopRR": {"type": "float", "default": 2.0, "role": "execution", "optimize": {"enabled": False}},
                 "trailRR": {"type": "float", "default": 1.0, "role": "execution", "optimize": {"enabled": False}},
+                "trailMAType": {"type": "select", "default": "SMA", "role": "execution", "optimize": {"enabled": False}},
+                "trailMALength": {"type": "int", "default": 150, "role": "execution", "optimize": {"enabled": False}},
+                "trailMAOffsetEx": {"type": "float", "default": 0.0, "role": "execution", "optimize": {"enabled": False}},
                 "riskPerTrade": {"type": "float", "default": 2.0, "role": "execution", "optimize": {"enabled": False}},
                 "contractSize": {"type": "float", "default": 0.01, "role": "execution", "optimize": {"enabled": False}},
                 "stopMaxDays": {"type": "int", "default": 6, "role": "execution", "optimize": {"enabled": False}},
@@ -75,17 +75,17 @@ def test_valid_trail_topology_builds_kernel_config():
 )
 def test_unsupported_exit_topologies_raise(target, trail, trail_activation):
     with pytest.raises(ValueError, match=TOPOLOGY_ERROR):
-        _build(_profile(target=target, trail=trail, trail_activation=trail_activation))
+        _profile(target=target, trail=trail, trail_activation=trail_activation)
 
 
 def test_unknown_trail_activation_raises():
-    with pytest.raises(ValueError, match="Unsupported Phase-1 trailActivation mode"):
-        _build(_profile(target="none", trail="ma", trail_activation="open"))
+    with pytest.raises(ValueError, match="trailActivation"):
+        _profile(target="none", trail="ma", trail_activation="open")
 
 
 def test_unknown_max_days_mode_raises():
-    with pytest.raises(ValueError, match="Unsupported Phase-1 execution mode maxDays"):
-        _build(_profile(target="rr", trail="none", max_days="sometimes"))
+    with pytest.raises(ValueError, match="maxDays"):
+        _profile(target="rr", trail="none", max_days="sometimes")
 
 
 def test_false_max_days_mode_is_accepted():

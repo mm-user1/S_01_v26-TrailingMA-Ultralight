@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 
 import numpy as np
 import pytest
 
-from core.grid_engine import allocate_ordered_block_budgets, normalize_grid_v2_planning_policy
+from core.engine_v2.runtime_contract import V2_RUNTIME_CONTRACT_VERSION
+from core.grid_engine import (
+    allocate_ordered_block_budgets,
+    normalize_grid_v2_planning_policy,
+    rank_grid_results,
+)
 from core.grid_v2 import (
     GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION,
+    GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION,
     GridV2PlanReuseCache,
     GridV2Settings,
     _can_use_table_config_packer,
@@ -25,7 +32,10 @@ from core.grid_v2_sampling import (
     stable_fisher_yates,
     stable_randbelow,
 )
+from core.optuna_engine import OptimizationResult
+from strategies import get_strategy_config
 from strategies.s06_r_trend_v02_b2.strategy import load_config
+from runtime_test_helpers import canonical_v2_runtime_declarations
 
 
 def _small_config() -> dict:
@@ -45,6 +55,7 @@ def _small_config() -> dict:
             "priceRounding": "none",
         },
         "parameters": {
+            **canonical_v2_runtime_declarations(),
             "signalA": {
                 "type": "int",
                 "default": 0,
@@ -58,10 +69,10 @@ def _small_config() -> dict:
                 "role": "signal",
                 "optimize": {"enabled": True},
             },
-            "dateFilter": {"type": "bool", "default": False, "role": "runtime"},
-            "start": {"type": "select", "default": "", "options": [""], "role": "runtime"},
-            "end": {"type": "select", "default": "", "options": [""], "role": "runtime"},
             "stopX": {"type": "float", "default": 2.0, "role": "execution"},
+            "stopLP": {"type": "int", "default": 2, "role": "execution"},
+            "stopMaxPct": {"type": "float", "default": 6.0, "role": "execution"},
+            "stopRR": {"type": "float", "default": 2.0, "role": "execution"},
             "riskPerTrade": {"type": "float", "default": 2.0, "role": "execution"},
             "contractSize": {"type": "float", "default": 0.01, "role": "execution"},
             "tickSize": {"type": "float", "default": 0.01, "role": "execution"},
@@ -177,6 +188,8 @@ def test_sampled_semantic_keys_are_unchanged_and_saturated_budget_uses_exact_ful
         assert planning["effective_min_quota"] is None
         assert planning["effective_manual_percents"] == {}
         assert planning["plan_identity_schema_version"] == GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION
+        assert planning["semantic_identity_schema_version"] == GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION
+        assert planning["runtime_contract_version"] == V2_RUNTIME_CONTRACT_VERSION
     assert preview_grid_v2_counts(config).effective_allocation_method == "full_enumeration_v2"
     assert (
         preview_grid_v2_counts(config, _sampled_settings(budget=30, seed=999)).effective_allocation_method
@@ -192,6 +205,116 @@ def test_preview_reports_full_requested_planned_and_coverage_without_building_po
     assert preview.coverage_pct == pytest.approx(11 / 30 * 100.0)
     assert preview.per_block_counts["default"]["planned_count"] == 11
     assert preview.effective_allocation_method == "proportional_space"
+    assert preview.plan_identity_schema_version == "grid_v2_plan_identity_v3"
+    assert preview.semantic_identity_schema_version == "grid_v2_semantic_identity_v2"
+    assert preview.runtime_contract_version == "v2_runtime_contract_v1"
+
+
+def test_runtime_values_are_not_domains_and_do_not_change_candidate_identity_rows():
+    config = _small_config()
+    settings = _sampled_settings()
+    first = build_grid_v2_plan(
+        config,
+        settings,
+        base_params={
+            "dateFilter": True,
+            "start": "2025-01-01T00:00:00Z",
+            "end": "2025-02-01T00:00:00Z",
+            "warmupBars": 100,
+        },
+    )
+    second = build_grid_v2_plan(
+        config,
+        settings,
+        base_params={
+            "dateFilter": False,
+            "start": "2025-03-01T00:00:00Z",
+            "end": "2025-04-01T00:00:00Z",
+            "warmupBars": 5000,
+        },
+    )
+
+    assert set(first.parameter_domains).isdisjoint(
+        {"dateFilter", "start", "end", "warmupBars"}
+    )
+    assert first.candidate_table.axis_value_codes.tolist() == second.candidate_table.axis_value_codes.tolist()
+    assert first.candidate_table.semantic_keys_by_row == second.candidate_table.semantic_keys_by_row
+    assert first.plan_fingerprint == second.plan_fingerprint
+    for key in first.candidate_table.semantic_keys_by_row or ():
+        assert set(json.loads(key)["params"]).isdisjoint(
+            {"dateFilter", "start", "end", "warmupBars"}
+        )
+
+
+@pytest.mark.parametrize(
+    ("strategy_id", "settings", "base_params", "inactive_name"),
+    [
+        (
+            "s06_r_trend_v02_b2",
+            GridV2Settings(enabled_variants=("trail",), enabled_axes=("stopRR",)),
+            {},
+            "stopRR",
+        ),
+        (
+            "s03_reversal_v11_regime_er_b2",
+            GridV2Settings(enabled_axes=("emergencySlPct",)),
+            {"useEmergencySL": False},
+            "emergencySlPct",
+        ),
+    ],
+)
+def test_bound_selected_run_inactive_axes_warn_without_multiplying_candidates(
+    strategy_id, settings, base_params, inactive_name
+):
+    config = get_strategy_config(strategy_id)
+    preview = preview_grid_v2_counts(config, settings, base_params)
+    plan = build_grid_v2_plan(config, settings, base_params)
+    warnings = [
+        diagnostic
+        for diagnostic in preview.diagnostics
+        if diagnostic["code"] == "V2_INACTIVE_ENABLED_AXIS"
+    ]
+
+    assert preview.planned_candidate_count == plan.planned_candidate_count == 1
+    assert [item["path"] for item in warnings] == [f"parameters.{inactive_name}"]
+    assert preview.diagnostics == plan.metadata["planning"]["diagnostics"]
+    assert inactive_name not in json.loads(plan.candidate_table.semantic_key_for_index(0))["params"]
+
+
+@pytest.mark.parametrize(
+    ("modes", "match"),
+    [
+        (("stale",), "unknown"),
+        (("trail", " trail "), "duplicate normalized"),
+        ((), "at least one"),
+    ],
+)
+def test_user_facing_grid_modes_fail_closed_before_planning(modes, match):
+    with pytest.raises(ValueError, match=match):
+        build_grid_v2_plan(load_config(), GridV2Settings(enabled_variants=modes))
+
+
+def test_reserved_runtime_fields_cannot_be_grid_axes_or_option_subsets():
+    with pytest.raises(ValueError, match="runtime"):
+        build_grid_v2_plan(
+            _small_config(), GridV2Settings(enabled_axes=("warmupBars",))
+        )
+    with pytest.raises(ValueError, match="runtime.*option"):
+        build_grid_v2_plan(
+            _small_config(), base_params={"start_options": ["2025-01-01"]}
+        )
+
+
+def test_preview_and_plan_report_the_same_normalized_variant_and_block_order():
+    settings = GridV2Settings(enabled_variants=("trail", "bracket"))
+    preview = preview_grid_v2_counts(load_config(), settings)
+    plan = build_grid_v2_plan(load_config(), settings)
+
+    # Profile declaration order remains authoritative after validation.
+    assert list(preview.per_variant_counts) == plan.metadata["grid_mode_order"] == [
+        "bracket", "trail"
+    ]
+    assert preview.mode_labels == plan.metadata["grid_mode_labels"]
 
 
 def test_streaming_fingerprint_matches_small_canonical_reference_without_sequence_copy():
@@ -336,11 +459,66 @@ def test_sampled_planning_scales_with_delivered_population_not_full_space():
     assert diagnostics["delivered_count"] == 50_000
 
 
-def test_full_s06_population_order_and_semantic_digest_are_byte_compatible():
+def test_full_s06_population_order_and_semantic_identity_v2_digest_are_pinned():
     plan = build_grid_v2_plan(load_config())
     assert plan.deduped_candidate_count == 48_480
     assert plan.per_variant_counts == {"bracket": 480, "trail": 48_000}
-    assert _semantic_digest(plan) == "f1aa8bba4099d07f4d0d2865a72bf6537767329f3fdd9b324f07986b8b8369e4"
+    # Historical semantic_identity_v1 digest before warmupBars left identity:
+    # f1aa8bba4099d07f4d0d2865a72bf6537767329f3fdd9b324f07986b8b8369e4
+    assert GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION == "grid_v2_semantic_identity_v2"
+    assert _semantic_digest(plan) == "fc55d174e835e7196ae5fcf21427d318dc364241f6b10560aa32545e6910a08f"
+
+
+def test_semantic_identity_migration_preserves_tied_metric_rank_order():
+    plan = build_grid_v2_plan(load_config(), _sampled_settings())
+
+    def result(candidate_id, semantic_key):
+        item = OptimizationResult(
+            params={},
+            net_profit_pct=1.0,
+            max_drawdown_pct=1.0,
+            total_trades=1,
+            winning_trades=1,
+            losing_trades=0,
+            win_rate=100.0,
+            avg_win=1.0,
+            avg_loss=0.0,
+            gross_profit=1.0,
+            gross_loss=0.0,
+            max_consecutive_losses=0,
+            optuna_trial_number=candidate_id,
+        )
+        item.candidate_id = candidate_id
+        item.semantic_key = semantic_key
+        return item
+
+    current_results = []
+    historical_results = []
+    for index, current_key in enumerate(plan.candidate_table.semantic_keys_by_row or (), 1):
+        payload = json.loads(current_key)
+        payload.pop("semantic_identity_schema_version")
+        payload["params"]["warmupBars"] = 1000
+        historical_key = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        current_results.append(result(index, current_key))
+        historical_results.append(result(index, historical_key))
+
+    current = rank_grid_results(
+        current_results,
+        objectives=["net_profit_pct"],
+        primary_objective=None,
+        constraints=[],
+    )
+    historical = rank_grid_results(
+        historical_results,
+        objectives=["net_profit_pct"],
+        primary_objective=None,
+        constraints=[],
+    )
+
+    assert [item.candidate_id for item in current] == [
+        item.candidate_id for item in historical
+    ]
+    assert [item.grid_rank for item in current] == list(range(1, 12))
 
 
 def test_sampled_plan_reuse_rebases_runtime_and_invalidates_seed_and_budget():

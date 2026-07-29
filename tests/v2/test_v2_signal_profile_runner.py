@@ -6,7 +6,7 @@ import pytest
 from core.engine_v2.contracts import Signals
 from core.engine_v2.dataprep import build_signal_execution_data
 from core.engine_v2.profile import active_mode_values, active_parameter_names, parse_execution_profile
-from core.engine_v2.runner import build_signal_kernel_config, run_v2_strategy
+from core.engine_v2.runner import run_v2_strategy
 
 from s03_like_test_helpers import fixture_config, normalized_params, synthetic_ohlc
 
@@ -60,21 +60,13 @@ def test_signal_reversal_profile_variants_control_active_emergency_params():
     ],
 )
 def test_signal_reversal_rejects_unsupported_mode_combinations(field, value, message):
-    profile = _profile_from_execution_mutation(**{field: value})
-
     with pytest.raises(ValueError, match=message):
-        build_signal_kernel_config(profile=profile, params=profile.parameter_defaults)
+        _profile_from_execution_mutation(**{field: value})
 
 
-def test_unknown_topology_fails_in_runner_without_reaching_s06_path():
-    profile = _profile_from_execution_mutation(topology="unknown")
-
+def test_unknown_topology_fails_during_profile_validation():
     with pytest.raises(ValueError, match="Unsupported V2 execution topology"):
-        run_v2_strategy(
-            data=_minimal_data(),
-            profile=profile,
-            params=profile.parameter_defaults,
-        )
+        _profile_from_execution_mutation(topology="unknown")
 
 
 @pytest.mark.parametrize(
@@ -112,12 +104,15 @@ def test_s06_profile_modes_stay_without_topology():
     config["execution"]["stop"] = "atr_swing"
     config["execution"]["sizing"] = "risk_per_trade"
     config["execution"]["target"] = "rr"
+    config["execution"]["trail"] = "none"
+    config["execution"]["trailActivation"] = "none"
     config["execution"]["margin"] = "off"
     config["execution"]["maxDays"] = False
     config["execution"].pop("exitOnSignal")
     config["execution"].pop("variantSelector")
     config["execution"].pop("variants")
     parameters = copy.deepcopy(config["parameters"])
+    parameters["emergencySlPct"]["optimize"]["enabled"] = False
     parameters.update(
         {
             "stopX": {"type": "float", "default": 2.0, "role": "execution", "optimize": {"enabled": False}},

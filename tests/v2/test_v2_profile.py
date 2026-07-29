@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from core.engine_v2.diagnostics import V2Diagnostic, V2ValidationError
 from core.engine_v2.profile import (
     ProfileValidationError,
     active_mode_values,
@@ -18,6 +19,29 @@ from core.engine_v2.profile import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_structured_diagnostic_shape_and_error_payload_are_stable():
+    diagnostic = V2Diagnostic(
+        severity="error",
+        code="V2_TEST_DIAGNOSTIC",
+        strategy_id="fixture",
+        path="execution.stop",
+        variant="bracket",
+        message="fixture diagnostic",
+    )
+
+    assert list(diagnostic.to_dict()) == [
+        "severity",
+        "code",
+        "strategy_id",
+        "path",
+        "variant",
+        "message",
+    ]
+    assert V2ValidationError(diagnostic).to_dict() == {
+        "diagnostics": [diagnostic.to_dict()]
+    }
 
 
 def _param(role, default, *, optimize=True, depends_on=None):
@@ -46,8 +70,8 @@ def _variant_config():
                 "mapping": {False: "mode_a", True: "mode_b"},
             },
             "variants": {
-                "mode_a": {"target": "rr", "trail": "none"},
-                "mode_b": {"target": "none", "trail": "ma"},
+                "mode_a": {"target": "rr", "trail": "none", "trailActivation": "none"},
+                "mode_b": {"target": "none", "trail": "ma", "trailActivation": "rr"},
             },
         },
         "parameters": {
@@ -64,7 +88,7 @@ def _variant_config():
             "riskPerTrade": _param("execution", 2.0),
             "contractSize": _param("execution", 0.01),
             "stopMaxDays": _param("execution", 6),
-            "unboundExec": _param("execution", 1.0),
+            "unboundExec": _param("execution", 1.0, optimize=False),
             "runtimeOnly": _param("runtime", "2025-01-01", optimize=False),
         },
     }
@@ -74,10 +98,22 @@ def test_no_variants_creates_implicit_default_variant():
     config = {
         "id": "implicit_variant_fixture",
         "engine": "v2",
-        "execution": {"entryOrder": "market_next_open", "target": "rr"},
+        "execution": {
+            "entryOrder": "market_next_open",
+            "stop": "atr_swing",
+            "target": "rr",
+            "trail": "none",
+            "trailActivation": "none",
+            "sizing": "risk_per_trade",
+        },
         "parameters": {
             "signalLen": _param("signal", 5),
+            "stopX": _param("execution", 2.0),
+            "stopLP": _param("execution", 2),
+            "stopMaxPct": _param("execution", 6.0),
             "stopRR": _param("execution", 2.0),
+            "riskPerTrade": _param("execution", 2.0),
+            "contractSize": _param("execution", 0.01),
         },
     }
 
@@ -85,7 +121,10 @@ def test_no_variants_creates_implicit_default_variant():
 
     assert list(profile.variants) == ["default"]
     assert active_mode_values(profile, {})["target"] == "rr"
-    assert active_parameter_names(profile, {}) == {"signalLen", "stopRR"}
+    assert active_parameter_names(profile, {}) == {
+        "signalLen", "stopX", "stopLP", "stopMaxPct", "stopRR",
+        "riskPerTrade", "contractSize",
+    }
 
 
 def test_variant_selector_resolves_bool_mapping_keys_and_arbitrary_names():
@@ -109,7 +148,10 @@ def test_numeric_mapping_keys_are_canonicalized():
         "param": "selector",
         "mapping": {1.0: "mode_a", 2: "mode_b"},
     }
-    config["parameters"]["selector"] = _param("execution", 1.0)
+    config["parameters"]["selector"] = {
+        "type": "select", "default": 1.0, "options": [1.0, 2],
+        "role": "execution", "optimize": {"enabled": True},
+    }
     profile = parse_execution_profile(config)
 
     assert profile.variant_selector.mapping == {"1": "mode_a", "2": "mode_b"}
@@ -122,7 +164,10 @@ def test_json_round_trip_numeric_mapping_keys_are_canonicalized():
         "param": "selector",
         "mapping": {"1.0": "mode_a", "0.10": "mode_b"},
     }
-    config["parameters"]["selector"] = _param("execution", 1.0)
+    config["parameters"]["selector"] = {
+        "type": "select", "default": 1.0, "options": [1.0, 0.1],
+        "role": "execution", "optimize": {"enabled": True},
+    }
     loaded = json.loads(json.dumps(config))
 
     profile = parse_execution_profile(loaded)
@@ -180,10 +225,10 @@ def test_binding_table_exposes_expected_phase_1_modes():
     assert mode_binding_for("trail", "none").consumes_params == ()
 
 
-def test_unbound_execution_params_are_active_with_warning():
+def test_fixed_unbound_execution_param_warns_and_is_not_active():
     profile = parse_execution_profile(_variant_config())
 
-    assert "unboundExec" in active_parameter_names(profile, {"selector": False})
+    assert "unboundExec" not in active_parameter_names(profile, {"selector": False})
     assert any("unboundExec" in warning for warning in profile.validation_warnings)
 
 
@@ -213,7 +258,7 @@ def test_selector_param_typo_fails_at_parse_time():
         parse_execution_profile(config)
 
 
-def test_active_params_do_not_include_undeclared_binding_names_without_roles():
+def test_undeclared_consumed_binding_parameter_fails_at_parse_time():
     config = {
         "id": "no_role_fixture",
         "engine": "v2",
@@ -232,26 +277,37 @@ def test_active_params_do_not_include_undeclared_binding_names_without_roles():
         },
     }
 
-    profile = parse_execution_profile(config)
-
-    assert active_parameter_names(profile, {}) == {"selector"}
-    assert "stopRR" not in active_parameter_names(profile, {})
-    assert "trailMAType" not in active_parameter_names(profile, {"selector": True})
+    with pytest.raises(ProfileValidationError, match="must be a non-runtime bool/select execution parameter"):
+        parse_execution_profile(config)
 
 
 def test_bound_roleless_declared_param_is_active_when_consumed():
     config = {
         "id": "roleless_bound_fixture",
         "engine": "v2",
-        "execution": {"target": "rr"},
+        "execution": {
+            "entryOrder": "market_next_open",
+            "stop": "atr_swing",
+            "target": "rr",
+            "trail": "none",
+            "trailActivation": "none",
+            "sizing": "risk_per_trade",
+        },
         "parameters": {
+            "stopX": {"type": "float", "default": 2.0, "optimize": {"enabled": False}},
+            "stopLP": {"type": "int", "default": 2, "optimize": {"enabled": False}},
+            "stopMaxPct": {"type": "float", "default": 6.0, "optimize": {"enabled": False}},
             "stopRR": {"type": "float", "default": 2.0, "optimize": {"enabled": False}},
+            "riskPerTrade": {"type": "float", "default": 2.0, "optimize": {"enabled": False}},
+            "contractSize": {"type": "float", "default": 0.01, "optimize": {"enabled": False}},
         },
     }
 
     profile = parse_execution_profile(config)
 
-    assert active_parameter_names(profile, {}) == {"stopRR"}
+    assert active_parameter_names(profile, {}) == {
+        "stopX", "stopLP", "stopMaxPct", "stopRR", "riskPerTrade", "contractSize"
+    }
     assert inactive_parameter_names(profile, {}) == set()
 
 
@@ -294,3 +350,146 @@ def test_core_profile_modules_do_not_contain_strategy_specific_branches():
         text = path.read_text(encoding="utf-8")
         for token in forbidden:
             assert token not in text
+
+
+def test_all_production_profiles_validate_and_topology_wide_consumers_do_not_warn():
+    strategy_ids = (
+        "s06_r_trend_v02_b2",
+        "s06_r_trend_v02_regime_trendlines_b2",
+        "s03_reversal_v11_regime_er_b2",
+    )
+    for strategy_id in strategy_ids:
+        with (REPO_ROOT / "src" / "strategies" / strategy_id / "config.json").open(
+            encoding="utf-8"
+        ) as handle:
+            profile = parse_execution_profile(json.load(handle))
+        warning_text = " ".join(profile.validation_warnings)
+        for name in ("initialCapital", "commissionPct", "enableLong", "enableShort"):
+            assert name not in warning_text
+
+
+def test_truly_unbound_optimized_execution_parameter_is_fatal():
+    config = _variant_config()
+    config["parameters"]["unboundExec"]["optimize"]["enabled"] = True
+
+    with pytest.raises(ProfileValidationError) as exc_info:
+        parse_execution_profile(config)
+
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic.code == "V2_UNBOUND_OPTIMIZED_EXECUTION_PARAM"
+    assert diagnostic.path == "parameters.unboundExec"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "match"),
+    [
+        (lambda config: config["execution"].update(unknownMode="x"), "unknown"),
+        (lambda config: config["execution"].update(margin="simulate"), "margin"),
+        (
+            lambda config: config["execution"]["variants"]["mode_a"].update(
+                trail="ma", trailActivation="rr"
+            ),
+            "target=rr",
+        ),
+        (
+            lambda config: config["execution"]["variants"]["mode_b"].update(
+                trailActivation="none"
+            ),
+            "trailActivation",
+        ),
+        (
+            lambda config: config["execution"]["variants"]["mode_a"].update(
+                trailActivation="rr"
+            ),
+            "target=rr",
+        ),
+        (lambda config: config["execution"].pop("stop"), "stop"),
+    ],
+)
+def test_position_mode_contract_fails_at_profile_parse(mutate, match):
+    config = _variant_config()
+    mutate(config)
+    with pytest.raises(ProfileValidationError, match=match):
+        parse_execution_profile(config)
+
+
+def test_signal_reversal_positive_and_incompatible_combination():
+    path = REPO_ROOT / "src" / "strategies" / "s03_reversal_v11_regime_er_b2" / "config.json"
+    with path.open(encoding="utf-8") as handle:
+        config = json.load(handle)
+    assert set(parse_execution_profile(config).variants) == {"plain", "emergency"}
+    config["execution"]["target"] = "rr"
+    with pytest.raises(ProfileValidationError, match="signal_reversal.*target"):
+        parse_execution_profile(config)
+
+
+def test_declared_mode_consumer_is_required():
+    config = _variant_config()
+    del config["parameters"]["stopLP"]
+    with pytest.raises(ProfileValidationError) as exc_info:
+        parse_execution_profile(config)
+    assert exc_info.value.diagnostics[0].code == "V2_UNDECLARED_CONSUMED_PARAMETER"
+    assert "stopLP" in str(exc_info.value)
+
+
+def test_selector_rejects_unreachable_duplicate_normalized_and_reserved_forms():
+    unreachable = _variant_config()
+    unreachable["execution"]["variantSelector"]["mapping"] = {False: "mode_a"}
+    with pytest.raises(ProfileValidationError, match="cannot reach"):
+        parse_execution_profile(unreachable)
+
+    duplicate = _variant_config()
+    duplicate["parameters"]["selector"].update(type="select", options=[1, 2], default=1)
+    duplicate["execution"]["variantSelector"]["mapping"] = {1: "mode_a", "1.0": "mode_b"}
+    with pytest.raises(ProfileValidationError, match="duplicate normalized key"):
+        parse_execution_profile(duplicate)
+
+    reserved = _variant_config()
+    reserved["parameters"].update({"dateFilter": {
+        "type": "bool", "default": True, "role": "runtime", "optimize": {"enabled": False}
+    }})
+    reserved["execution"]["variantSelector"]["param"] = "dateFilter"
+    with pytest.raises(ProfileValidationError, match="incompatible|runtime"):
+        parse_execution_profile(reserved)
+
+
+@pytest.mark.parametrize("kind", ["unknown", "non_boolean", "self", "duplicate", "runtime"])
+def test_dependency_contract_rejects_unsafe_shapes(kind):
+    config = _variant_config()
+    if kind == "unknown":
+        config["parameters"]["trailRR"]["depends_on"] = "missing"
+    elif kind == "non_boolean":
+        config["parameters"]["trailRR"]["depends_on"] = "stopX"
+    elif kind == "self":
+        config["parameters"]["trailRR"]["depends_on"] = "trailRR"
+    elif kind == "duplicate":
+        config["parameters"]["trailRR"]["depends_on"] = ["selector", "selector"]
+    else:
+        config["parameters"]["runtimeOnly"]["depends_on"] = "selector"
+    with pytest.raises(ProfileValidationError) as exc_info:
+        parse_execution_profile(config)
+    assert exc_info.value.diagnostics[0].code in {
+        "V2_INVALID_DEPENDENCY", "V2_INCOMPATIBLE_RUNTIME_DECLARATION"
+    }
+
+
+def test_dependency_contract_rejects_cycles_and_roleless_parents():
+    cycle = _variant_config()
+    cycle["parameters"].update(
+        {
+            "a": {"type": "bool", "default": True, "role": "execution", "depends_on": "b"},
+            "b": {"type": "bool", "default": True, "role": "execution", "depends_on": "a"},
+        }
+    )
+    with pytest.raises(ProfileValidationError, match="cycle"):
+        parse_execution_profile(cycle)
+
+    roleless = _variant_config()
+    roleless["parameters"].update(
+        {
+            "parent": {"type": "bool", "default": True},
+            "child": {"type": "bool", "default": True, "role": "signal", "depends_on": "parent"},
+        }
+    )
+    with pytest.raises(ProfileValidationError, match="must declare a role"):
+        parse_execution_profile(roleless)

@@ -27,6 +27,7 @@ from .contracts import (
     VariantSelector,
     VariantSpec,
 )
+from .diagnostics import V2Diagnostic, V2ValidationError
 from .kernel import ExecutionData, KernelConfig, KernelResult, intrabar_path, run_reference_kernel
 from .metrics_kernel import CoreMetrics, compute_core_metrics_from_balance_and_trades
 from .price_rounding import (
@@ -41,6 +42,14 @@ from .price_rounding import (
     validate_tick_size,
 )
 from .runner import V2RunResult, build_kernel_config, run_v2_strategy
+from .runtime_contract import (
+    V2_REBASABLE_DATE_PARAM_NAMES,
+    V2_RESERVED_RUNTIME_PARAM_NAMES,
+    V2_RUNTIME_CONTRACT_VERSION,
+    normalize_v2_runtime_values,
+    runtime_contract_payload,
+    validate_v2_runtime_declarations,
+)
 
 __all__ = [
     "EXECUTION_REASON_BOUNDARY_STATE",
@@ -73,11 +82,17 @@ __all__ = [
     "Signals",
     "StandingState",
     "V2RunResult",
+    "V2Diagnostic",
+    "V2ValidationError",
+    "V2_REBASABLE_DATE_PARAM_NAMES",
+    "V2_RESERVED_RUNTIME_PARAM_NAMES",
+    "V2_RUNTIME_CONTRACT_VERSION",
     "VariantSelector",
     "VariantSpec",
     "build_kernel_config",
     "compute_core_metrics_from_balance_and_trades",
     "intrabar_path",
+    "normalize_v2_runtime_values",
     "round_level_outward",
     "round_stop_level",
     "round_target_level",
@@ -86,5 +101,7 @@ __all__ = [
     "round_trail_level",
     "run_reference_kernel",
     "run_v2_strategy",
+    "runtime_contract_payload",
+    "validate_v2_runtime_declarations",
     "validate_tick_size",
 ]

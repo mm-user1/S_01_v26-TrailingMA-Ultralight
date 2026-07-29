@@ -13,6 +13,8 @@ from typing import Any, Mapping, Optional
 
 import numpy as np
 
+from .diagnostics import V2Diagnostic
+
 
 GUARDRAIL_FLAG_CORRECTED_FILL = 1
 GUARDRAIL_FLAG_REJECTED_FILL = 2
@@ -132,6 +134,7 @@ class ExecutionProfile:
     parameter_roles: Mapping[str, str] = field(default_factory=dict)
     variant_independent_params: tuple[str, ...] = ()
     validation_warnings: tuple[str, ...] = ()
+    diagnostics: tuple[V2Diagnostic, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -87,8 +87,21 @@ runtime
 ```
 
 Use `signal` for params that change signal/dataprep cache contents, `execution`
-for params consumed by the profile, and `runtime` for run-window controls. Avoid
-cross-role `depends_on`; V2 rejects it because it creates ambiguous cache keys.
+for params consumed by the profile, and `runtime` only for the core-owned
+runtime fields below. Avoid cross-role `depends_on`; V2 rejects it because it
+creates ambiguous cache keys.
+
+The `v2_runtime_contract_v1` field order is exactly `dateFilter`, `start`,
+`end`, `warmupBars`. Runtime declarations are optional for legacy V2 configs,
+but, when present, must match the core contract: strict booleans for
+`dateFilter`, normalized date strings for `start`/`end`, and an integer
+`warmupBars`. Production strategy declarations constrain `warmupBars` to
+100..5000; core/internal callers may use non-negative values. A missing
+`dateFilter` retains the legacy `false` default. These fields must not be
+optimized, selected through `{param}_options`, used as variant selectors, or
+placed in dependencies. They are excluded from candidate domains and both
+semantic and plan identity. WFA rebases only `dateFilter`, `start`, and `end`;
+`warmupBars` remains the run's configured runtime value.
 
 Declare `execution` with:
 
@@ -122,6 +135,18 @@ boolean parent is false, dependent child axes are inactive, do not multiply
 candidate counts, and are omitted from semantic identity/cache keys. Inactive
 children are passed to execution at their fixed/default value. Cross-role
 dependencies remain invalid.
+
+Profiles are validated when parsed, before reference execution or compiled
+packing. Every declared execution mode and variant-selector mapping must be a
+certified combination, every mode-consumed parameter must be declared as an
+execution parameter, and dependencies must be same-role boolean relationships.
+An optimized execution parameter with no consumer in any supported variant is
+fatal (`V2_UNBOUND_OPTIMIZED_EXECUTION_PARAM`). A fixed unbound execution
+parameter is allowed but reported as `V2_UNBOUND_FIXED_EXECUTION_PARAM` and is
+excluded from semantic identity. Enabling a child axis that is inactive for the
+selected run reports `V2_INACTIVE_ENABLED_AXIS`; it does not alter candidate
+count or identity. Diagnostics have stable fields `severity`, `code`,
+`strategy_id`, `path`, `variant`, and `message`.
 
 Use `optimization_rules.bool_groups` for small declarative logical mode groups.
 The supported production shape is a two-parameter `at_least_one_true` group with
@@ -321,23 +346,28 @@ still rerun through the public reference runner. Sampled execution currently
 uses mapping config packing; the structurally certified table packer remains
 the full-plan fast path.
 
-Plan fingerprints use identity schema `grid_v2_plan_identity_v2`. The identity
-includes normalized execution modes, so mode changes invalidate WFA plan reuse
-even when other planning inputs are unchanged. Ordered semantic keys are hashed
-incrementally; do not reintroduce an aggregate JSON payload or copied key list.
+Current plan fingerprints use identity schema `grid_v2_plan_identity_v3`;
+candidate semantic identity uses `grid_v2_semantic_identity_v2`, and plans also
+publish `v2_runtime_contract_v1`. Identity includes normalized execution modes,
+so mode changes invalidate WFA plan reuse even when other planning inputs are
+unchanged. Reserved runtime values are excluded. Ordered semantic keys are
+hashed incrementally; do not reintroduce an aggregate JSON payload or copied
+key list.
 
 Candidate rows have both `variant_name` and `grid_mode_name`. For user-facing
 variant strategies such as S06 B2, both are normally the same values
 (`bracket`/`trail`). For internal-variant strategies such as S03 Regime-ER B2,
 `variant_name` stores the resolved execution variant (`plain`/`emergency`) and
 `grid_mode_name` stores the user-facing logical mode
-(`cc_only`/`tbands_only`/`both`). Diversity grouping for internal variants uses
-`grid_mode_name`.
+(`cc_only`/`tbands_only`/`both`). Diversity grouping uses `variant_name` for
+user-facing variants and `grid_mode_name` for internal-variant strategies, so
+the grouping field matches the modes exposed to the user.
 
 WFA Grid V2 plan reuse is also core-owned. Strategy authors do not add a
-Phase 2.6.4 hook or cache object. Keep `start`, `end`, and `dateFilter`
-declared and treated as runtime-only date-filter params so the WFA engine can
-reuse candidate identity while rebasing those values per window.
+Phase 2.6.4 hook or cache object. Treat `start`, `end`, and `dateFilter` as the
+runtime-only date-filter fields so the WFA engine can reuse candidate identity
+while rebasing those values per window. `warmupBars` is runtime-only too, but is
+not a rebase field.
 
 `grid_v2_max_cache_mb` overrides the signal/dataprep cache estimate limit. The
 default is `512`; custom values must be finite positive numbers. In the normal

@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from core.engine_v2.contracts import ExecutionProfile, GuardrailSummary, VariantSpec
+from core.engine_v2.diagnostics import V2Diagnostic
 from core.engine_v2.kernel import ExecutionData
 from core.engine_v2.compiled_kernel import (
     COMPILED_BATCH_KIND,
@@ -73,6 +74,11 @@ from core.engine_v2.profile import (
     parse_execution_profile,
 )
 from core.engine_v2.runner import V2RunResult, run_v2_strategy
+from core.engine_v2.runtime_contract import (
+    V2_REBASABLE_DATE_PARAM_NAMES,
+    V2_RESERVED_RUNTIME_PARAM_NAMES,
+    V2_RUNTIME_CONTRACT_VERSION,
+)
 from core.grid_v2_sampling import (
     GRID_V2_ALLOCATOR_VERSION,
     GRID_V2_PLANNING_POLICY_VERSION,
@@ -83,13 +89,15 @@ from core.grid_v2_sampling import (
 
 
 GRID_V2_ENGINE_VERSION = "grid_v2_phase2_5"
-GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION = "grid_v2_plan_identity_v2"
+GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION = "grid_v2_plan_identity_v3"
+GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION = "grid_v2_semantic_identity_v2"
 REFERENCE_BATCH_KIND = "reference"
 _BOOL_SIGNAL_ARRAYS = 2
 _SIGNAL_TOPOLOGY_BOOL_SIGNAL_ARRAYS = 4
 _FLOAT_DATAPREP_ARRAYS = 5
 _BYTES_PER_MB = 1024.0 * 1024.0
-_PLAN_REUSE_RUNTIME_PARAM_NAMES = frozenset({"start", "end", "dateFilter"})
+_PLAN_REUSE_RUNTIME_PARAM_NAMES = V2_REBASABLE_DATE_PARAM_NAMES
+_PLAN_IDENTITY_RUNTIME_PARAM_NAMES = frozenset(V2_RESERVED_RUNTIME_PARAM_NAMES)
 _KERNEL_CONFIG_PARAM_NAMES = (
     "initialCapital",
     "commissionPct",
@@ -568,9 +576,13 @@ class GridV2CountPreview:
     per_block_counts: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     effective_allocation_method: str = "full_enumeration_v2"
     plan_identity_schema_version: str = GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION
+    semantic_identity_schema_version: str = GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION
+    runtime_contract_version: str = V2_RUNTIME_CONTRACT_VERSION
     planning_policy_version: str = GRID_V2_PLANNING_POLICY_VERSION
     sampler_version: str | None = None
     allocator_version: str = GRID_V2_ALLOCATOR_VERSION
+    diagnostics: tuple[Mapping[str, Any], ...] = ()
+    validation_warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -874,6 +886,11 @@ def build_grid_v2_plan(
         if settings.include_inactive_axes_for_dedup
         else prelude.raw_candidate_count
     )
+    diagnostics = _planning_diagnostics(prelude)
+    diagnostic_payloads = tuple(item.to_dict() for item in diagnostics)
+    validation_warnings = tuple(
+        item.message for item in diagnostics if item.severity == "warning"
+    )
 
     per_block_counts = {
         block.name: {
@@ -920,8 +937,12 @@ def build_grid_v2_plan(
         "grid_mode_labels": dict(candidate_table.grid_mode_labels),
         "resolved_internal_variants": dict(candidate_table.variant_name_by_grid_mode),
         "semantic_dedup_count": candidate_table.semantic_dedup_count,
+        "diagnostics": diagnostic_payloads,
+        "validation_warnings": validation_warnings,
         "planning": {
             "plan_identity_schema_version": GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION,
+            "semantic_identity_schema_version": GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION,
+            "runtime_contract_version": V2_RUNTIME_CONTRACT_VERSION,
             "planning_policy_version": GRID_V2_PLANNING_POLICY_VERSION,
             "sampler_version": (
                 GRID_V2_SAMPLER_VERSION if prelude.planning.effective_policy == "sampled" else None
@@ -948,6 +969,8 @@ def build_grid_v2_plan(
             "sampling_diagnostics": sampling_diagnostics,
             "plan_fingerprint": plan_fingerprint,
             "identity": planning_identity,
+            "diagnostics": diagnostic_payloads,
+            "validation_warnings": validation_warnings,
         },
         "candidate_table": {
             "enabled": True,
@@ -991,6 +1014,16 @@ def _grid_v2_plan_prelude(
 ) -> _GridV2PlanPrelude:
     from core.grid_engine import normalize_grid_v2_planning_policy, parse_grid_budget
 
+    supplied = base_params or {}
+    reserved_option_names = {
+        f"{name}_options" for name in V2_RESERVED_RUNTIME_PARAM_NAMES
+    }
+    invalid_runtime_options = sorted(reserved_option_names & set(supplied))
+    if invalid_runtime_options:
+        raise ValueError(
+            "Grid V2 reserved runtime fields cannot be supplied as option subsets: "
+            f"{invalid_runtime_options}."
+        )
     manual_values: dict[str, float] = {}
     for raw_name, raw_percent in settings.manual_percents:
         name = str(raw_name).strip()
@@ -1040,7 +1073,10 @@ def _grid_v2_plan_prelude_from_parts(
     selector_values: Mapping[str, Any],
     selected_variants: Sequence[str],
 ) -> _GridV2PlanPrelude:
-    axis_names = tuple(name for name in profile.parameter_names if domains[name].is_axis)
+    axis_names = tuple(
+        name for name in profile.parameter_names
+        if name in domains and domains[name].is_axis
+    )
     axis_columns = {name: index for index, name in enumerate(axis_names)}
     blocks = _build_planning_blocks(
         config=config,
@@ -1278,6 +1314,36 @@ def _grid_v2_prelude_identity_signature(prelude: _GridV2PlanPrelude) -> Any:
     return _stable_json(_grid_v2_planning_identity_payload(prelude))
 
 
+def _planning_diagnostics(prelude: _GridV2PlanPrelude) -> tuple[V2Diagnostic, ...]:
+    """Return deterministic profile and selected-run planning warnings."""
+
+    diagnostics = list(prelude.profile.diagnostics)
+    selected_axis_names = {
+        name
+        for block in prelude.blocks
+        for name in block.axis_names
+    }
+    selected_variants = ", ".join(prelude.selected_variants)
+    for name in prelude.profile.parameter_names:
+        domain = prelude.domains.get(name)
+        if domain is None or not domain.is_axis or name in selected_axis_names:
+            continue
+        diagnostics.append(
+            V2Diagnostic(
+                severity="warning",
+                code="V2_INACTIVE_ENABLED_AXIS",
+                strategy_id=prelude.profile.strategy_id,
+                path=f"parameters.{name}",
+                variant=None,
+                message=(
+                    f"{prelude.profile.strategy_id}: enabled axis '{name}' is bound but inactive "
+                    f"for selected variant(s) [{selected_variants}] and does not multiply candidates."
+                ),
+            )
+        )
+    return tuple(diagnostics)
+
+
 def _grid_v2_plan_identity_signature(plan: GridV2Plan) -> Any:
     return _stable_json(dict(plan.metadata.get("planning", {})).get("identity", {}))
 
@@ -1287,6 +1353,8 @@ def _grid_v2_planning_identity_payload(prelude: _GridV2PlanPrelude) -> dict[str,
     return {
         "engine": GRID_V2_ENGINE_VERSION,
         "plan_identity_schema_version": GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION,
+        "semantic_identity_schema_version": GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION,
+        "runtime_contract_version": V2_RUNTIME_CONTRACT_VERSION,
         "planning_policy_version": GRID_V2_PLANNING_POLICY_VERSION,
         "sampler_version": GRID_V2_SAMPLER_VERSION,
         "allocator_version": GRID_V2_ALLOCATOR_VERSION,
@@ -1355,9 +1423,9 @@ def _domain_identity_signature(domains: Mapping[str, GridV2ParameterDomain]) -> 
             name,
             str(domain.role) if domain.role is not None else None,
             ()
-            if name in _PLAN_REUSE_RUNTIME_PARAM_NAMES
+            if name in _PLAN_IDENTITY_RUNTIME_PARAM_NAMES
             else tuple(_jsonable_value(value) for value in domain.values),
-            None if name in _PLAN_REUSE_RUNTIME_PARAM_NAMES else _jsonable_value(domain.default),
+            None if name in _PLAN_IDENTITY_RUNTIME_PARAM_NAMES else _jsonable_value(domain.default),
             bool(domain.is_axis),
             bool(domain.is_runtime),
             str(domain.source),
@@ -1370,7 +1438,7 @@ def _without_plan_reuse_runtime_params(params: Mapping[str, Any]) -> dict[str, A
     return {
         str(name): value
         for name, value in params.items()
-        if str(name) not in _PLAN_REUSE_RUNTIME_PARAM_NAMES
+        if str(name) not in _PLAN_IDENTITY_RUNTIME_PARAM_NAMES
     }
 
 
@@ -1410,10 +1478,19 @@ def _rebase_grid_v2_plan(cached_plan: GridV2Plan, prelude: _GridV2PlanPrelude) -
     metadata["resolved_internal_variants"] = {
         block.name: block.variant_name for block in prelude.blocks
     }
+    diagnostics = _planning_diagnostics(prelude)
+    diagnostic_payloads = tuple(item.to_dict() for item in diagnostics)
+    validation_warnings = tuple(
+        item.message for item in diagnostics if item.severity == "warning"
+    )
+    metadata["diagnostics"] = diagnostic_payloads
+    metadata["validation_warnings"] = validation_warnings
     planning_metadata = dict(metadata.get("planning", {}))
     planning_metadata.update(
         {
             "plan_identity_schema_version": GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION,
+            "semantic_identity_schema_version": GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION,
+            "runtime_contract_version": V2_RUNTIME_CONTRACT_VERSION,
             "requested_policy": prelude.planning.requested_policy,
             "effective_policy": prelude.planning.effective_policy,
             "effective_policy_reason": prelude.planning.effective_policy_reason,
@@ -1428,6 +1505,8 @@ def _rebase_grid_v2_plan(cached_plan: GridV2Plan, prelude: _GridV2PlanPrelude) -
             "configured_manual_percents": dict(prelude.settings.manual_percents),
             "effective_manual_percents": dict(prelude.planning.effective_manual_percents),
             "identity": _grid_v2_planning_identity_payload(prelude),
+            "diagnostics": diagnostic_payloads,
+            "validation_warnings": validation_warnings,
         }
     )
     metadata["planning"] = planning_metadata
@@ -1453,7 +1532,10 @@ def _build_candidate_table(
     selector_values: Mapping[str, Any],
     selected_variants: Sequence[str],
 ) -> GridV2CandidateTable:
-    axis_names = tuple(name for name in profile.parameter_names if domains[name].is_axis)
+    axis_names = tuple(
+        name for name in profile.parameter_names
+        if name in domains and domains[name].is_axis
+    )
     axis_columns = {name: index for index, name in enumerate(axis_names)}
     blocks = _build_planning_blocks(
         config=config,
@@ -1713,6 +1795,7 @@ def preview_grid_v2_counts(
         }
         for block in prelude.blocks
     }
+    diagnostics = _planning_diagnostics(prelude)
     return GridV2CountPreview(
         raw_candidate_count=prelude.raw_candidate_count,
         enumerated_candidate_count=planned,
@@ -1734,6 +1817,10 @@ def preview_grid_v2_counts(
         or "full_enumeration_v2",
         sampler_version=(
             GRID_V2_SAMPLER_VERSION if prelude.planning.effective_policy == "sampled" else None
+        ),
+        diagnostics=tuple(item.to_dict() for item in diagnostics),
+        validation_warnings=tuple(
+            item.message for item in diagnostics if item.severity == "warning"
         ),
     )
 
@@ -2342,6 +2429,10 @@ def _build_parameter_domains(
         is_runtime = role == "runtime"
         is_selector = name == selector_name
         default = fixed_params.get(name, spec.get("default"))
+        if is_runtime:
+            if name in (enabled_axes or set()):
+                raise ValueError(f"Grid V2 axis '{name}' is a runtime parameter.")
+            continue
         axis_available = bool(optimize.get("enabled", False)) and not is_runtime and not is_selector
         if name in (enabled_axes or set()) and not axis_available:
             raise ValueError(f"Grid V2 axis '{name}' is not an optimized non-runtime parameter.")
@@ -2560,7 +2651,13 @@ def _selected_variants(
         return (variant_name,)
     if settings.enabled_variants is None:
         return variant_order
-    requested = tuple(settings.enabled_variants)
+    requested = tuple(str(name).strip() for name in settings.enabled_variants)
+    if any(not name for name in requested):
+        raise ValueError("Grid V2 enabled_variants contains an empty variant name.")
+    if len(set(requested)) != len(requested):
+        raise ValueError("Grid V2 enabled_variants contains duplicate normalized variant names.")
+    if not requested:
+        raise ValueError("Grid V2 enabled_variants must contain at least one variant.")
     unknown = sorted(set(requested) - set(variant_order))
     if unknown:
         raise ValueError(f"Grid V2 enabled_variants contains unknown variant(s): {unknown}.")
@@ -2799,7 +2896,9 @@ def _variant_axis_names(
     fixed = set(block_fixed_names)
     names: list[str] = []
     for name in profile.parameter_names:
-        domain = domains[name]
+        domain = domains.get(name)
+        if domain is None:
+            continue
         if not domain.is_axis:
             continue
         if name in fixed:
@@ -2832,6 +2931,7 @@ def _semantic_payload(
     }
     return {
         "engine": GRID_V2_ENGINE_VERSION,
+        "semantic_identity_schema_version": GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION,
         "strategy": {
             "id": str(config.get("id", profile.strategy_id)),
             "version": str(config.get("version", "")),
@@ -2865,6 +2965,7 @@ def _semantic_identity_tuple(
         sorted((str(name), _hashable_jsonable_value(value)) for name, value in variant.modes.items())
     )
     return (
+        GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION,
         GRID_V2_ENGINE_VERSION,
         str(config.get("id", profile.strategy_id)),
         str(config.get("version", "")),
@@ -2882,6 +2983,7 @@ def _canonical_identity(
     names: Sequence[str],
 ) -> str:
     payload = {
+        "semantic_identity_schema_version": GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION,
         "variant": variant_name,
         "params": {name: _jsonable_value(params[name]) for name in names if name in params},
     }
@@ -3835,6 +3937,7 @@ def _slow_enrich_selected(
 __all__ = [
     "GRID_V2_ENGINE_VERSION",
     "GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION",
+    "GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION",
     "COMPILED_BATCH_KIND",
     "REFERENCE_BATCH_KIND",
     "CandidateMappingRecord",

@@ -76,6 +76,7 @@ def test_grid_v2_dispatch_runs_before_v1_fast_backend_validation():
     assert supports_fast_grid("s06_r_trend_v02_b2") is False
     metadata = get_grid_v2_backend_metadata("s06_r_trend_v02_b2")
     assert metadata["engine"] == "v2"
+    assert metadata["diversity_group_fields"] == ["variant_name"]
 
     config = _v2_grid_config(save_size=True)
     results, study_id = run_grid_optimization(config, save_study=False)
@@ -98,6 +99,7 @@ def test_grid_v2_dispatch_runs_before_v1_fast_backend_validation():
         assert config.grid_summary["grid"]["compiled_config_packing"] == "table"
         assert config.grid_summary["grid"]["stack_row_count"] is not None
     assert {result.engine for result in results} == {"v2"}
+    assert all(result.diversity_group == result.variant_name for result in results)
     assert all(result.grid_generation_mode == "full_enumeration_v2" for result in results)
     assert config.grid_summary["grid"]["cache_estimate"]["worker_multiplier"] == 1
     assert all(getattr(result, "grid_rank", None) for result in config.optuna_all_results)

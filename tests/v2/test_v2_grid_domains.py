@@ -79,15 +79,14 @@ def test_domain_sources_optional_axes_and_runtime_exclusion():
     assert plan.parameter_domains["boolSignal"].values == (False, True)
     assert plan.parameter_domains["optionalInt"].values == (2,)
     assert plan.parameter_domains["optionalInt"].is_axis is False
-    assert plan.parameter_domains["runtimeStart"].values == (0,)
-    assert plan.parameter_domains["runtimeStart"].is_axis is False
+    assert "runtimeStart" not in plan.parameter_domains
 
     overridden = build_grid_v2_plan(config, GridV2Settings(enabled_axes=("optionalInt",)))
     assert overridden.parameter_domains["optionalInt"].values == (1, 2, 3)
     assert overridden.parameter_domains["selectSignal"].values == ("A",)
     assert overridden.deduped_candidate_count == 3
 
-    with pytest.raises(ValueError, match="not an optimized non-runtime"):
+    with pytest.raises(ValueError, match="runtime parameter"):
         build_grid_v2_plan(config, GridV2Settings(enabled_axes=("runtimeStart",)))
 
 

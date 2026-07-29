@@ -18,6 +18,7 @@ import pandas as pd
 
 from .kernel import ExecutionData
 from .price_rounding import PRICE_ROUNDING_NONE, PRICE_ROUNDING_TICK_OUTWARD, validate_tick_size
+from .execution_modes import resolve_position_mode_state
 from .profile import active_mode_values
 
 
@@ -607,70 +608,17 @@ def pack_compiled_config_arrays_from_rows(
 def _compiled_mode_state(
     modes: Mapping[str, str],
 ) -> tuple[bool, bool, bool, bool, bool, bool, int]:
-    _require_mode(modes, "entryOrder", "market_next_open")
-    _require_mode(modes, "stop", "atr_swing")
-    _require_mode(modes, "sizing", "risk_per_trade")
-
-    margin_mode = modes.get("margin", "off")
-    if margin_mode not in {"off", "report_only"}:
-        raise ValueError(f"Unsupported Phase-1 margin mode: {margin_mode!r}.")
-
-    boundary_mode = modes.get("boundary", "strict_close")
-    if boundary_mode not in {"strict_close", "none"}:
-        raise ValueError(f"Unsupported Phase-1 boundary mode: {boundary_mode!r}.")
-
-    target_mode = modes.get("target", "none")
-    trail_mode = modes.get("trail", "none")
-    if target_mode not in {"rr", "none"}:
-        raise ValueError(f"Unsupported Phase-1 target mode: {target_mode!r}.")
-    if trail_mode not in {"ma", "none"}:
-        raise ValueError(f"Unsupported Phase-1 trail mode: {trail_mode!r}.")
-
-    trail_activation_mode = modes.get("trailActivation", "none")
-    if trail_activation_mode not in {"none", "rr"}:
-        raise ValueError(f"Unsupported Phase-1 trailActivation mode: {trail_activation_mode!r}.")
-    valid_target_exit = (
-        target_mode == "rr"
-        and trail_mode == "none"
-        and trail_activation_mode == "none"
-    )
-    valid_ma_exit = (
-        target_mode == "none"
-        and trail_mode == "ma"
-        and trail_activation_mode == "rr"
-    )
-    if not (valid_target_exit or valid_ma_exit):
-        raise ValueError(
-            "Phase 1 supports exactly one exit topology: target=rr with no trailing mode "
-            "or target=none with moving-average trailing mode and trailActivation=rr."
-        )
-
-    max_days_mode = modes.get("maxDays", "false")
-    if max_days_mode == "true":
-        max_days_enabled = True
-    elif max_days_mode == "false":
-        max_days_enabled = False
-    else:
-        raise ValueError(
-            f"Unsupported Phase-1 execution mode maxDays={max_days_mode!r}; "
-            "expected 'true' or 'false'."
-        )
+    state = resolve_position_mode_state(modes)
 
     return (
-        target_mode == "rr",
-        trail_mode == "ma",
-        max_days_enabled,
-        boundary_mode == "strict_close",
-        boundary_mode == "none",
-        margin_mode == "report_only",
-        _rounding_code(modes.get("priceRounding", PRICE_ROUNDING_NONE)),
+        state.target_mode == "rr",
+        state.trail_mode == "ma",
+        state.max_days_enabled,
+        state.boundary_mode == "strict_close",
+        state.boundary_mode == "none",
+        state.margin_mode == "report_only",
+        _rounding_code(state.price_rounding_mode),
     )
-
-
-def _require_mode(modes: Mapping[str, str], name: str, expected: str) -> None:
-    actual = modes.get(name)
-    if actual != expected:
-        raise ValueError(f"Unsupported Phase-1 execution mode {name}={actual!r}; expected {expected!r}.")
 
 
 def _coerce_bool(value: Any, default: bool) -> bool:

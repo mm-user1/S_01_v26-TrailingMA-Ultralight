@@ -505,9 +505,8 @@ def test_signal_mode_state_and_config_packer_validation():
 
     bad_config = copy.deepcopy(fixture_config())
     bad_config["execution"]["target"] = "rr"
-    bad_profile = parse_execution_profile(bad_config)
     with pytest.raises(ValueError, match="target"):
-        _signal_mode_state(active_mode_values(bad_profile, bad_profile.parameter_defaults))
+        parse_execution_profile(bad_config)
 
 
 @pytest.mark.skipif(not compiled_batch_available(), reason="Compiled signal path required.")

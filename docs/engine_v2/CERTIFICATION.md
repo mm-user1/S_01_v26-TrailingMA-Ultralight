@@ -97,10 +97,12 @@ Deterministic budgeted planning certification (TZ48):
   count. Existing capacity/reflow rules remain authoritative, so manual `0%` is
   a weight rather than an unconditional block exclusion.
 - Full policy and sampled `K >= N` use the exact pre-TZ48 full builder/order.
-  Existing S06 default remains 48,480 candidates with semantic-key digest
+  At the TZ48 identity baseline, S06 default remained 48,480 candidates with
+  semantic-key digest
   `f1aa8bba4099d07f4d0d2865a72bf6537767329f3fdd9b324f07986b8b8369e4`.
 - Semantic keys exclude planning inputs. Plan fingerprints use identity schema
-  `grid_v2_plan_identity_v2`, cover effective planning identity plus ordered
+  `grid_v2_plan_identity_v2` at this historical baseline, cover effective
+  planning identity plus ordered
   semantic keys, and include normalized execution modes. The fingerprint hashes
   the ordered key stream incrementally with constant additional memory.
 - WFA reuse excludes runtime dates only, includes execution-mode identity, and
@@ -112,6 +114,35 @@ Deterministic budgeted planning certification (TZ48):
 - Existing JSON columns store additive planning facts; no schema migration was
   added. For Grid studies, `n_trials` and `total_trials` are delivered counts,
   while `grid_requested_budget` remains configured intent.
+
+Runtime/profile hardening certification (TZ61 Stage 1):
+
+- `v2_runtime_contract_v1` owns the exact ordered runtime fields
+  `dateFilter`, `start`, `end`, and `warmupBars`. They are normalized centrally,
+  excluded from Grid domains and identity, and rejected as optimization axes,
+  option overrides, selectors, or dependencies. WFA rebase remains limited to
+  the three date fields.
+- Profile parsing now validates certified execution-mode combinations,
+  variant-selector mappings, declared mode consumers, role topology, and
+  dependency topology. Reference and compiled paths use the same central mode
+  validators. Structured diagnostics distinguish fatal optimized-unbound
+  execution parameters from fixed-unbound and selected-run inactive-axis
+  warnings.
+- Current plans publish `grid_v2_plan_identity_v3`,
+  `grid_v2_semantic_identity_v2`, and `v2_runtime_contract_v1`. The version bump
+  deliberately changes current identity digests without changing candidate
+  rows, ordering, allocation, sampling, ranking, or execution semantics.
+- The certified S06 full plan remains 48,480 rows (480 bracket and 48,000
+  trail). Under the current identity schemas its ordered semantic-key digest is
+  `fc55d174e835e7196ae5fcf21427d318dc364241f6b10560aa32545e6910a08f`
+  and its plan fingerprint is
+  `0f8d001c380df5ee95d34ca4e25910c674e20e9e8f34886a1bd2f1c261f019b2`.
+- User-facing variants group diversity by `variant_name`; internal execution
+  variants group by the logical `grid_mode_name`. This aligns actual grouping
+  with advertised backend metadata and does not change V1 grouping.
+- Stage 1 adds no database migration or dependency. Route/API/JavaScript
+  exposure of the runtime contract is reserved for the separately gated Stage
+  2 and is not certified here.
 
 Grid V2 has two execution tiers:
 

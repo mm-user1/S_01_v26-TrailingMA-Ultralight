@@ -118,8 +118,8 @@ def test_profile_binding_consumes_tick_size_only_when_rounding_is_active():
 
 
 def test_runner_validation_rejects_unknown_rounding_and_bad_active_tick_size():
-    with pytest.raises(ValueError, match="Unsupported Phase-1 priceRounding mode"):
-        build_kernel_config(profile=_profile("nearest"), params=_profile("nearest").parameter_defaults)
+    with pytest.raises(ValueError, match="priceRounding"):
+        _profile("nearest")
 
     tick_profile = _profile("tick_outward")
     bad_params = dict(tick_profile.parameter_defaults)

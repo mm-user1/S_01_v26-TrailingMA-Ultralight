@@ -5,9 +5,12 @@ import pytest
 from core.grid_v2 import (
     GridV2PlanReuseCache,
     GridV2Settings,
+    _GridV2CachedPlan,
+    _PLAN_REUSE_RUNTIME_PARAM_NAMES,
     _pack_table_config_arrays,
     build_grid_v2_plan,
 )
+from runtime_test_helpers import canonical_v2_runtime_declarations
 
 
 def _tiny_v2_config() -> dict:
@@ -27,6 +30,7 @@ def _tiny_v2_config() -> dict:
             "priceRounding": "none",
         },
         "parameters": {
+            **canonical_v2_runtime_declarations(),
             "signalMode": {
                 "type": "select",
                 "default": "A",
@@ -41,27 +45,25 @@ def _tiny_v2_config() -> dict:
                 "role": "signal",
                 "optimize": {"enabled": True},
             },
-            "dateFilter": {
-                "type": "bool",
-                "default": False,
-                "role": "runtime",
-                "optimize": {"enabled": False},
-            },
-            "start": {
-                "type": "select",
-                "default": "",
-                "options": [""],
-                "role": "runtime",
-                "optimize": {"enabled": False},
-            },
-            "end": {
-                "type": "select",
-                "default": "",
-                "options": [""],
-                "role": "runtime",
-                "optimize": {"enabled": False},
-            },
             "stopX": {
+                "type": "float",
+                "default": 2.0,
+                "role": "execution",
+                "optimize": {"enabled": False},
+            },
+            "stopLP": {
+                "type": "int",
+                "default": 2,
+                "role": "execution",
+                "optimize": {"enabled": False},
+            },
+            "stopMaxPct": {
+                "type": "float",
+                "default": 6.0,
+                "role": "execution",
+                "optimize": {"enabled": False},
+            },
+            "stopRR": {
                 "type": "float",
                 "default": 2.0,
                 "role": "execution",
@@ -138,7 +140,7 @@ def test_plan_reuse_rebases_runtime_dates_without_mutating_cached_table():
     assert second.plan_build_seconds == pytest.approx(0.0)
 
 
-def test_plan_reuse_key_excludes_only_window_dates():
+def test_plan_reuse_identity_excludes_runtime_but_rebasable_set_stays_three_dates():
     cache = GridV2PlanReuseCache()
     settings = GridV2Settings(enabled_axes=("threshold",))
 
@@ -152,6 +154,13 @@ def test_plan_reuse_key_excludes_only_window_dates():
         settings=settings,
         base_params=_window_params("2025-02-01T00:00:00Z", "2025-03-01T00:00:00Z"),
     )
+    warmup_only = cache.get_or_build(
+        _tiny_v2_config(),
+        settings=settings,
+        base_params=_window_params(
+            "2025-02-01T00:00:00Z", "2025-03-01T00:00:00Z", warmupBars=5000
+        ),
+    )
     non_date_change = cache.get_or_build(
         _tiny_v2_config(),
         settings=settings,
@@ -163,10 +172,36 @@ def test_plan_reuse_key_excludes_only_window_dates():
     )
 
     assert date_only.hit is True
+    assert warmup_only.hit is True
+    assert _PLAN_REUSE_RUNTIME_PARAM_NAMES == {"dateFilter", "start", "end"}
+    assert (
+        warmup_only.plan.candidate_table.semantic_keys_by_row
+        == date_only.plan.candidate_table.semantic_keys_by_row
+    )
     assert non_date_change.hit is False
     assert non_date_change.stats.build_count == 2
-    assert non_date_change.stats.hit_count == 1
+    assert non_date_change.stats.hit_count == 2
     assert non_date_change.stats.miss_count == 2
+
+
+def test_old_schema_cache_entry_misses_safely():
+    cache = GridV2PlanReuseCache()
+    config = _tiny_v2_config()
+    settings = GridV2Settings(enabled_axes=("threshold",))
+    first = cache.get_or_build(config, settings=settings)
+    assert first.cache_key is not None
+    cache._entries[first.cache_key] = _GridV2CachedPlan(
+        plan=first.plan,
+        identity_signature="grid_v2_plan_identity_v2",
+    )
+
+    second = cache.get_or_build(config, settings=settings)
+
+    assert second.hit is False
+    assert second.stats.build_count == 2
+    assert second.plan.metadata["planning"]["plan_identity_schema_version"] == (
+        "grid_v2_plan_identity_v3"
+    )
 
 
 def test_rebased_plan_matches_fresh_window_plan_for_params_and_packed_dates():

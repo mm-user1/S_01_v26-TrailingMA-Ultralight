@@ -393,10 +393,20 @@ backend advertises capability via `get_backend_metadata()` (normalized by
     allocation may use zero-percent blocks and may use a budget smaller than the
     block count. Capacity reflow can still place candidates into a zero-percent
     block after positively weighted blocks are exhausted.
-  - Plan identity uses `grid_v2_plan_identity_v2`, includes normalized execution
-    modes, and feeds the WFA reuse identity. The plan fingerprint streams ordered
-    semantic keys with constant additional memory instead of materializing a
-    second key collection.
+  - Current plans publish `grid_v2_plan_identity_v3`,
+    `grid_v2_semantic_identity_v2`, and `v2_runtime_contract_v1`. Plan identity
+    includes normalized execution modes and feeds the WFA reuse identity. The
+    plan fingerprint streams ordered semantic keys with constant additional
+    memory instead of materializing a second key collection.
+  - The reserved V2 runtime fields are, in order, `dateFilter`, `start`, `end`,
+    and `warmupBars`. They are normalized by the core, excluded from candidate
+    domains and semantic/plan identity, and cannot be Grid axes or option
+    overrides. Only the three date fields are rebased for WFA windows.
+  - V2 profiles are validated when parsed: certified execution modes,
+    variant-selector mappings, declared consumers, and dependency topology must
+    be valid before runner or compiled packing. An optimized unbound execution
+    parameter is fatal; a fixed unbound execution parameter and an enabled axis
+    that is inactive for the selected run are structured warnings.
 
 - **Legacy V1 strategy-owned generation profiles**
   - S03 (`sampled_by_mode`): splits the search into `cc_only` / `tbands_only` /

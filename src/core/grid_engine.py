@@ -1431,6 +1431,7 @@ def _grid_v2_result_from_row(
     *,
     metric_tier: str,
     generation_mode: str = "full_enumeration_v2",
+    diversity_group_field: str = "grid_mode_name",
 ) -> OptimizationResult:
     profit_factor = float(row.profit_factor)
     result = OptimizationResult(
@@ -1457,7 +1458,9 @@ def _grid_v2_result_from_row(
     setattr(result, "canonical_identity", row.canonical_identity)
     setattr(result, "variant_name", row.variant_name)
     setattr(result, "grid_mode_name", row.grid_mode_name)
-    setattr(result, "diversity_group", row.grid_mode_name)
+    if diversity_group_field not in {"variant_name", "grid_mode_name"}:
+        raise ValueError(f"Unsupported Grid V2 diversity field: {diversity_group_field!r}.")
+    setattr(result, "diversity_group", str(getattr(row, diversity_group_field)))
     setattr(result, "grid_generation_mode", generation_mode)
     setattr(result, "grid_backend_kind", row.backend_kind)
     setattr(result, "grid_v2_engine_version", "grid_v2_phase2_5")
@@ -1549,6 +1552,7 @@ def _grid_v2_slow_result(
         row,
         metric_tier="fast",
         generation_mode=generation_mode,
+        diversity_group_field=_grid_v2_diversity_group_field(plan),
     )
     for attr in (
         "engine",
@@ -1597,6 +1601,15 @@ def _max_consecutive_losses_for_grid_v2(trades: Sequence[Any]) -> int:
         else:
             consecutive = 0
     return max_consecutive
+
+
+def _grid_v2_diversity_group_field(plan: Any) -> str:
+    selector = plan.profile.variant_selector
+    return (
+        "grid_mode_name"
+        if selector is not None and selector.user_facing is False
+        else "variant_name"
+    )
 
 
 def _grid_v2_guardrail_mapping(summary: Any) -> Dict[str, Any]:
@@ -1733,6 +1746,7 @@ def _run_grid_v2_optimization(
         if bool(run_result.metadata.get("compiled_batch_used"))
         else "reference_fast"
     )
+    diversity_group_field = _grid_v2_diversity_group_field(plan)
     fast_materialization_started = time.time()
     all_fast_results = [
         _grid_v2_result_from_row(
@@ -1743,6 +1757,7 @@ def _run_grid_v2_optimization(
                     "generation_mode", "full_enumeration_v2"
                 )
             ),
+            diversity_group_field=diversity_group_field,
         )
         for row in run_result.rows
     ]

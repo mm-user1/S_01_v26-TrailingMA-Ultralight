@@ -37,7 +37,7 @@ from .compiled_kernel import (
 )
 from .contracts import GUARDRAIL_FLAG_ZERO_SIZE_ENTRY
 from .kernel import ExecutionData
-from .price_rounding import PRICE_ROUNDING_NONE
+from .execution_modes import resolve_signal_reversal_mode_state
 from .profile import active_mode_values
 
 
@@ -358,43 +358,12 @@ def _pack_signal_config_arrays(
 
 
 def _signal_mode_state(modes: Mapping[str, str]) -> tuple[bool, bool, bool]:
-    _require_signal_mode(modes, "topology", "signal_reversal")
-    _require_signal_mode(modes, "entryOrder", "market_next_open")
-    _require_signal_mode(modes, "sizing", "fixed_pct_equity")
-    _require_signal_mode(modes, "exitOnSignal", "true")
-    _require_signal_mode(modes, "priceRounding", PRICE_ROUNDING_NONE)
-    _require_signal_absent_or(modes, "target", {"none"})
-    _require_signal_absent_or(modes, "trail", {"none"})
-    _require_signal_absent_or(modes, "trailActivation", {"none"})
-    _require_signal_absent_or(modes, "maxDays", {"false"})
-    _require_signal_absent_or(modes, "margin", {"off"})
-
-    stop_mode = modes.get("stop", "none")
-    if stop_mode not in {"none", "emergency_pct"}:
-        raise ValueError(
-            f"Unsupported signal_reversal execution mode stop={stop_mode!r}; "
-            "expected 'none' or 'emergency_pct'."
-        )
-    boundary_mode = modes.get("boundary", "strict_close")
-    if boundary_mode not in {"strict_close", "none"}:
-        raise ValueError(f"Unsupported signal_reversal boundary mode: {boundary_mode!r}.")
-    return stop_mode == "emergency_pct", boundary_mode == "strict_close", boundary_mode == "none"
-
-
-def _require_signal_mode(modes: Mapping[str, str], name: str, expected: str) -> None:
-    actual = modes.get(name)
-    if actual != expected:
-        raise ValueError(f"Unsupported signal_reversal execution mode {name}={actual!r}; expected {expected!r}.")
-
-
-def _require_signal_absent_or(modes: Mapping[str, str], name: str, allowed: set[str]) -> str:
-    actual = modes.get(name)
-    if actual is None:
-        return ""
-    if actual not in allowed:
-        expected = ", ".join(repr(value) for value in sorted(allowed))
-        raise ValueError(f"Unsupported signal_reversal execution mode {name}={actual!r}; expected one of {expected}.")
-    return actual
+    state = resolve_signal_reversal_mode_state(modes)
+    return (
+        state.stop_mode == "emergency_pct",
+        state.boundary_mode == "strict_close",
+        state.boundary_mode == "none",
+    )
 
 
 def _signal_stacked_batch_loop_impl(
