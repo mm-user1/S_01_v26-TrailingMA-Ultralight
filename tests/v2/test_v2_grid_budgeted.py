@@ -417,6 +417,97 @@ def test_invalid_bool_groups_fail_with_structured_diagnostics(
     assert fragment in diagnostic.message
 
 
+def test_absent_optimization_rules_is_valid_but_explicit_null_is_structured():
+    absent = _small_config()
+    absent.pop("optimization_rules", None)
+    assert preview_grid_v2_counts(absent).planned_candidate_count == 30
+
+    explicit_null = _small_config()
+    explicit_null["optimization_rules"] = None
+    with pytest.raises(ProfileValidationError) as exc_info:
+        preview_grid_v2_counts(explicit_null)
+
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic.code == "V2_INVALID_BOOL_GROUP"
+    assert diagnostic.strategy_id == "sampled_fixture"
+    assert diagnostic.path == "optimization_rules"
+    assert "must be a mapping" in diagnostic.message
+
+
+def test_absent_logical_modes_preserves_deterministic_fallback_names():
+    config = copy.deepcopy(get_strategy_config("s03_reversal_v11_regime_er_b2"))
+    del config["optimization_rules"]["bool_groups"][0]["logical_modes"]
+
+    preview = preview_grid_v2_counts(config)
+
+    assert list(preview.per_block_counts) == ["tbands_only", "cc_only", "both"]
+    assert list(preview_grid_v2_counts(config).per_block_counts) == list(
+        preview.per_block_counts
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "path", "fragment"),
+    [
+        ("not_mapping", "optimization_rules.bool_groups[0].logical_modes", "must be a mapping"),
+        ("empty_key", "optimization_rules.bool_groups[0].logical_modes", "keys must be non-empty"),
+        ("entry_not_mapping", "optimization_rules.bool_groups[0].logical_modes.cc_only", "must be a mapping"),
+        ("values_not_mapping", "optimization_rules.bool_groups[0].logical_modes.cc_only.values", "must be a mapping"),
+        ("missing_name", "optimization_rules.bool_groups[0].logical_modes.cc_only.values", "missing=['useTBands']"),
+        ("unknown_name", "optimization_rules.bool_groups[0].logical_modes.cc_only.values", "unknown=['unknown']"),
+        ("invalid_bool", "optimization_rules.bool_groups[0].logical_modes.cc_only.values.useCloseCount", "not a valid boolean"),
+        ("invalid_numeric_bool", "optimization_rules.bool_groups[0].logical_modes.cc_only.values.useCloseCount", "not a valid boolean"),
+        ("all_false", "optimization_rules.bool_groups[0].logical_modes.cc_only.values", "all-false"),
+        ("duplicate", "optimization_rules.bool_groups[0].logical_modes.tbands_only.values", "duplicate value combinations"),
+        ("invalid_label", "optimization_rules.bool_groups[0].logical_modes.cc_only.label", "label must be a non-empty string"),
+        ("partial", "optimization_rules.bool_groups[0].logical_modes", "define every supported"),
+    ],
+)
+def test_malformed_logical_modes_are_structured(case, path, fragment):
+    config = copy.deepcopy(get_strategy_config("s03_reversal_v11_regime_er_b2"))
+    group = config["optimization_rules"]["bool_groups"][0]
+    logical_modes = group["logical_modes"]
+    if case == "not_mapping":
+        group["logical_modes"] = None
+    elif case == "empty_key":
+        group["logical_modes"] = {"": logical_modes["cc_only"]}
+    elif case == "entry_not_mapping":
+        logical_modes["cc_only"] = []
+    elif case == "values_not_mapping":
+        logical_modes["cc_only"]["values"] = []
+    elif case == "missing_name":
+        del logical_modes["cc_only"]["values"]["useTBands"]
+    elif case == "unknown_name":
+        logical_modes["cc_only"]["values"]["unknown"] = True
+    elif case == "invalid_bool":
+        logical_modes["cc_only"]["values"]["useCloseCount"] = "maybe"
+    elif case == "invalid_numeric_bool":
+        logical_modes["cc_only"]["values"]["useCloseCount"] = 2
+    elif case == "all_false":
+        logical_modes["cc_only"]["values"] = {
+            "useCloseCount": False,
+            "useTBands": False,
+        }
+    elif case == "duplicate":
+        logical_modes["tbands_only"]["values"] = copy.deepcopy(
+            logical_modes["cc_only"]["values"]
+        )
+    elif case == "invalid_label":
+        logical_modes["cc_only"]["label"] = ""
+    elif case == "partial":
+        del logical_modes["both"]
+
+    with pytest.raises(ProfileValidationError) as exc_info:
+        preview_grid_v2_counts(config)
+
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic.severity == "error"
+    assert diagnostic.code == "V2_INVALID_BOOL_GROUP"
+    assert diagnostic.strategy_id == "s03_reversal_v11_regime_er_b2"
+    assert diagnostic.path == path
+    assert fragment in diagnostic.message
+
+
 @pytest.mark.parametrize(
     ("modes", "match"),
     [

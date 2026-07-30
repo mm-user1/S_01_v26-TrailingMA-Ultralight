@@ -148,10 +148,16 @@ execution parameter, and dependencies must be same-role boolean relationships.
 An optimized execution parameter with no currently certified consumer is fatal
 (`V2_UNBOUND_OPTIMIZED_EXECUTION_PARAM`). A fixed truly unbound parameter is
 allowed, reported as `V2_UNBOUND_FIXED_EXECUTION_PARAM`, and excluded from
-semantic identity. A parameter that has a certified consumer but whose mode is
-not selected is a separate case: fixed values produce the informational
+semantic identity. A parameter that has a certified consumer supported by at
+least one declared execution family but whose mode is not selected is a
+separate case: fixed values produce the informational
 `V2_UNSELECTED_MODE_EXECUTION_PARAM`, while optimization-enabled values fail
 with `V2_UNSELECTED_MODE_OPTIMIZED_EXECUTION_PARAM` and name the required mode.
+If known certified consumers belong only to incompatible execution families,
+the parameter follows the unbound warning/fatal policy and the diagnostic names
+the family mismatch instead of recommending an impossible mode. Consumer
+support is family-aware even when a valid mode, such as position `trail=ma`,
+requires coordinated companion mode changes in a complete variant.
 Informational diagnostics are not projected into `validation_warnings`.
 
 `V2_INACTIVE_ENABLED_AXIS` applies only when an enabled, bound axis is inactive
@@ -161,6 +167,9 @@ axes, not inactive axes. Diagnostics have stable fields `severity`, `code`,
 `strategy_id`, `path`, `variant`, and `message`.
 
 Use `optimization_rules.bool_groups` for small declarative logical mode groups.
+The `optimization_rules` key may be absent. When present it must be a mapping;
+explicit `null` and other non-mapping values fail with
+`V2_INVALID_BOOL_GROUP`.
 The supported production shape is a two-parameter `at_least_one_true` group with
 optional `logical_modes` metadata:
 
@@ -182,6 +191,24 @@ Each bool discriminator is validated as a declared non-runtime boolean with a
 Grid domain. It remains an active semantic discriminator even though the
 planner fixes its value in each logical block instead of enumerating it as a
 within-block axis.
+
+When `logical_modes` is absent, Grid V2 uses its deterministic compatibility
+naming. When present it must be a mapping with non-empty stable keys. Every
+entry and its `values` member must be mappings; `values` must name exactly the
+two group parameters and contain valid boolean representations. The all-false
+combination and duplicate combinations are invalid. An optional `label` must
+be a non-empty string. Metadata must define every non-all-false combination
+reachable from the current domains; it may also define other valid combinations
+so one complete declaration remains usable when runtime domain restrictions
+select only a subset. Invalid metadata fails once during planning prelude
+construction with structured `V2_INVALID_BOOL_GROUP` diagnostics.
+
+Stage 2 user-facing diagnostic rendering must use the structured collection as
+its authority. Blocking surfaces render `error`; the normal warning panel
+filters to `severity == "warning"`. `info` diagnostics must not become permanent
+warning nags and may appear only in secondary author/debug details or another
+non-blocking affordance. The string-only `validation_warnings` tuple remains a
+compatibility projection, not the UI authority.
 
 ## Signals.py Requirements
 

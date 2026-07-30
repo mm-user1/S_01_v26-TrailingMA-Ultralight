@@ -51,4 +51,19 @@ def diagnostic_from_mapping(payload: Mapping[str, Any]) -> V2Diagnostic:
     )
 
 
-__all__ = ["V2Diagnostic", "V2ValidationError", "diagnostic_from_mapping"]
+def warning_messages(diagnostics: Iterable[V2Diagnostic]) -> tuple[str, ...]:
+    """Project warning text in diagnostic order without including info/error."""
+
+    return tuple(
+        diagnostic.message
+        for diagnostic in diagnostics
+        if diagnostic.severity == "warning"
+    )
+
+
+__all__ = [
+    "V2Diagnostic",
+    "V2ValidationError",
+    "diagnostic_from_mapping",
+    "warning_messages",
+]

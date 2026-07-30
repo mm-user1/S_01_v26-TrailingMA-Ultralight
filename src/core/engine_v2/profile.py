@@ -7,8 +7,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Optional
 
 from .contracts import ExecutionProfile, ModeBinding, VariantSelector, VariantSpec
-from .diagnostics import V2Diagnostic, V2ValidationError
-from .execution_modes import ExecutionModeValidationError, validate_execution_modes
+from .diagnostics import V2Diagnostic, V2ValidationError, warning_messages
+from .execution_modes import (
+    ExecutionModeValidationError,
+    execution_family_supports_mode_value,
+    validate_execution_modes,
+)
 from .runtime_contract import (
     V2_RESERVED_RUNTIME_PARAM_NAMES,
     V2RuntimeValidationError,
@@ -214,7 +218,14 @@ def _dependency_names(
     if isinstance(depends_on, str):
         return (depends_on,)
     if isinstance(depends_on, Sequence) and not isinstance(depends_on, (str, bytes, bytearray)):
-        return tuple(str(item) for item in depends_on)
+        if all(isinstance(item, str) and item.strip() for item in depends_on):
+            return tuple(depends_on)
+        raise _error(
+            strategy_id,
+            f"{strategy_id}: parameter '{parameter_name}' depends_on list must contain only non-empty strings.",
+            path=f"parameters.{parameter_name}.depends_on",
+            code="V2_INVALID_DEPENDENCY",
+        )
     raise _error(
         strategy_id,
         f"{strategy_id}: parameter '{parameter_name}' depends_on must be a string or list of strings.",
@@ -455,6 +466,7 @@ def _variant_independent_params(
         )
     bound = variant_consumed | topology_consumed
     independent.update(topology_consumed)
+    declared_families = tuple(dict.fromkeys(families.values()))
 
     for name, role in roles.items():
         if role != "execution" or name in bound or (selector is not None and name == selector.param):
@@ -464,14 +476,26 @@ def _variant_independent_params(
             for binding in MODE_PARAMETER_BINDINGS
             if name in binding.consumes_params
         )
-        certified_bindings = tuple(
+        globally_certified_bindings = tuple(
             binding for binding in consuming_bindings if binding.status != "later"
         )
+        family_certified_bindings = tuple(
+            binding
+            for binding in globally_certified_bindings
+            if any(
+                execution_family_supports_mode_value(
+                    family,
+                    binding.mode_field,
+                    binding.mode_value,
+                )
+                for family in declared_families
+            )
+        )
         optimized = _is_optimized(params.get(name))
-        if certified_bindings:
+        if family_certified_bindings:
             modes = ", ".join(
                 f"{binding.mode_field}={binding.mode_value}"
-                for binding in certified_bindings
+                for binding in family_certified_bindings
             )
             if optimized:
                 raise _error(
@@ -492,7 +516,17 @@ def _variant_independent_params(
                 )
             )
             continue
-        if consuming_bindings:
+        if globally_certified_bindings:
+            modes = ", ".join(
+                f"{binding.mode_field}={binding.mode_value}"
+                for binding in globally_certified_bindings
+            )
+            family_names = ", ".join(declared_families)
+            detail = (
+                f" has known certified consumer mode(s) [{modes}], but they are "
+                f"incompatible with declared execution family/families [{family_names}]"
+            )
+        elif consuming_bindings:
             modes = ", ".join(
                 f"{binding.mode_field}={binding.mode_value}"
                 for binding in consuming_bindings
@@ -512,7 +546,7 @@ def _variant_independent_params(
             _warning(
                 strategy_id,
                 f"{strategy_id}: fixed execution parameter '{name}'{detail} in the "
-                "current certified contract and is excluded from semantic identity.",
+                "current certified contract; it is excluded from semantic identity.",
                 path=f"parameters.{name}",
                 code="V2_UNBOUND_FIXED_EXECUTION_PARAM",
             )
@@ -557,9 +591,7 @@ def parse_execution_profile(config: Mapping[str, Any]) -> ExecutionProfile:
         parameter_names=parameter_names,
         parameter_roles=roles,
         variant_independent_params=independent,
-        validation_warnings=tuple(
-            item.message for item in diagnostics if item.severity == "warning"
-        ),
+        validation_warnings=warning_messages(diagnostics),
         diagnostics=diagnostics,
     )
 

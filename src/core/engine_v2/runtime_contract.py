@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -184,8 +184,20 @@ def normalize_v2_runtime_values(
         strategy_id=strategy_id,
         path="warmupBars",
     )
-    if warmup < 0 or (user_boundary and not 100 <= warmup <= 5000):
-        expected = "between 100 and 5000" if user_boundary else "non-negative"
+    minimum = warmup_field.minimum
+    maximum = warmup_field.maximum
+    outside_user_bounds = (
+        user_boundary
+        and minimum is not None
+        and maximum is not None
+        and not minimum <= warmup <= maximum
+    )
+    if warmup < 0 or outside_user_bounds:
+        expected = (
+            f"between {minimum} and {maximum}"
+            if user_boundary
+            else "non-negative"
+        )
         raise _runtime_error(
             strategy_id=strategy_id,
             path="warmupBars",
@@ -326,8 +338,26 @@ def validate_v2_runtime_declarations(config: Mapping[str, Any]) -> None:
         if not isinstance(raw_spec, Mapping) or "depends_on" not in raw_spec:
             continue
         raw_parents = raw_spec.get("depends_on")
-        parents = (raw_parents,) if isinstance(raw_parents, str) else tuple(raw_parents or ())
-        if str(child_name) in V2_RESERVED_RUNTIME_PARAM_NAMES or any(
+        if str(child_name) in V2_RESERVED_RUNTIME_PARAM_NAMES:
+            raise _runtime_error(
+                strategy_id=strategy_id,
+                path=f"parameters.{child_name}.depends_on",
+                code="V2_INCOMPATIBLE_RUNTIME_DECLARATION",
+                message=f"{strategy_id}: reserved runtime fields cannot participate in depends_on.",
+            )
+        if isinstance(raw_parents, str):
+            parents = (raw_parents,)
+        elif (
+            isinstance(raw_parents, Sequence)
+            and not isinstance(raw_parents, (str, bytes, bytearray))
+            and all(isinstance(parent, str) for parent in raw_parents)
+        ):
+            parents = tuple(raw_parents)
+        else:
+            # The profile dependency validator owns malformed non-runtime
+            # shapes. This pass only rejects valid references to runtime names.
+            continue
+        if any(
             str(parent) in V2_RESERVED_RUNTIME_PARAM_NAMES for parent in parents
         ):
             raise _runtime_error(

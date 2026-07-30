@@ -1,10 +1,16 @@
+import copy
 import json
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from core.engine_v2.diagnostics import V2Diagnostic, V2ValidationError
+from core.engine_v2.diagnostics import (
+    V2Diagnostic,
+    V2ValidationError,
+    warning_messages,
+)
+from core.engine_v2.execution_modes import execution_family_supports_mode_value
 from core.engine_v2.profile import (
     ProfileValidationError,
     active_mode_values,
@@ -20,6 +26,12 @@ from core.engine_v2.profile import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _production_config(strategy_id: str) -> dict:
+    path = REPO_ROOT / "src" / "strategies" / strategy_id / "config.json"
+    with path.open(encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 def test_structured_diagnostic_shape_and_error_payload_are_stable():
@@ -43,6 +55,22 @@ def test_structured_diagnostic_shape_and_error_payload_are_stable():
     assert V2ValidationError(diagnostic).to_dict() == {
         "diagnostics": [diagnostic.to_dict()]
     }
+
+
+def test_warning_message_projection_preserves_order_and_excludes_info_and_error():
+    diagnostics = tuple(
+        V2Diagnostic(
+            severity=severity,
+            code=f"V2_{severity.upper()}",
+            strategy_id="fixture",
+            path=severity,
+            variant=None,
+            message=f"{index}:{severity}",
+        )
+        for index, severity in enumerate(("info", "warning", "error", "warning"))
+    )
+
+    assert warning_messages(diagnostics) == ("1:warning", "3:warning")
 
 
 def _param(role, default, *, optimize=True, depends_on=None):
@@ -272,6 +300,109 @@ def test_tick_outward_selects_and_consumes_tick_size():
     assert not any(item.path == "parameters.tickSize" for item in profile.diagnostics)
 
 
+@pytest.mark.parametrize(
+    ("strategy_id", "parameter_name", "mode", "family"),
+    [
+        (
+            "s06_r_trend_v02_b2",
+            "positionPct",
+            "sizing=fixed_pct_equity",
+            "position",
+        ),
+        (
+            "s03_reversal_v11_regime_er_b2",
+            "stopRR",
+            "target=rr",
+            "signal_reversal",
+        ),
+    ],
+)
+def test_cross_family_fixed_consumers_are_truthful_unbound_warnings(
+    strategy_id, parameter_name, mode, family
+):
+    config = _production_config(strategy_id)
+    config["parameters"][parameter_name] = _param(
+        "execution", 1.0, optimize=False
+    )
+
+    profile = parse_execution_profile(config)
+
+    diagnostic = next(
+        item
+        for item in profile.diagnostics
+        if item.path == f"parameters.{parameter_name}"
+    )
+    assert diagnostic.code == "V2_UNBOUND_FIXED_EXECUTION_PARAM"
+    assert diagnostic.severity == "warning"
+    assert mode in diagnostic.message
+    assert f"family/families [{family}]" in diagnostic.message
+    assert "incompatible" in diagnostic.message
+    assert "no declared variant selects" not in diagnostic.message
+
+
+@pytest.mark.parametrize(
+    ("strategy_id", "parameter_name", "mode", "family"),
+    [
+        (
+            "s06_r_trend_v02_b2",
+            "positionPct",
+            "sizing=fixed_pct_equity",
+            "position",
+        ),
+        (
+            "s03_reversal_v11_regime_er_b2",
+            "stopRR",
+            "target=rr",
+            "signal_reversal",
+        ),
+    ],
+)
+def test_cross_family_optimized_consumers_fail_without_impossible_advice(
+    strategy_id, parameter_name, mode, family
+):
+    config = _production_config(strategy_id)
+    config["parameters"][parameter_name] = _param(
+        "execution", 1.0, optimize=True
+    )
+
+    with pytest.raises(ProfileValidationError) as exc_info:
+        parse_execution_profile(config)
+
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic.code == "V2_UNBOUND_OPTIMIZED_EXECUTION_PARAM"
+    assert diagnostic.path == f"parameters.{parameter_name}"
+    assert mode in diagnostic.message
+    assert f"family/families [{family}]" in diagnostic.message
+    assert "incompatible" in diagnostic.message
+    assert "no declared variant selects" not in diagnostic.message
+
+
+def test_position_bracket_only_profile_recognizes_coupled_trail_mode_consumer():
+    config = _production_config("s06_r_trend_v02_b2")
+    bracket = copy.deepcopy(config["execution"]["variants"]["bracket"])
+    config["execution"].pop("variantSelector")
+    config["execution"]["variants"] = {"bracket": bracket}
+    del config["parameters"]["useTrailMA"]
+    for name in ("trailMAType", "trailMALength", "trailMAOffsetEx"):
+        del config["parameters"][name]
+    config["parameters"]["trailRR"].pop("depends_on")
+    config["parameters"]["trailRR"]["optimize"] = {"enabled": False}
+
+    profile = parse_execution_profile(config)
+
+    diagnostic = next(
+        item for item in profile.diagnostics if item.path == "parameters.trailRR"
+    )
+    assert diagnostic.code == "V2_UNSELECTED_MODE_EXECUTION_PARAM"
+    assert diagnostic.severity == "info"
+    assert "trail=ma" in diagnostic.message
+    assert execution_family_supports_mode_value("position", "trail", "ma") is True
+    assert (
+        execution_family_supports_mode_value("signal_reversal", "trail", "ma")
+        is False
+    )
+
+
 def test_later_only_consumer_is_unbound_and_names_uncertified_mode():
     config = _variant_config()
     config["parameters"]["trailAtrMult"] = _param(
@@ -424,6 +555,76 @@ def test_within_role_depends_on_is_accepted():
     config["parameters"]["trailRR"]["depends_on"] = "selector"
 
     parse_execution_profile(config)
+
+
+@pytest.mark.parametrize(
+    "depends_on",
+    [1, 1.5, True, {}, ["selector", 1]],
+    ids=("integer", "non_integral_number", "boolean", "mapping", "malformed_list"),
+)
+def test_malformed_non_runtime_dependencies_are_structured(depends_on):
+    config = _variant_config()
+    config["parameters"]["trailRR"]["depends_on"] = depends_on
+
+    with pytest.raises(ProfileValidationError) as exc_info:
+        parse_execution_profile(config)
+
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic.code == "V2_INVALID_DEPENDENCY"
+    assert diagnostic.strategy_id == "generic_variant_fixture"
+    assert diagnostic.path == "parameters.trailRR.depends_on"
+    assert "depends_on" in diagnostic.message
+    assert "string" in diagnostic.message
+
+
+@pytest.mark.parametrize("depends_on", ["selector", ["selector"]])
+def test_valid_string_and_list_dependency_shapes_remain_supported(depends_on):
+    config = _variant_config()
+    config["parameters"]["trailRR"]["depends_on"] = depends_on
+
+    parse_execution_profile(config)
+
+
+def test_reserved_runtime_child_with_malformed_dependency_is_incompatible():
+    config = _variant_config()
+    config["parameters"]["warmupBars"] = {
+        "type": "int",
+        "default": 1000,
+        "min": 100,
+        "max": 5000,
+        "role": "runtime",
+        "optimize": {"enabled": False},
+        "depends_on": 1,
+    }
+
+    with pytest.raises(ProfileValidationError) as exc_info:
+        parse_execution_profile(config)
+
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic.code == "V2_INCOMPATIBLE_RUNTIME_DECLARATION"
+    assert diagnostic.strategy_id == "generic_variant_fixture"
+    assert diagnostic.path == "parameters.warmupBars"
+    assert "depends_on is forbidden" in diagnostic.message
+
+
+def test_non_runtime_child_cannot_depend_on_reserved_runtime_parent():
+    config = _variant_config()
+    config["parameters"]["dateFilter"] = {
+        "type": "bool",
+        "default": True,
+        "role": "runtime",
+        "optimize": {"enabled": False},
+    }
+    config["parameters"]["trailRR"]["depends_on"] = "dateFilter"
+
+    with pytest.raises(ProfileValidationError) as exc_info:
+        parse_execution_profile(config)
+
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic.code == "V2_INCOMPATIBLE_RUNTIME_DECLARATION"
+    assert diagnostic.strategy_id == "generic_variant_fixture"
+    assert diagnostic.path == "parameters.trailRR.depends_on"
+    assert "reserved runtime fields" in diagnostic.message
 
 
 def test_core_profile_modules_do_not_contain_strategy_specific_branches():

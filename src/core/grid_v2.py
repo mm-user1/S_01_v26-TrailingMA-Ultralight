@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 from core.engine_v2.contracts import ExecutionProfile, GuardrailSummary, VariantSpec
-from core.engine_v2.diagnostics import V2Diagnostic
+from core.engine_v2.diagnostics import V2Diagnostic, warning_messages
 from core.engine_v2.kernel import ExecutionData
 from core.engine_v2.compiled_kernel import (
     COMPILED_BATCH_KIND,
@@ -893,9 +893,7 @@ def build_grid_v2_plan(
     )
     diagnostics = _planning_diagnostics(prelude)
     diagnostic_payloads = tuple(item.to_dict() for item in diagnostics)
-    validation_warnings = tuple(
-        item.message for item in diagnostics if item.severity == "warning"
-    )
+    validation_warnings = warning_messages(diagnostics)
 
     per_block_counts = {
         block.name: {
@@ -1488,9 +1486,7 @@ def _rebase_grid_v2_plan(cached_plan: GridV2Plan, prelude: _GridV2PlanPrelude) -
     }
     diagnostics = _planning_diagnostics(prelude)
     diagnostic_payloads = tuple(item.to_dict() for item in diagnostics)
-    validation_warnings = tuple(
-        item.message for item in diagnostics if item.severity == "warning"
-    )
+    validation_warnings = warning_messages(diagnostics)
     metadata["diagnostics"] = diagnostic_payloads
     metadata["validation_warnings"] = validation_warnings
     planning_metadata = dict(metadata.get("planning", {}))
@@ -1827,9 +1823,7 @@ def preview_grid_v2_counts(
             GRID_V2_SAMPLER_VERSION if prelude.planning.effective_policy == "sampled" else None
         ),
         diagnostics=tuple(item.to_dict() for item in diagnostics),
-        validation_warnings=tuple(
-            item.message for item in diagnostics if item.severity == "warning"
-        ),
+        validation_warnings=warning_messages(diagnostics),
     )
 
 
@@ -2781,25 +2775,9 @@ def _bool_group_error(
 
 
 def _logical_mode_metadata(
-    group: Mapping[str, Any],
     values: Mapping[str, bool],
 ) -> tuple[str, str]:
-    logical_modes = group.get("logical_modes")
-    if isinstance(logical_modes, Mapping):
-        for raw_key, raw_meta in logical_modes.items():
-            if not isinstance(raw_meta, Mapping):
-                continue
-            raw_values = raw_meta.get("values")
-            if not isinstance(raw_values, Mapping):
-                continue
-            matched = True
-            for name, expected in values.items():
-                if name not in raw_values or _coerce_bool(raw_values[name]) != bool(expected):
-                    matched = False
-                    break
-            if matched:
-                label = str(raw_meta.get("label") or raw_key)
-                return str(raw_key), label
+    """Return the identity-stable fallback when logical metadata is absent."""
 
     if set(values) == {"useCloseCount", "useTBands"}:
         use_cc = bool(values["useCloseCount"])
@@ -2813,6 +2791,116 @@ def _logical_mode_metadata(
 
     key = "_".join(f"{name}_{str(value).lower()}" for name, value in sorted(values.items()))
     return key, key
+
+
+def _coerce_logical_mode_bool(value: Any) -> bool:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if not math.isfinite(float(value)) or float(value) not in {0.0, 1.0}:
+            raise ValueError(f"Grid V2 cannot coerce {value!r} to bool.")
+    return _coerce_bool(value)
+
+
+def _validated_logical_modes(
+    config: Mapping[str, Any],
+    group: Mapping[str, Any],
+    group_params: Sequence[str],
+    supported_combinations: Sequence[tuple[bool, ...]],
+) -> Mapping[tuple[bool, ...], tuple[str, str, int]] | None:
+    if "logical_modes" not in group:
+        return None
+    raw_modes = group.get("logical_modes")
+    root_path = "optimization_rules.bool_groups[0].logical_modes"
+    if not isinstance(raw_modes, Mapping):
+        raise _bool_group_error(
+            config,
+            "bool-group logical_modes must be a mapping when present.",
+            path=root_path,
+        )
+
+    normalized: dict[tuple[bool, ...], tuple[str, str, int]] = {}
+    for index, (raw_key, raw_meta) in enumerate(raw_modes.items()):
+        if (
+            not isinstance(raw_key, str)
+            or not raw_key
+            or raw_key.strip() != raw_key
+        ):
+            raise _bool_group_error(
+                config,
+                "logical-mode keys must be non-empty strings without surrounding whitespace.",
+                path=root_path,
+            )
+        entry_path = f"{root_path}.{raw_key}"
+        if not isinstance(raw_meta, Mapping):
+            raise _bool_group_error(
+                config,
+                f"logical mode '{raw_key}' must be a mapping.",
+                path=entry_path,
+            )
+        raw_values = raw_meta.get("values")
+        if not isinstance(raw_values, Mapping):
+            raise _bool_group_error(
+                config,
+                f"logical mode '{raw_key}' values must be a mapping.",
+                path=f"{entry_path}.values",
+            )
+        unknown = [str(name) for name in raw_values if name not in group_params]
+        missing = [name for name in group_params if name not in raw_values]
+        if unknown or missing:
+            raise _bool_group_error(
+                config,
+                f"logical mode '{raw_key}' values must reference exactly the bool-group "
+                f"parameters; missing={missing}, unknown={unknown}.",
+                path=f"{entry_path}.values",
+            )
+        combination: list[bool] = []
+        for name in group_params:
+            try:
+                combination.append(_coerce_logical_mode_bool(raw_values[name]))
+            except (TypeError, ValueError) as exc:
+                raise _bool_group_error(
+                    config,
+                    f"logical mode '{raw_key}' value for '{name}' is not a valid boolean: {exc}",
+                    path=f"{entry_path}.values.{name}",
+                ) from exc
+        combination_key = tuple(combination)
+        if not any(combination_key):
+            raise _bool_group_error(
+                config,
+                f"logical mode '{raw_key}' cannot use the all-false combination.",
+                path=f"{entry_path}.values",
+            )
+        if combination_key in normalized:
+            prior = normalized[combination_key][0]
+            raise _bool_group_error(
+                config,
+                f"logical modes '{prior}' and '{raw_key}' have duplicate value combinations.",
+                path=f"{entry_path}.values",
+            )
+        label = raw_meta.get("label", raw_key)
+        if not isinstance(label, str) or not label or label.strip() != label:
+            raise _bool_group_error(
+                config,
+                f"logical mode '{raw_key}' label must be a non-empty string without surrounding whitespace.",
+                path=f"{entry_path}.label",
+            )
+        normalized[combination_key] = (raw_key, label, index)
+
+    missing_combinations = [
+        combination
+        for combination in supported_combinations
+        if combination not in normalized
+    ]
+    if missing_combinations:
+        rendered = [
+            {name: value for name, value in zip(group_params, combination)}
+            for combination in missing_combinations
+        ]
+        raise _bool_group_error(
+            config,
+            f"logical_modes must define every supported non-all-false combination; missing={rendered}.",
+            path=root_path,
+        )
+    return normalized
 
 
 def _bool_group_value_blocks(
@@ -2918,12 +3006,25 @@ def _bool_group_value_blocks(
             )
         value_groups.append(values)
 
+    supported_combinations = tuple(
+        tuple(bool(value) for value in raw_values)
+        for raw_values in itertools.product(*value_groups)
+        if any(raw_values)
+    )
+    logical_modes = _validated_logical_modes(
+        config,
+        group,
+        group_params,
+        supported_combinations,
+    )
+
     blocks: list[tuple[str, str, Mapping[str, bool]]] = []
-    for raw_values in itertools.product(*value_groups):
+    for raw_values in supported_combinations:
         values = dict(zip(group_params, (bool(value) for value in raw_values)))
-        if not any(values.values()):
-            continue
-        key, label = _logical_mode_metadata(group, values)
+        if logical_modes is None:
+            key, label = _logical_mode_metadata(values)
+        else:
+            key, label, _ = logical_modes[raw_values]
         blocks.append((key, label, values))
     if not blocks:
         names = ", ".join(group_params)
@@ -2932,10 +3033,8 @@ def _bool_group_value_blocks(
             f"bool group has no valid logical modes for params: {names}.",
             path="optimization_rules.bool_groups[0].params",
         )
-    logical_modes = group.get("logical_modes")
-    if isinstance(logical_modes, Mapping):
-        order = {str(name): index for index, name in enumerate(logical_modes)}
-        blocks.sort(key=lambda item: order.get(item[0], len(order)))
+    if logical_modes is not None:
+        blocks.sort(key=lambda item: logical_modes[tuple(item[2].values())][2])
     return tuple(blocks)
 
 

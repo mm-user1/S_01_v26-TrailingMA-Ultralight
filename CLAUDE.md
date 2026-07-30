@@ -406,10 +406,16 @@ backend advertises capability via `get_backend_metadata()` (normalized by
     variant-selector mappings, declared consumers, and dependency topology must
     be valid before runner or compiled packing. An optimized truly unbound
     execution parameter is fatal; a fixed truly unbound parameter is a warning.
-    A certified-but-unselected fixed mode parameter is informational, while an
-    optimized one is fatal. Bool-group block discriminators count as covered
+    A family-compatible certified-but-unselected fixed mode parameter is
+    informational, while an optimized one is fatal. Certified consumers from
+    incompatible execution families follow the truthful unbound warning/fatal
+    policy. Bool-group block discriminators count as covered
     axes; only axes inactive in every selected block warn. Plan diagnostics live
     at top-level `metadata["diagnostics"]`, not inside planning metadata.
+    Stage 2 blocking surfaces must render structured `error` diagnostics, the
+    normal warning panel must filter structured `warning` diagnostics, and
+    `info` must remain secondary/non-nagging. UI rendering must not treat the
+    string-only `validation_warnings` projection as its authority.
 
 - **Legacy V1 strategy-owned generation profiles**
   - S03 (`sampled_by_mode`): splits the search into `cc_only` / `tbands_only` /

@@ -103,6 +103,20 @@ def test_user_boundary_warmup_rejects_out_of_range_or_malformed_values(value):
         normalize_v2_runtime_values({"warmupBars": value})
 
 
+def test_user_boundary_warmup_error_uses_canonical_contract_bounds():
+    warmup = next(
+        field for field in runtime_contract_payload()["fields"]
+        if field["name"] == "warmupBars"
+    )
+    with pytest.raises(V2RuntimeValidationError) as exc_info:
+        normalize_v2_runtime_values({"warmupBars": warmup["minimum"] - 1})
+
+    assert (
+        f"between {warmup['minimum']} and {warmup['maximum']}"
+        in exc_info.value.diagnostics[0].message
+    )
+
+
 @pytest.mark.parametrize("value", [5, 20])
 def test_internal_warmup_accepts_non_negative_small_values(value):
     assert normalize_v2_runtime_values(

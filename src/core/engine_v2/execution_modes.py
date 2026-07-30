@@ -60,6 +60,55 @@ _SIGNAL_FIELDS = frozenset(
     }
 )
 
+_POSITION_MODE_VALUES = {
+    "entryOrder": frozenset({"market_next_open"}),
+    "stop": frozenset({"atr_swing"}),
+    "target": frozenset({"rr", "none"}),
+    "trail": frozenset({"ma", "none"}),
+    "trailActivation": frozenset({"none", "rr"}),
+    "sizing": frozenset({"risk_per_trade"}),
+    "maxDays": frozenset({"true", "false"}),
+    "boundary": frozenset({"strict_close", "none"}),
+    "margin": frozenset({"off", "report_only"}),
+    "priceRounding": frozenset({"none", "tick_outward"}),
+}
+_SIGNAL_MODE_VALUES = {
+    "topology": frozenset({"signal_reversal"}),
+    "entryOrder": frozenset({"market_next_open"}),
+    "stop": frozenset({"none", "emergency_pct"}),
+    "target": frozenset({"none"}),
+    "trail": frozenset({"none"}),
+    "trailActivation": frozenset({"none"}),
+    "sizing": frozenset({"fixed_pct_equity"}),
+    "exitOnSignal": frozenset({"true"}),
+    "maxDays": frozenset({"false"}),
+    "boundary": frozenset({"strict_close", "none"}),
+    "margin": frozenset({"off"}),
+    "priceRounding": frozenset({"none"}),
+}
+_MODE_VALUES_BY_FAMILY = {
+    "position": _POSITION_MODE_VALUES,
+    "signal_reversal": _SIGNAL_MODE_VALUES,
+}
+
+
+def execution_family_supports_mode_value(
+    family: str,
+    mode_field: str,
+    mode_value: str,
+) -> bool:
+    """Return whether a canonical mode value is supported by one V2 family.
+
+    Coupled combination validity remains the responsibility of the family
+    resolver; this authority answers whether the individual value participates
+    in any valid combination for that family.
+    """
+
+    family_values = _MODE_VALUES_BY_FAMILY.get(str(family))
+    if family_values is None:
+        return False
+    return str(mode_value) in family_values.get(str(mode_field), ())
+
 
 def _require(modes: Mapping[str, str], field: str, expected: str, family: str) -> None:
     actual = modes.get(field)
@@ -68,6 +117,13 @@ def _require(modes: Mapping[str, str], field: str, expected: str, family: str) -
             f"Unsupported {family} execution mode {field}={actual!r}; expected {expected!r}.",
             field=field,
         )
+
+
+def _only(values: frozenset[str]) -> str:
+    """Return the sole supported value for a required single-value field."""
+
+    expected, = values
+    return expected
 
 
 def _reject_unknown(modes: Mapping[str, str], allowed: frozenset[str], family: str) -> None:
@@ -83,24 +139,24 @@ def resolve_position_mode_state(modes: Mapping[str, str]) -> PositionModeState:
     """Validate and resolve the certified position/bracket family."""
 
     _reject_unknown(modes, _POSITION_FIELDS, "position/bracket")
-    _require(modes, "entryOrder", "market_next_open", "position/bracket")
-    _require(modes, "stop", "atr_swing", "position/bracket")
-    _require(modes, "sizing", "risk_per_trade", "position/bracket")
+    _require(modes, "entryOrder", _only(_POSITION_MODE_VALUES["entryOrder"]), "position/bracket")
+    _require(modes, "stop", _only(_POSITION_MODE_VALUES["stop"]), "position/bracket")
+    _require(modes, "sizing", _only(_POSITION_MODE_VALUES["sizing"]), "position/bracket")
 
     target_mode = modes.get("target")
     trail_mode = modes.get("trail")
-    if target_mode not in {"rr", "none"}:
+    if target_mode not in _POSITION_MODE_VALUES["target"]:
         raise ExecutionModeValidationError(
             f"Unsupported position/bracket execution mode target={target_mode!r}; expected 'rr' or 'none'.",
             field="target",
         )
-    if trail_mode not in {"ma", "none"}:
+    if trail_mode not in _POSITION_MODE_VALUES["trail"]:
         raise ExecutionModeValidationError(
             f"Unsupported position/bracket execution mode trail={trail_mode!r}; expected 'ma' or 'none'.",
             field="trail",
         )
     trail_activation_mode = modes.get("trailActivation", "none")
-    if trail_activation_mode not in {"none", "rr"}:
+    if trail_activation_mode not in _POSITION_MODE_VALUES["trailActivation"]:
         raise ExecutionModeValidationError(
             "Unsupported position/bracket execution mode "
             f"trailActivation={trail_activation_mode!r}; expected 'none' or 'rr'.",
@@ -116,25 +172,25 @@ def resolve_position_mode_state(modes: Mapping[str, str]) -> PositionModeState:
         )
 
     max_days = modes.get("maxDays", "false")
-    if max_days not in {"true", "false"}:
+    if max_days not in _POSITION_MODE_VALUES["maxDays"]:
         raise ExecutionModeValidationError(
             f"Unsupported position/bracket execution mode maxDays={max_days!r}; expected 'true' or 'false'.",
             field="maxDays",
         )
     boundary = modes.get("boundary", "strict_close")
-    if boundary not in {"strict_close", "none"}:
+    if boundary not in _POSITION_MODE_VALUES["boundary"]:
         raise ExecutionModeValidationError(
             f"Unsupported position/bracket execution mode boundary={boundary!r}.",
             field="boundary",
         )
     margin = modes.get("margin", "off")
-    if margin not in {"off", "report_only"}:
+    if margin not in _POSITION_MODE_VALUES["margin"]:
         raise ExecutionModeValidationError(
             f"Unsupported position/bracket execution mode margin={margin!r}.",
             field="margin",
         )
     rounding = modes.get("priceRounding", "none")
-    if rounding not in {"none", "tick_outward"}:
+    if rounding not in _POSITION_MODE_VALUES["priceRounding"]:
         raise ExecutionModeValidationError(
             f"Unsupported position/bracket execution mode priceRounding={rounding!r}.",
             field="priceRounding",
@@ -154,25 +210,17 @@ def resolve_signal_reversal_mode_state(modes: Mapping[str, str]) -> SignalRevers
     """Validate and resolve the certified signal-reversal family."""
 
     _reject_unknown(modes, _SIGNAL_FIELDS, "signal_reversal")
-    _require(modes, "topology", "signal_reversal", "signal_reversal")
-    _require(modes, "entryOrder", "market_next_open", "signal_reversal")
-    _require(modes, "sizing", "fixed_pct_equity", "signal_reversal")
-    _require(modes, "exitOnSignal", "true", "signal_reversal")
-    _require(modes, "priceRounding", "none", "signal_reversal")
+    for field in ("topology", "entryOrder", "sizing", "exitOnSignal", "priceRounding"):
+        _require(modes, field, _only(_SIGNAL_MODE_VALUES[field]), "signal_reversal")
 
     stop_mode = modes.get("stop")
-    if stop_mode not in {"none", "emergency_pct"}:
+    if stop_mode not in _SIGNAL_MODE_VALUES["stop"]:
         raise ExecutionModeValidationError(
             f"Unsupported signal_reversal execution mode stop={stop_mode!r}; expected 'none' or 'emergency_pct'.",
             field="stop",
         )
-    for field, expected in (
-        ("target", "none"),
-        ("trail", "none"),
-        ("trailActivation", "none"),
-        ("maxDays", "false"),
-        ("margin", "off"),
-    ):
+    for field in ("target", "trail", "trailActivation", "maxDays", "margin"):
+        expected = _only(_SIGNAL_MODE_VALUES[field])
         actual = modes.get(field)
         if actual is not None and actual != expected:
             raise ExecutionModeValidationError(
@@ -180,7 +228,7 @@ def resolve_signal_reversal_mode_state(modes: Mapping[str, str]) -> SignalRevers
                 field=field,
             )
     boundary = modes.get("boundary", "strict_close")
-    if boundary not in {"strict_close", "none"}:
+    if boundary not in _SIGNAL_MODE_VALUES["boundary"]:
         raise ExecutionModeValidationError(
             f"Unsupported signal_reversal execution mode boundary={boundary!r}.",
             field="boundary",
@@ -208,6 +256,7 @@ __all__ = [
     "ExecutionModeValidationError",
     "PositionModeState",
     "SignalReversalModeState",
+    "execution_family_supports_mode_value",
     "resolve_position_mode_state",
     "resolve_signal_reversal_mode_state",
     "validate_execution_modes",
