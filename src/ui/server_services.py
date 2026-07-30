@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
@@ -25,6 +26,13 @@ from core.backtest_engine import (
     prepare_dataset_with_warmup,
 )
 from core.export import export_trades_csv
+from core.engine_v2.diagnostics import V2Diagnostic, V2ValidationError
+from core.engine_v2.profile import ExecutionProfile, ProfileValidationError, parse_execution_profile
+from core.engine_v2.runtime_contract import (
+    V2_RESERVED_RUNTIME_PARAM_NAMES,
+    V2RuntimeValidationError,
+    normalize_v2_runtime_values,
+)
 from core.grid_engine import (
     GRID_SUPPORTED_FAST_OBJECTIVES,
     GRID_SUPPORTED_SLOW_OBJECTIVES,
@@ -498,10 +506,43 @@ def _parse_warmup_bars(raw_value: Any, default: int = 1000) -> int:
     return max(100, min(5000, warmup_bars))
 
 
-def _execute_backtest_request(strategy_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[str, HTTPStatus]]]:
+def _execute_backtest_request(
+    strategy_context: "ResolvedStrategyContext",
+) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[str, HTTPStatus]]]:
     """Execute one backtest run from current Flask request payload."""
 
-    warmup_bars = _parse_warmup_bars(request.form.get("warmupBars", "1000"))
+    strategy_id = strategy_context.strategy_id
+
+    payload_raw = request.form.get("payload", "{}")
+    try:
+        payload = json.loads(payload_raw)
+    except json.JSONDecodeError:
+        return None, ("Invalid payload JSON.", HTTPStatus.BAD_REQUEST)
+    if not isinstance(payload, dict):
+        return None, ("Invalid payload JSON.", HTTPStatus.BAD_REQUEST)
+
+    if strategy_context.is_v2:
+        _require_valid_v2_context(strategy_context)
+        if "warmupBars" in payload:
+            raise _reserved_runtime_axis_error(
+                strategy_context,
+                path="parameters.warmupBars",
+                name="warmupBars",
+            )
+        runtime_members = _runtime_members_from_mapping(payload, prefix="parameters")
+        if "warmupBars" in request.form:
+            runtime_members.append(
+                ("warmupBars", "warmupBars", request.form.get("warmupBars"))
+            )
+        runtime = _normalize_v2_request_runtime(
+            strategy_context,
+            runtime_members,
+            missing_date_filter=False,
+        )
+        payload = _with_runtime_projection(payload, runtime.execution_projection)
+        warmup_bars = runtime.values["warmupBars"]
+    else:
+        warmup_bars = _parse_warmup_bars(request.form.get("warmupBars", "1000"))
 
     csv_path_raw = (request.form.get("csvPath") or "").strip()
     data_source = None
@@ -541,16 +582,6 @@ def _execute_backtest_request(strategy_id: str) -> Tuple[Optional[Dict[str, Any]
     data_source = opened_file
     csv_name = resolved_path.name
 
-    payload_raw = request.form.get("payload", "{}")
-    try:
-        payload = json.loads(payload_raw)
-    except json.JSONDecodeError:
-        _close_opened_file()
-        return None, ("Invalid payload JSON.", HTTPStatus.BAD_REQUEST)
-    if not isinstance(payload, dict):
-        _close_opened_file()
-        return None, ("Invalid payload JSON.", HTTPStatus.BAD_REQUEST)
-
     from strategies import get_strategy
 
     try:
@@ -572,9 +603,13 @@ def _execute_backtest_request(strategy_id: str) -> Tuple[Optional[Dict[str, Any]
         _close_opened_file()
 
     trade_start_idx = 0
-    use_date_filter = bool(payload.get("dateFilter", False))
-    start_raw = payload.get("start")
-    end_raw = payload.get("end")
+    use_date_filter = (
+        runtime.values["dateFilter"]
+        if strategy_context.is_v2
+        else bool(payload.get("dateFilter", False))
+    )
+    start_raw = runtime.values["start"] if strategy_context.is_v2 else payload.get("start")
+    end_raw = runtime.values["end"] if strategy_context.is_v2 else payload.get("end")
 
     if use_date_filter and (start_raw is not None or end_raw is not None):
         start, end = align_date_bounds(df.index, start_raw, end_raw)
@@ -758,23 +793,292 @@ def _get_parameter_types(strategy_id: str) -> Dict[str, str]:
     return param_types
 
 
-def _resolve_strategy_id_from_request() -> Tuple[Optional[str], Optional[object]]:
-    from strategies import list_strategies
+@dataclass(frozen=True, slots=True)
+class ResolvedStrategyContext:
+    strategy_id: str
+    engine: str
+    config: Dict[str, Any]
+    profile: Optional[ExecutionProfile]
+    diagnostics: Tuple[V2Diagnostic, ...]
+    validation_error: Optional[V2ValidationError]
 
+    @property
+    def is_v2(self) -> bool:
+        return self.engine == "v2"
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedV2Runtime:
+    values: Dict[str, Any]
+    execution_projection: Dict[str, Any]
+    diagnostics: Tuple[V2Diagnostic, ...]
+
+
+def _validation_error(
+    *,
+    code: str,
+    strategy_id: str,
+    path: str,
+    message: str,
+) -> V2ValidationError:
+    return V2ValidationError(
+        V2Diagnostic(
+            severity="error",
+            code=code,
+            strategy_id=strategy_id,
+            path=path,
+            variant=None,
+            message=message,
+        )
+    )
+
+
+def _resolve_strategy_context(
+    aliases: List[Tuple[str, bool, Any]],
+) -> ResolvedStrategyContext:
+    supplied = [
+        (path, str(value).strip())
+        for path, present, value in aliases
+        if present and value is not None and str(value).strip()
+    ]
+    distinct = tuple(dict.fromkeys(value for _path, value in supplied))
+    if not distinct:
+        raise _validation_error(
+            code="V2_MISSING_STRATEGY_ID",
+            strategy_id="<unknown strategy>",
+            path="strategy_id",
+            message="A non-empty strategy ID is required.",
+        )
+    if len(distinct) > 1:
+        details = ", ".join(f"{path}={value!r}" for path, value in supplied)
+        raise _validation_error(
+            code="V2_CONFLICTING_STRATEGY_ID",
+            strategy_id=distinct[0],
+            path="strategy_id",
+            message=f"Conflicting strategy IDs were supplied: {details}.",
+        )
+
+    strategy_id = distinct[0]
+    from strategies import get_strategy_config
+
+    try:
+        config = deepcopy(get_strategy_config(strategy_id))
+    except (KeyError, ValueError) as exc:
+        raise _validation_error(
+            code="V2_UNKNOWN_STRATEGY_ID",
+            strategy_id=strategy_id,
+            path="strategy_id",
+            message=f"Unknown strategy: {strategy_id}.",
+        ) from exc
+
+    engine = str(config.get("engine", "v1") or "v1").strip().lower()
+    profile: Optional[ExecutionProfile] = None
+    diagnostics: Tuple[V2Diagnostic, ...] = ()
+    validation_error: Optional[V2ValidationError] = None
+    if engine == "v2":
+        try:
+            profile = parse_execution_profile(config)
+            diagnostics = tuple(profile.diagnostics)
+        except ProfileValidationError as exc:
+            diagnostics = tuple(exc.diagnostics)
+            validation_error = exc
+    return ResolvedStrategyContext(
+        strategy_id=strategy_id,
+        engine=engine,
+        config=config,
+        profile=profile,
+        diagnostics=diagnostics,
+        validation_error=validation_error,
+    )
+
+
+def _request_strategy_aliases() -> List[Tuple[str, bool, Any]]:
     json_payload = request.get_json(silent=True) if request.is_json else None
-    strategy_id = request.form.get("strategy")
+    return [
+        ("form.strategy", "strategy" in request.form, request.form.get("strategy")),
+        (
+            "json.strategy",
+            isinstance(json_payload, dict) and "strategy" in json_payload,
+            json_payload.get("strategy") if isinstance(json_payload, dict) else None,
+        ),
+    ]
 
-    if not strategy_id and isinstance(json_payload, dict):
-        strategy_id = json_payload.get("strategy")
 
-    if strategy_id:
-        return strategy_id, None
+def _resolve_strategy_id_from_request() -> ResolvedStrategyContext:
+    """Resolve the strict form/JSON strategy aliases used by run endpoints."""
 
-    available = list_strategies()
-    if available:
-        return available[0]["id"], None
+    return _resolve_strategy_context(_request_strategy_aliases())
 
-    return None, (jsonify({"error": "No strategies available."}), HTTPStatus.INTERNAL_SERVER_ERROR)
+
+def _require_valid_v2_context(context: ResolvedStrategyContext) -> None:
+    if context.validation_error is not None:
+        raise context.validation_error
+
+
+def _validation_error_response(
+    exc: V2ValidationError,
+    status: HTTPStatus = HTTPStatus.BAD_REQUEST,
+) -> object:
+    diagnostics = [item.to_dict() for item in exc.diagnostics]
+    return jsonify({"error": str(exc), "diagnostics": diagnostics}), status
+
+
+def _reserved_runtime_axis_error(
+    context: ResolvedStrategyContext,
+    *,
+    path: str,
+    name: str,
+) -> V2ValidationError:
+    return _validation_error(
+        code="V2_RESERVED_RUNTIME_AXIS",
+        strategy_id=context.strategy_id,
+        path=path,
+        message=(
+            f"{context.strategy_id}: {path} is invalid because '{name}' is core-owned "
+            "V2 runtime state and must use the runtime control."
+        ),
+    )
+
+
+def _runtime_members_from_mapping(
+    values: Any,
+    *,
+    prefix: str,
+) -> List[Tuple[str, str, Any]]:
+    if not isinstance(values, dict):
+        return []
+    return [
+        (name, f"{prefix}.{name}" if prefix else name, values[name])
+        for name in V2_RESERVED_RUNTIME_PARAM_NAMES
+        if name in values
+    ]
+
+
+def _normalize_v2_request_runtime(
+    context: ResolvedStrategyContext,
+    members: List[Tuple[str, str, Any]],
+    *,
+    missing_date_filter: bool,
+    user_boundary: bool = True,
+) -> ResolvedV2Runtime:
+    """Normalize one V2 boundary and retain only present date execution keys."""
+
+    _require_valid_v2_context(context)
+    raw_values: Dict[str, Any] = {}
+    paths: Dict[str, str] = {}
+    for name, path, value in members:
+        if name in raw_values and raw_values[name] != value:
+            raise _validation_error(
+                code="V2_INVALID_RUNTIME_VALUE",
+                strategy_id=context.strategy_id,
+                path=path,
+                message=(
+                    f"{context.strategy_id}: conflicting values were supplied for "
+                    f"runtime field '{name}' at {paths[name]} and {path}."
+                ),
+            )
+        if name not in raw_values:
+            raw_values[name] = value
+            paths[name] = path
+    try:
+        values = normalize_v2_runtime_values(
+            raw_values,
+            strategy_id=context.strategy_id,
+            user_boundary=user_boundary,
+            missing_date_filter=missing_date_filter,
+        )
+    except V2RuntimeValidationError as exc:
+        remapped = tuple(
+            V2Diagnostic(
+                severity=item.severity,
+                code=item.code,
+                strategy_id=item.strategy_id,
+                path=paths.get(item.path, item.path),
+                variant=item.variant,
+                message=item.message,
+            )
+            for item in exc.diagnostics
+        )
+        raise V2RuntimeValidationError(remapped) from exc
+
+    projection = {
+        name: values[name]
+        for name in ("dateFilter", "start", "end")
+        if name in raw_values
+    }
+    return ResolvedV2Runtime(
+        values=values,
+        execution_projection=projection,
+        diagnostics=context.diagnostics,
+    )
+
+
+def _with_runtime_projection(
+    source: Dict[str, Any],
+    projection: Dict[str, Any],
+) -> Dict[str, Any]:
+    output = deepcopy(source)
+    output.update(projection)
+    return output
+
+
+def _validate_v2_optimizer_runtime_paths(
+    context: ResolvedStrategyContext,
+    payload: Dict[str, Any],
+) -> None:
+    for container_name in ("enabled_params", "param_ranges"):
+        container = payload.get(container_name)
+        if not isinstance(container, dict):
+            continue
+        for name in V2_RESERVED_RUNTIME_PARAM_NAMES:
+            if name in container:
+                raise _reserved_runtime_axis_error(
+                    context,
+                    path=f"{container_name}.{name}",
+                    name=name,
+                )
+    fixed_params = payload.get("fixed_params")
+    if not isinstance(fixed_params, dict):
+        return
+    for name in V2_RESERVED_RUNTIME_PARAM_NAMES:
+        option_name = f"{name}_options"
+        if option_name in fixed_params:
+            raise _reserved_runtime_axis_error(
+                context,
+                path=f"fixed_params.{option_name}",
+                name=name,
+            )
+    if "warmupBars" in fixed_params:
+        raise _reserved_runtime_axis_error(
+            context,
+            path="fixed_params.warmupBars",
+            name="warmupBars",
+        )
+
+
+def _normalize_v2_optimizer_payload(
+    context: ResolvedStrategyContext,
+    payload: Dict[str, Any],
+    *,
+    warmup_members: List[Tuple[str, str, Any]],
+    missing_date_filter: bool = False,
+) -> Tuple[Dict[str, Any], ResolvedV2Runtime]:
+    _require_valid_v2_context(context)
+    _validate_v2_optimizer_runtime_paths(context, payload)
+    fixed_params = payload.get("fixed_params")
+    runtime_members = _runtime_members_from_mapping(fixed_params, prefix="fixed_params")
+    runtime_members.extend(warmup_members)
+    runtime = _normalize_v2_request_runtime(
+        context,
+        runtime_members,
+        missing_date_filter=missing_date_filter,
+    )
+    normalized = deepcopy(payload)
+    normalized_fixed = deepcopy(fixed_params) if isinstance(fixed_params, dict) else fixed_params
+    if isinstance(normalized_fixed, dict):
+        normalized_fixed.update(runtime.execution_projection)
+        normalized["fixed_params"] = normalized_fixed
+    return normalized, runtime
 
 
 SCORE_METRIC_KEYS: Tuple[str, ...] = (
@@ -2073,10 +2377,11 @@ def _build_optimization_config(
     strategy_id=None,
     warmup_bars: Optional[int] = None,
 ) -> OptimizationConfig:
+    strategy_id = str(strategy_id or "").strip()
+    if not strategy_id:
+        raise ValueError("Strategy ID is required for optimization.")
     if not isinstance(payload, dict):
         raise ValueError("Invalid optimization config payload.")
-
-    from strategies import list_strategies
 
     def _parse_bool(value, default=False):
         if isinstance(value, bool):
@@ -2184,16 +2489,6 @@ def _build_optimization_config(
             normalized["metric_bounds"] = bounds
 
         return normalized
-
-    if strategy_id is None:
-        strategy_id = payload.get("strategy")
-
-    if not strategy_id:
-        available_strategies = list_strategies()
-        if available_strategies:
-            strategy_id = available_strategies[0]["id"]
-        else:
-            raise ValueError("Strategy ID is required for optimization.")
 
     if warmup_bars is None:
         warmup_bars_raw = payload.get("warmup_bars", 1000)

@@ -172,6 +172,44 @@ TZ62 diagnostic corrections preserve all Stage 1 identity and candidate pins:
   `V2_UNBOUND_OPTIMIZED_EXECUTION_PARAM`, and
   `V2_UNBOUND_FIXED_EXECUTION_PARAM`.
 
+TZ64A certifies the first cross-surface runtime/API boundary without changing
+the core runtime or identity versions:
+
+- strategy identity is explicit and conflict-checked before work for Grid
+  Preview, Backtest/trade download, direct Optuna/Grid, and Walk-Forward
+  identity selection; request fallbacks to S03 or the first discovered strategy
+  are removed;
+- config readiness, Preview, Backtest/trades, and direct Optuna/Grid use one
+  engine-aware server adapter around `normalize_v2_runtime_values`; V1 bypasses
+  it and retains its existing Warmup clamp/truthiness behavior;
+- the adapter preserves date-key presence in execution parameters while
+  canonicalizing present values (`false` to boolean, blank dates to `null`, and
+  valid dates to UTC `Z`). Warmup remains orchestration state and reserved
+  optimizer/Backtest injection fails with `V2_RESERVED_RUNTIME_AXIS`;
+- valid V2 config responses add the exact runtime contract/defaults and
+  structured diagnostics. Known invalid profiles return 422 on the config
+  resource and 400 on Phase-A run surfaces; unknown configs return structured
+  JSON 404;
+- S06 full remains 48,480 rows with semantic digest
+  `fc55d174e835e7196ae5fcf21427d318dc364241f6b10560aa32545e6910a08f`
+  and fingerprint
+  `0f8d001c380df5ee95d34ca4e25910c674e20e9e8f34886a1bd2f1c261f019b2`.
+  Request representation changes only the ordered row payload where approved:
+  blank dates move from
+  `8c2ca227ef140b31700f358d16a84246f34d7edb0f46b63f139bef003a8a25a5`
+  to canonical-null
+  `c5645dfc07084855c4618053b12c58b55859637425fedafe849dd9f751f01ff6`,
+  and naive dates move from
+  `73d4665bffa3a4df39d84e71cce5778d50cae0cb43ecb1f6f340010d20c68784`
+  to canonical-UTC
+  `54a7709b31efc592bf6d329d45b7a0dd2bab38a78d6a7bdf1673d89f1829e19d`.
+  Omitted dates retain the omitted-key digest
+  `e0ba87a4dbf66a843d462d0f73d8b1c991841b247acbb6051d999bd5767b5f7c`.
+
+Queue/preset, WFA-window runtime, stored-study, rerun, export, and UI severity
+integration remain outside TZ64A. `_derive_grid_preview` deliberately retains
+its prior internal runtime behavior pending the next integration phase.
+
 Grid V2 has two execution tiers:
 
 - reference tier: loops candidates through the shared public V2 runner;

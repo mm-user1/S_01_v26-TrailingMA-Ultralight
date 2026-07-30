@@ -210,6 +210,35 @@ warning nags and may appear only in secondary author/debug details or another
 non-blocking affordance. The string-only `validation_warnings` tuple remains a
 compatibility projection, not the UI authority.
 
+The Phase-A server boundary resolves strategy identity before V2 runtime
+normalization for config readiness, Grid Preview, direct Backtest/trade
+download, and direct Optuna/Grid. Run endpoints accept only their documented
+strategy aliases and require one non-empty value; equal aliases agree, empty
+aliases do not override a real value, and distinct non-empty aliases fail with
+`V2_CONFLICTING_STRATEGY_ID`. Missing and unknown identities use
+`V2_MISSING_STRATEGY_ID` and `V2_UNKNOWN_STRATEGY_ID`. There is no first-strategy
+or S03 fallback. Walk-Forward uses the same strict identity rule, while its
+window runtime orchestration remains a later integration phase.
+
+At these V2 user boundaries, one server adapter calls the core runtime
+normalizer once. Its complete mapping always contains all four runtime fields,
+but its execution projection preserves request presence: present `dateFilter`
+becomes a real boolean, present blank `start`/`end` become `null`, present dates
+become canonical UTC strings, and absent date keys remain absent from
+`fixed_params`. User Warmup is accepted only through the separate runtime
+transport and becomes `OptimizationConfig.warmup_bars` or the Backtest data-
+preparation value. Reserved fields in `enabled_params`/`param_ranges`, reserved
+`*_options`, `fixed_params.warmupBars`, and Backtest
+`parameters.warmupBars` fail by presence with `V2_RESERVED_RUNTIME_AXIS`.
+
+The V2 config resource returns deep-copied additive `runtime_contract`,
+`runtime_values`, `diagnostics`, and `validation_warnings` facts. A known invalid
+V2 profile returns structured HTTP 422 there and HTTP 400 on Phase-A run
+surfaces; an unknown config resource returns structured JSON 404. V1 config and
+runtime shapes remain unchanged. The stored-study `_derive_grid_preview`
+runtime path is intentionally deferred with Queue/preset, WFA-window, storage,
+rerun, and export normalization.
+
 ## Signals.py Requirements
 
 Signal code must be deterministic and causal:

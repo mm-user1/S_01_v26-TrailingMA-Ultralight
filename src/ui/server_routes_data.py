@@ -19,6 +19,8 @@ from core.backtest_engine import (
 )
 from core.bundle_export import build_lancelot_partial_bundle
 from core.export import export_trades_csv
+from core.engine_v2.diagnostics import V2ValidationError, warning_messages
+from core.engine_v2.runtime_contract import runtime_contract_payload
 from core.optuna_engine import (
     CONSTRAINT_OPERATORS,
     OBJECTIVE_DIRECTIONS,
@@ -77,10 +79,12 @@ try:
         _list_presets,
         _load_preset,
         _normalize_preset_payload,
+        _normalize_v2_request_runtime,
         _parse_csv_parameter_block,
         _preset_path,
         _save_queue_state,
         _resolve_csv_path,
+        _resolve_strategy_context,
         _resolve_strategy_id_from_request,
         _resolve_wfa_period,
         _run_equity_export,
@@ -90,6 +94,7 @@ try:
         _validate_csv_for_study,
         _validate_preset_name,
         _validate_strategy_params,
+        _validation_error_response,
         _write_preset,
         build_grid_settings_view,
         validate_constraints_config,
@@ -112,10 +117,12 @@ except ImportError:
         _list_presets,
         _load_preset,
         _normalize_preset_payload,
+        _normalize_v2_request_runtime,
         _parse_csv_parameter_block,
         _preset_path,
         _save_queue_state,
         _resolve_csv_path,
+        _resolve_strategy_context,
         _resolve_strategy_id_from_request,
         _resolve_wfa_period,
         _run_equity_export,
@@ -125,6 +132,7 @@ except ImportError:
         _validate_csv_for_study,
         _validate_preset_name,
         _validate_strategy_params,
+        _validation_error_response,
         _write_preset,
         build_grid_settings_view,
         validate_constraints_config,
@@ -1518,9 +1526,16 @@ def register_routes(app):
             JSON response with strategy configuration
         """
         try:
-            from strategies import get_strategy_config
+            strategy_context = _resolve_strategy_context(
+                [("strategy_id", True, strategy_id)]
+            )
+            if strategy_context.validation_error is not None:
+                return _validation_error_response(
+                    strategy_context.validation_error,
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                )
 
-            config = get_strategy_config(strategy_id)
+            config = strategy_context.config
             parameters = config.get("parameters", {}) if isinstance(config, dict) else {}
             parameter_order = list(parameters.keys()) if isinstance(parameters, dict) else []
             group_order = []
@@ -1532,7 +1547,21 @@ def register_routes(app):
                     if group not in group_order:
                         group_order.append(group)
 
-            payload = dict(config or {})
+            payload = config
+            if strategy_context.is_v2:
+                runtime = _normalize_v2_request_runtime(
+                    strategy_context,
+                    [],
+                    missing_date_filter=True,
+                )
+                payload["runtime_contract"] = runtime_contract_payload()
+                payload["runtime_values"] = runtime.values
+                payload["diagnostics"] = [
+                    item.to_dict() for item in strategy_context.diagnostics
+                ]
+                payload["validation_warnings"] = list(
+                    warning_messages(strategy_context.diagnostics)
+                )
             payload["parameter_order"] = parameter_order
             payload["group_order"] = group_order
             try:
@@ -1567,6 +1596,8 @@ def register_routes(app):
                     "reason": grid_reason,
                 }
             except Exception as exc:  # pragma: no cover - defensive UI metadata only
+                if strategy_context.is_v2:
+                    raise
                 payload["grid_optimizer"] = {
                     "supported": False,
                     "numba_available": False,
@@ -1575,13 +1606,16 @@ def register_routes(app):
                 }
             return jsonify(payload), HTTPStatus.OK
 
-        except FileNotFoundError:
-            return (
-                jsonify({"error": f"Strategy '{strategy_id}' not found"}),
-                HTTPStatus.NOT_FOUND,
+        except V2ValidationError as exc:
+            code = exc.diagnostics[0].code
+            status = (
+                HTTPStatus.NOT_FOUND
+                if code == "V2_UNKNOWN_STRATEGY_ID"
+                else HTTPStatus.BAD_REQUEST
             )
+            return _validation_error_response(exc, status)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to load config for %s", strategy_id)
+            app.logger.exception("Failed to load config for %s", strategy_id)
             return (
                 jsonify({"error": f"Failed to load strategy config: {str(exc)}"}),
                 HTTPStatus.INTERNAL_SERVER_ERROR,

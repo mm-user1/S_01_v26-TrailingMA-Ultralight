@@ -20,6 +20,7 @@ from core.backtest_engine import (
     prepare_dataset_with_warmup,
 )
 from core.export import export_trades_csv
+from core.engine_v2.diagnostics import V2ValidationError
 from core.grid_engine import build_grid_dsr_results, preview_grid_parameter_space
 from core.optuna_engine import (
     CONSTRAINT_OPERATORS,
@@ -77,11 +78,14 @@ try:
         _list_presets,
         _load_preset,
         _normalize_run_id,
+        _normalize_v2_optimizer_payload,
         _normalize_preset_payload,
         _parse_csv_parameter_block,
+        _parse_warmup_bars,
         _preset_path,
         _register_cancelled_run,
         _resolve_csv_path,
+        _resolve_strategy_context,
         _resolve_strategy_id_from_request,
         _resolve_wfa_period,
         _run_equity_export,
@@ -90,6 +94,7 @@ try:
         _set_optimization_state,
         _validate_csv_for_study,
         _validate_preset_name,
+        _validation_error_response,
         _write_preset,
         validate_constraints_config,
         validate_objectives_config,
@@ -110,11 +115,14 @@ except ImportError:
         _list_presets,
         _load_preset,
         _normalize_run_id,
+        _normalize_v2_optimizer_payload,
         _normalize_preset_payload,
         _parse_csv_parameter_block,
+        _parse_warmup_bars,
         _preset_path,
         _register_cancelled_run,
         _resolve_csv_path,
+        _resolve_strategy_context,
         _resolve_strategy_id_from_request,
         _resolve_wfa_period,
         _run_equity_export,
@@ -123,6 +131,7 @@ except ImportError:
         _set_optimization_state,
         _validate_csv_for_study,
         _validate_preset_name,
+        _validation_error_response,
         _write_preset,
         validate_constraints_config,
         validate_objectives_config,
@@ -191,13 +200,61 @@ def register_routes(app):
         config_payload = dict(config_payload)
         config_payload["optimization_mode"] = "grid"
 
-        strategy_id = (
-            config_payload.get("strategy_id")
-            or payload.get("strategyId")
-            or request.form.get("strategyId")
-            or request.args.get("strategy_id")
-            or "s03_reversal_v10"
-        )
+        try:
+            strategy_context = _resolve_strategy_context(
+                [
+                    (
+                        "config.strategy_id",
+                        "strategy_id" in config_payload,
+                        config_payload.get("strategy_id"),
+                    ),
+                    ("payload.strategyId", "strategyId" in payload, payload.get("strategyId")),
+                    (
+                        "form.strategyId",
+                        "strategyId" in request.form,
+                        request.form.get("strategyId"),
+                    ),
+                    (
+                        "args.strategy_id",
+                        "strategy_id" in request.args,
+                        request.args.get("strategy_id"),
+                    ),
+                ]
+            )
+            if strategy_context.is_v2:
+                warmup_members = []
+                if "warmupBars" in payload:
+                    warmup_members.append(
+                        ("warmupBars", "payload.warmupBars", payload.get("warmupBars"))
+                    )
+                if "warmup_bars" in config_payload:
+                    warmup_members.append(
+                        (
+                            "warmupBars",
+                            "config.warmup_bars",
+                            config_payload.get("warmup_bars"),
+                        )
+                    )
+                config_payload, runtime = _normalize_v2_optimizer_payload(
+                    strategy_context,
+                    config_payload,
+                    warmup_members=warmup_members,
+                )
+                warmup_bars = runtime.values["warmupBars"]
+            else:
+                try:
+                    warmup_bars = int(
+                        payload.get(
+                            "warmupBars",
+                            config_payload.get("warmup_bars", 1000),
+                        )
+                        or 1000
+                    )
+                except (TypeError, ValueError):
+                    warmup_bars = 1000
+        except V2ValidationError as exc:
+            return _validation_error_response(exc)
+
         try:
             worker_processes = int(
                 config_payload.get("worker_processes", config_payload.get("workerProcesses", 1))
@@ -205,20 +262,18 @@ def register_routes(app):
             )
         except (TypeError, ValueError):
             worker_processes = 1
-        try:
-            warmup_bars = int(payload.get("warmupBars", config_payload.get("warmup_bars", 1000)) or 1000)
-        except (TypeError, ValueError):
-            warmup_bars = 1000
 
         try:
             optimization_config = _build_optimization_config(
                 "grid-preview.csv",
                 config_payload,
                 worker_processes,
-                str(strategy_id),
+                strategy_context.strategy_id,
                 warmup_bars,
             )
             preview = preview_grid_parameter_space(optimization_config)
+        except V2ValidationError as exc:
+            return _validation_error_response(exc)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
         except Exception:  # pragma: no cover - defensive
@@ -295,6 +350,11 @@ def register_routes(app):
     def run_walkforward_optimization() -> object:
         """Run Walk-Forward Analysis"""
         data = request.form
+        try:
+            strategy_context = _resolve_strategy_id_from_request()
+        except V2ValidationError as exc:
+            return _validation_error_response(exc)
+        strategy_id = strategy_context.strategy_id
         run_id = _resolve_request_run_id(data)
         _clear_cancelled_run(run_id)
         csv_path_raw = (data.get("csvPath") or "").strip()
@@ -360,10 +420,6 @@ def register_routes(app):
         valid, error = validate_sampler_config(sampler_type, population_size_val, crossover_prob_val)
         if not valid:
             return jsonify({"error": error}), HTTPStatus.BAD_REQUEST
-
-        strategy_id, error_response = _resolve_strategy_id_from_request()
-        if error_response:
-            return error_response
 
         warmup_bars_raw = data.get("warmupBars", "1000")
         try:
@@ -885,11 +941,11 @@ def register_routes(app):
 
     @app.post("/api/backtest")
     def run_backtest() -> object:
-        strategy_id, error_response = _resolve_strategy_id_from_request()
-        if error_response:
-            return error_response
-
-        execution, error = _execute_backtest_request(strategy_id)
+        try:
+            strategy_context = _resolve_strategy_id_from_request()
+            execution, error = _execute_backtest_request(strategy_context)
+        except V2ValidationError as exc:
+            return _validation_error_response(exc)
         if error:
             return error
         result = execution["result"]
@@ -903,11 +959,11 @@ def register_routes(app):
 
     @app.post("/api/backtest/trades")
     def download_backtest_trades() -> object:
-        strategy_id, error_response = _resolve_strategy_id_from_request()
-        if error_response:
-            return error_response
-
-        execution, error = _execute_backtest_request(strategy_id)
+        try:
+            strategy_context = _resolve_strategy_id_from_request()
+            execution, error = _execute_backtest_request(strategy_context)
+        except V2ValidationError as exc:
+            return _validation_error_response(exc)
         if error:
             return error
 
@@ -915,7 +971,11 @@ def register_routes(app):
         csv_name = str(execution.get("csv_name") or "")
         source_stem = Path(csv_name).stem if csv_name else "dataset"
         safe_source = re.sub(r"[^A-Za-z0-9._-]+", "_", source_stem).strip("_") or "dataset"
-        safe_strategy = re.sub(r"[^A-Za-z0-9._-]+", "_", strategy_id).strip("_") or "strategy"
+        safe_strategy = re.sub(
+            r"[^A-Za-z0-9._-]+",
+            "_",
+            strategy_context.strategy_id,
+        ).strip("_") or "strategy"
         filename = f"backtest_{safe_strategy}_{safe_source}_trades.csv"
 
         return _send_trades_csv(
@@ -928,6 +988,38 @@ def register_routes(app):
 
     @app.post("/api/optimize")
     def run_optimization_endpoint() -> object:
+        config_raw = request.form.get("config")
+        if not config_raw:
+            return ("Optimization config is required.", HTTPStatus.BAD_REQUEST)
+        try:
+            config_payload = json.loads(config_raw)
+        except json.JSONDecodeError:
+            return ("Invalid optimization config JSON.", HTTPStatus.BAD_REQUEST)
+        if not isinstance(config_payload, dict):
+            return ("Invalid optimization config JSON.", HTTPStatus.BAD_REQUEST)
+
+        try:
+            strategy_context = _resolve_strategy_id_from_request()
+            if strategy_context.is_v2:
+                warmup_members = []
+                if "warmupBars" in request.form:
+                    warmup_members.append(
+                        ("warmupBars", "warmupBars", request.form.get("warmupBars"))
+                    )
+                config_payload, runtime = _normalize_v2_optimizer_payload(
+                    strategy_context,
+                    config_payload,
+                    warmup_members=warmup_members,
+                )
+                warmup_bars = runtime.values["warmupBars"]
+            else:
+                warmup_bars = _parse_warmup_bars(
+                    request.form.get("warmupBars", "1000")
+                )
+        except V2ValidationError as exc:
+            return _validation_error_response(exc)
+        strategy_id = strategy_context.strategy_id
+
         csv_path_raw = (request.form.get("csvPath") or "").strip()
         data_path = ""
         source_name = ""
@@ -951,14 +1043,6 @@ def register_routes(app):
         data_source = str(resolved_path)
         data_path = str(resolved_path)
         source_name = Path(resolved_path).name
-
-        config_raw = request.form.get("config")
-        if not config_raw:
-            return ("Optimization config is required.", HTTPStatus.BAD_REQUEST)
-        try:
-            config_payload = json.loads(config_raw)
-        except json.JSONDecodeError:
-            return ("Invalid optimization config JSON.", HTTPStatus.BAD_REQUEST)
 
         post_process_payload = config_payload.get("postProcess")
         if not isinstance(post_process_payload, dict):
@@ -990,16 +1074,6 @@ def register_routes(app):
         if not valid:
             return (error, HTTPStatus.BAD_REQUEST)
 
-        strategy_id, error_response = _resolve_strategy_id_from_request()
-        if error_response:
-            return error_response
-
-        warmup_bars_raw = request.form.get("warmupBars", "1000")
-        try:
-            warmup_bars = int(warmup_bars_raw)
-            warmup_bars = max(100, min(5000, warmup_bars))
-        except (TypeError, ValueError):
-            warmup_bars = 1000
         run_id = _resolve_request_run_id(request.form)
         _clear_cancelled_run(run_id)
 
