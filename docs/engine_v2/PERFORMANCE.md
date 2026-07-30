@@ -17,7 +17,7 @@ memory; preview computes N and allocation by closed-form domain products and
 does not build the population. A saturated request (`K >= N`) intentionally
 uses the exact full builder, so its cost is the historical O(N) cost.
 
-The `grid_v2_plan_identity_v2` fingerprint implementation consumes ordered
+The `grid_v2_plan_identity_v3` fingerprint implementation consumes ordered
 semantic keys as a one-pass stream and uses constant additional memory. Isolated
 Windows `tracemalloc` measurements from the TZ60 implementation report were:
 

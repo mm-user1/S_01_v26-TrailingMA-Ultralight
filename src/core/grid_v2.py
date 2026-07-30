@@ -66,6 +66,7 @@ from core.engine_v2.compiled_kernel_signal import (
 )
 from core.engine_v2.metrics_kernel import compute_core_metrics_from_balance_and_trades
 from core.engine_v2.profile import (
+    ProfileValidationError,
     active_mode_values,
     active_parameter_names,
     canonical_selector_key,
@@ -193,6 +194,8 @@ class GridV2ParameterDomain:
     values: tuple[Any, ...]
     default: Any
     is_axis: bool
+    # Runtime fields no longer enter parameter_domains. This compatibility slot
+    # stays in the v3 identity tuple and is therefore false for current plans.
     is_runtime: bool
     source: str
 
@@ -699,6 +702,8 @@ class _GridV2PlanBlock:
     active_names: tuple[str, ...]
     inactive_names: tuple[str, ...]
     axis_names: tuple[str, ...]
+    # Enabled axes fixed by a logical block remain diagnostic-only state.
+    fixed_axis_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -969,8 +974,6 @@ def build_grid_v2_plan(
             "sampling_diagnostics": sampling_diagnostics,
             "plan_fingerprint": plan_fingerprint,
             "identity": planning_identity,
-            "diagnostics": diagnostic_payloads,
-            "validation_warnings": validation_warnings,
         },
         "candidate_table": {
             "enabled": True,
@@ -1318,15 +1321,15 @@ def _planning_diagnostics(prelude: _GridV2PlanPrelude) -> tuple[V2Diagnostic, ..
     """Return deterministic profile and selected-run planning warnings."""
 
     diagnostics = list(prelude.profile.diagnostics)
-    selected_axis_names = {
+    covered_axis_names = {
         name
         for block in prelude.blocks
-        for name in block.axis_names
+        for name in (*block.axis_names, *block.fixed_axis_names)
     }
     selected_variants = ", ".join(prelude.selected_variants)
     for name in prelude.profile.parameter_names:
         domain = prelude.domains.get(name)
-        if domain is None or not domain.is_axis or name in selected_axis_names:
+        if domain is None or not domain.is_axis or name in covered_axis_names:
             continue
         diagnostics.append(
             V2Diagnostic(
@@ -1418,6 +1421,8 @@ def _grid_v2_plan_fingerprint(
 
 
 def _domain_identity_signature(domains: Mapping[str, GridV2ParameterDomain]) -> tuple[Any, ...]:
+    # Runtime fields are absent from current domains. Retain the v3 tuple shape
+    # and compatibility branches so identity bytes remain unchanged.
     return tuple(
         (
             name,
@@ -1435,6 +1440,9 @@ def _domain_identity_signature(domains: Mapping[str, GridV2ParameterDomain]) -> 
 
 
 def _without_plan_reuse_runtime_params(params: Mapping[str, Any]) -> dict[str, Any]:
+    # Seed params intentionally retain all runtime values for execution-config
+    # packing and row compatibility. Identity excludes all four; the public WFA
+    # rebasable-date contract remains the separate three-name constant.
     return {
         str(name): value
         for name, value in params.items()
@@ -1486,6 +1494,8 @@ def _rebase_grid_v2_plan(cached_plan: GridV2Plan, prelude: _GridV2PlanPrelude) -
     metadata["diagnostics"] = diagnostic_payloads
     metadata["validation_warnings"] = validation_warnings
     planning_metadata = dict(metadata.get("planning", {}))
+    planning_metadata.pop("diagnostics", None)
+    planning_metadata.pop("validation_warnings", None)
     planning_metadata.update(
         {
             "plan_identity_schema_version": GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION,
@@ -1505,8 +1515,6 @@ def _rebase_grid_v2_plan(cached_plan: GridV2Plan, prelude: _GridV2PlanPrelude) -
             "configured_manual_percents": dict(prelude.settings.manual_percents),
             "effective_manual_percents": dict(prelude.planning.effective_manual_percents),
             "identity": _grid_v2_planning_identity_payload(prelude),
-            "diagnostics": diagnostic_payloads,
-            "validation_warnings": validation_warnings,
         }
     )
     metadata["planning"] = planning_metadata
@@ -2402,6 +2410,8 @@ def _parameter_defaults(params: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _candidate_seed_params(params: Mapping[str, Any]) -> dict[str, Any]:
+    # Runtime values stay in row seeds for execution packing compatibility even
+    # though _build_parameter_domains excludes them from candidate mathematics.
     return {str(name): value for name, value in params.items() if not str(name).endswith("_options")}
 
 
@@ -2729,11 +2739,45 @@ def _ordered_inactive_names_for_block(
 def _optimization_bool_groups(config: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
     rules = config.get("optimization_rules", {})
     if not isinstance(rules, Mapping):
-        return ()
+        raise _bool_group_error(
+            config,
+            "optimization_rules must be a mapping.",
+            path="optimization_rules",
+        )
     groups = rules.get("bool_groups", ())
     if not isinstance(groups, (list, tuple)):
-        return ()
-    return tuple(group for group in groups if isinstance(group, Mapping))
+        raise _bool_group_error(
+            config,
+            "optimization_rules.bool_groups must be a list.",
+            path="optimization_rules.bool_groups",
+        )
+    for index, group in enumerate(groups):
+        if not isinstance(group, Mapping):
+            raise _bool_group_error(
+                config,
+                "bool-group entry must be a mapping.",
+                path=f"optimization_rules.bool_groups[{index}]",
+            )
+    return tuple(groups)
+
+
+def _bool_group_error(
+    config: Mapping[str, Any],
+    message: str,
+    *,
+    path: str,
+) -> ProfileValidationError:
+    strategy_id = str(config.get("id") or "<unknown strategy>")
+    return ProfileValidationError(
+        V2Diagnostic(
+            severity="error",
+            code="V2_INVALID_BOOL_GROUP",
+            strategy_id=strategy_id,
+            path=path,
+            variant=None,
+            message=f"{strategy_id}: {message}",
+        )
+    )
 
 
 def _logical_mode_metadata(
@@ -2780,28 +2824,99 @@ def _bool_group_value_blocks(
     if not groups:
         return (("", "", {}),)
     if len(groups) > 1:
-        raise ValueError("Grid V2 currently supports one optimization_rules.bool_groups entry.")
+        raise _bool_group_error(
+            config,
+            "Grid V2 supports exactly one optimization_rules.bool_groups entry.",
+            path="optimization_rules.bool_groups",
+        )
     group = groups[0]
     if str(group.get("mode", "")).strip().lower() != "at_least_one_true":
-        raise ValueError("Grid V2 currently supports bool_groups mode='at_least_one_true'.")
+        raise _bool_group_error(
+            config,
+            "bool-group mode must be 'at_least_one_true'.",
+            path="optimization_rules.bool_groups[0].mode",
+        )
     raw_params = group.get("params")
     if not isinstance(raw_params, (list, tuple)) or len(raw_params) != 2:
-        raise ValueError("Grid V2 bool_groups currently require exactly two bool params.")
-    group_params = tuple(str(name) for name in raw_params)
+        raise _bool_group_error(
+            config,
+            "bool-group params must be a list of exactly two parameter names.",
+            path="optimization_rules.bool_groups[0].params",
+        )
+    group_params: list[str] = []
+    for raw_name in raw_params:
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise _bool_group_error(
+                config,
+                "bool-group parameter names must be non-empty strings.",
+                path="optimization_rules.bool_groups[0].params",
+            )
+        group_params.append(raw_name.strip())
+    if len(set(group_params)) != len(group_params):
+        raise _bool_group_error(
+            config,
+            "bool-group parameter names must be unique.",
+            path="optimization_rules.bool_groups[0].params",
+        )
     specs = _parameters(config)
     for name in group_params:
-        spec = specs.get(name, {})
-        param_type = str(spec.get("type", "bool")).strip().lower() if isinstance(spec, Mapping) else "bool"
+        if name not in specs:
+            raise _bool_group_error(
+                config,
+                f"bool-group parameter '{name}' is not declared.",
+                path="optimization_rules.bool_groups[0].params",
+            )
+        spec = specs[name]
+        role = (
+            str(spec.get("role") or "").strip().lower()
+            if isinstance(spec, Mapping)
+            else ""
+        )
+        if name in V2_RESERVED_RUNTIME_PARAM_NAMES or role == "runtime":
+            raise _bool_group_error(
+                config,
+                f"bool-group parameter '{name}' cannot be a reserved/runtime field.",
+                path="optimization_rules.bool_groups[0].params",
+            )
+        param_type = (
+            str(spec.get("type") or "").strip().lower()
+            if isinstance(spec, Mapping)
+            else ""
+        )
         if param_type != "bool":
-            raise ValueError(f"Grid V2 bool_group parameter '{name}' must be bool.")
+            raise _bool_group_error(
+                config,
+                f"bool-group parameter '{name}' must have type 'bool'.",
+                path="optimization_rules.bool_groups[0].params",
+            )
+        if name not in domains:
+            raise _bool_group_error(
+                config,
+                f"bool-group parameter '{name}' has no Grid V2 domain.",
+                path="optimization_rules.bool_groups[0].params",
+            )
 
     value_groups: list[tuple[bool, ...]] = []
     for name in group_params:
         domain = domains[name]
-        if domain.is_axis:
-            value_groups.append(tuple(_coerce_bool(value) for value in domain.values))
-        else:
-            value_groups.append((_coerce_bool(seed_params.get(name, domain.default)),))
+        try:
+            if domain.is_axis:
+                values = tuple(_coerce_bool(value) for value in domain.values)
+            else:
+                values = (_coerce_bool(seed_params.get(name, domain.default)),)
+        except (TypeError, ValueError) as exc:
+            raise _bool_group_error(
+                config,
+                f"bool-group parameter '{name}' has an invalid boolean domain: {exc}",
+                path="optimization_rules.bool_groups[0].params",
+            ) from exc
+        if not values:
+            raise _bool_group_error(
+                config,
+                f"bool-group parameter '{name}' has an empty boolean domain.",
+                path="optimization_rules.bool_groups[0].params",
+            )
+        value_groups.append(values)
 
     blocks: list[tuple[str, str, Mapping[str, bool]]] = []
     for raw_values in itertools.product(*value_groups):
@@ -2812,7 +2927,11 @@ def _bool_group_value_blocks(
         blocks.append((key, label, values))
     if not blocks:
         names = ", ".join(group_params)
-        raise ValueError(f"Grid V2 bool group has no valid logical modes for params: {names}.")
+        raise _bool_group_error(
+            config,
+            f"bool group has no valid logical modes for params: {names}.",
+            path="optimization_rules.bool_groups[0].params",
+        )
     logical_modes = group.get("logical_modes")
     if isinstance(logical_modes, Mapping):
         order = {str(name): index for index, name in enumerate(logical_modes)}
@@ -2869,6 +2988,11 @@ def _build_planning_blocks(
                     active_names=active_names,
                     inactive_names=inactive_names,
                     axis_names=variant_axis_names,
+                    fixed_axis_names=tuple(
+                        name
+                        for name in bool_values
+                        if domains[name].is_axis and name in active_names
+                    ),
                 )
             )
     return tuple(blocks)

@@ -38,4 +38,3 @@ _CANONICAL_DECLARATIONS = {
 
 def canonical_v2_runtime_declarations() -> dict[str, dict]:
     return deepcopy(_CANONICAL_DECLARATIONS)
-

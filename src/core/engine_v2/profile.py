@@ -67,7 +67,7 @@ MODE_PARAMETER_BINDINGS: tuple[ModeBinding, ...] = (
     # report_only observes the leverage implied by fills; it has no configured
     # leverage or maintenance inputs.  Those belong to the deferred simulated
     # margin policy below.
-    ModeBinding("margin", "report_only", "phase1", (), ("mark_price",)),
+    ModeBinding("margin", "report_only", "phase1", (), ()),
     ModeBinding("margin", "off", "phase1"),
     ModeBinding("exitOnSignal", "true", "phase34"),
     # Explicitly known but uncertified values remain unavailable.
@@ -148,6 +148,17 @@ def _warning(
     variant: str | None = None,
 ) -> V2Diagnostic:
     return V2Diagnostic("warning", code, strategy_id, path, variant, message)
+
+
+def _info(
+    strategy_id: str,
+    message: str,
+    *,
+    path: str,
+    code: str,
+    variant: str | None = None,
+) -> V2Diagnostic:
+    return V2Diagnostic("info", code, strategy_id, path, variant, message)
 
 
 def _parameters(config: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -448,12 +459,60 @@ def _variant_independent_params(
     for name, role in roles.items():
         if role != "execution" or name in bound or (selector is not None and name == selector.param):
             continue
-        if _is_optimized(params.get(name)):
-            raise _error(strategy_id, f"{strategy_id}: optimized execution parameter '{name}' has no consumer in any supported variant.", path=f"parameters.{name}", code="V2_UNBOUND_OPTIMIZED_EXECUTION_PARAM")
+        consuming_bindings = tuple(
+            binding
+            for binding in MODE_PARAMETER_BINDINGS
+            if name in binding.consumes_params
+        )
+        certified_bindings = tuple(
+            binding for binding in consuming_bindings if binding.status != "later"
+        )
+        optimized = _is_optimized(params.get(name))
+        if certified_bindings:
+            modes = ", ".join(
+                f"{binding.mode_field}={binding.mode_value}"
+                for binding in certified_bindings
+            )
+            if optimized:
+                raise _error(
+                    strategy_id,
+                    f"{strategy_id}: optimized execution parameter '{name}' is consumed by "
+                    f"certified mode(s) [{modes}], but no declared variant selects them.",
+                    path=f"parameters.{name}",
+                    code="V2_UNSELECTED_MODE_OPTIMIZED_EXECUTION_PARAM",
+                )
+            diagnostics.append(
+                _info(
+                    strategy_id,
+                    f"{strategy_id}: fixed execution parameter '{name}' is consumed by "
+                    f"certified mode(s) [{modes}], but no declared variant selects them; "
+                    "it is excluded from semantic identity.",
+                    path=f"parameters.{name}",
+                    code="V2_UNSELECTED_MODE_EXECUTION_PARAM",
+                )
+            )
+            continue
+        if consuming_bindings:
+            modes = ", ".join(
+                f"{binding.mode_field}={binding.mode_value}"
+                for binding in consuming_bindings
+            )
+            detail = f" has only uncertified consumer mode(s) [{modes}]"
+        else:
+            detail = " has no known execution-mode consumer"
+        if optimized:
+            raise _error(
+                strategy_id,
+                f"{strategy_id}: optimized execution parameter '{name}'{detail} in the "
+                "current certified contract.",
+                path=f"parameters.{name}",
+                code="V2_UNBOUND_OPTIMIZED_EXECUTION_PARAM",
+            )
         diagnostics.append(
             _warning(
                 strategy_id,
-                f"{strategy_id}: fixed execution parameter '{name}' has no consumer and is excluded from semantic identity.",
+                f"{strategy_id}: fixed execution parameter '{name}'{detail} in the "
+                "current certified contract and is excluded from semantic identity.",
                 path=f"parameters.{name}",
                 code="V2_UNBOUND_FIXED_EXECUTION_PARAM",
             )
@@ -498,7 +557,9 @@ def parse_execution_profile(config: Mapping[str, Any]) -> ExecutionProfile:
         parameter_names=parameter_names,
         parameter_roles=roles,
         variant_independent_params=independent,
-        validation_warnings=tuple(item.message for item in diagnostics),
+        validation_warnings=tuple(
+            item.message for item in diagnostics if item.severity == "warning"
+        ),
         diagnostics=diagnostics,
     )
 
@@ -507,18 +568,35 @@ def resolve_variant(profile: ExecutionProfile, params: Mapping[str, Any]) -> Var
     selector = profile.variant_selector
     if selector is None:
         if len(profile.variants) != 1:
-            raise ProfileValidationError(f"{profile.strategy_id}: profile has multiple variants but no selector.")
+            raise _error(
+                profile.strategy_id,
+                f"{profile.strategy_id}: profile has multiple variants but no selector.",
+                path="execution.variantSelector",
+                code="V2_INVALID_SELECTOR",
+            )
         return next(iter(profile.variants.values()))
     if selector.param in params:
         raw_value = params[selector.param]
     elif selector.param in profile.parameter_defaults:
         raw_value = profile.parameter_defaults[selector.param]
     else:
-        raise ProfileValidationError(f"{profile.strategy_id}: selector parameter '{selector.param}' missing from params and has no config default.")
+        raise _error(
+            profile.strategy_id,
+            f"{profile.strategy_id}: selector parameter '{selector.param}' is missing "
+            "from params and has no config default.",
+            path=f"parameters.{selector.param}",
+            code="V2_INVALID_SELECTOR",
+        )
     key = canonical_selector_key(raw_value)
     variant_name = selector.mapping.get(key)
     if variant_name is None:
-        raise ProfileValidationError(f"{profile.strategy_id}: selector parameter '{selector.param}' value {raw_value!r} maps to '{key}', which is not in variantSelector.mapping.")
+        raise _error(
+            profile.strategy_id,
+            f"{profile.strategy_id}: selector parameter '{selector.param}' value "
+            f"{raw_value!r} maps to '{key}', which is not in variantSelector.mapping.",
+            path="execution.variantSelector.mapping",
+            code="V2_INVALID_SELECTOR",
+        )
     return profile.variants[variant_name]
 
 

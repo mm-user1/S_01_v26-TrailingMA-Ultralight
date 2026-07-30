@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from copy import deepcopy
+from dataclasses import replace
+
 import pytest
 
 from core.grid_v2 import (
@@ -113,6 +116,7 @@ def test_plan_reuse_rebases_runtime_dates_without_mutating_cached_table():
     )
     first_table = first.plan.candidate_table
     first_params = first_table.params_for_index(0)
+    first_metadata = deepcopy(first.plan.metadata)
 
     second = cache.get_or_build(
         _tiny_v2_config(),
@@ -136,8 +140,60 @@ def test_plan_reuse_rebases_runtime_dates_without_mutating_cached_table():
     assert second_params["start"] == "2025-02-01T00:00:00Z"
     assert second_params["end"] == "2025-03-01T00:00:00Z"
     assert second_params["dateFilter"] is True
+    assert first.plan.metadata == first_metadata
+    assert second.plan.metadata["diagnostics"] == first.plan.metadata["diagnostics"]
+    assert second.plan.metadata["validation_warnings"] == ()
+    assert "diagnostics" not in first.plan.metadata["planning"]
+    assert "validation_warnings" not in first.plan.metadata["planning"]
+    assert "diagnostics" not in second.plan.metadata["planning"]
+    assert "validation_warnings" not in second.plan.metadata["planning"]
     assert second.runtime_rebase_seconds >= 0.0
     assert second.plan_build_seconds == pytest.approx(0.0)
+
+
+def test_rebase_removes_stale_nested_diagnostics_and_recomputes_top_level():
+    cache = GridV2PlanReuseCache()
+    settings = GridV2Settings(enabled_axes=("threshold",))
+    first = cache.get_or_build(
+        _tiny_v2_config(),
+        settings=settings,
+        base_params=_window_params("2025-01-01T00:00:00Z", "2025-02-01T00:00:00Z"),
+    )
+    assert first.cache_key is not None
+    entry = cache._entries[first.cache_key]
+    stale_metadata = deepcopy(entry.plan.metadata)
+    stale_metadata["diagnostics"] = ({"code": "STALE"},)
+    stale_metadata["validation_warnings"] = ("stale",)
+    stale_metadata["planning"]["diagnostics"] = ({"code": "STALE_NESTED"},)
+    stale_metadata["planning"]["validation_warnings"] = ("stale nested",)
+    stale_plan = replace(entry.plan, metadata=stale_metadata)
+    cache._entries[first.cache_key] = _GridV2CachedPlan(
+        plan=stale_plan,
+        identity_signature=entry.identity_signature,
+    )
+
+    rebased = cache.get_or_build(
+        _tiny_v2_config(),
+        settings=settings,
+        base_params=_window_params("2025-02-01T00:00:00Z", "2025-03-01T00:00:00Z"),
+    )
+    fresh = build_grid_v2_plan(
+        _tiny_v2_config(),
+        settings=settings,
+        base_params=_window_params("2025-02-01T00:00:00Z", "2025-03-01T00:00:00Z"),
+    )
+
+    assert rebased.hit is True
+    assert stale_plan.metadata["planning"]["diagnostics"] == (
+        {"code": "STALE_NESTED"},
+    )
+    assert rebased.plan.metadata["diagnostics"] == fresh.metadata["diagnostics"]
+    assert rebased.plan.metadata["validation_warnings"] == fresh.metadata[
+        "validation_warnings"
+    ]
+    assert "diagnostics" not in rebased.plan.metadata["planning"]
+    assert "validation_warnings" not in rebased.plan.metadata["planning"]
+    assert rebased.plan.plan_fingerprint == first.plan.plan_fingerprint
 
 
 def test_plan_reuse_identity_excludes_runtime_but_rebasable_set_stays_three_dates():

@@ -115,26 +115,105 @@ def test_reserved_declarations_are_optional_but_canonical_declarations_pass():
     validate_v2_runtime_declarations(_config())
 
 
+def test_reserved_declaration_must_be_a_mapping():
+    config = _config()
+    config["parameters"]["start"] = []
+
+    with pytest.raises(V2RuntimeValidationError) as exc_info:
+        validate_v2_runtime_declarations(config)
+
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic.code == "V2_INCOMPATIBLE_RUNTIME_DECLARATION"
+    assert diagnostic.path == "parameters.start"
+    assert "must be a mapping" in diagnostic.message
+
+
 @pytest.mark.parametrize(
-    ("name", "mutation"),
+    ("name", "mutation", "reason"),
     [
-        ("dateFilter", lambda spec: spec.update(role="execution")),
-        ("dateFilter", lambda spec: spec.update(type="string")),
-        ("dateFilter", lambda spec: spec.update(default=False)),
-        ("start", lambda spec: spec.update(options=[None])),
-        ("end", lambda spec: spec["optimize"].update(enabled=True)),
-        ("warmupBars", lambda spec: spec.update(min=0)),
-        ("warmupBars", lambda spec: spec["optimize"].update(min=100, max=5000)),
-        ("warmupBars", lambda spec: spec.update(gridValues=[1000])),
+        ("dateFilter", lambda spec: spec.update(role="execution"), "role must be 'runtime'"),
+        ("dateFilter", lambda spec: spec.update(type="string"), "type must be 'bool'"),
+        ("dateFilter", lambda spec: spec.update(default=False), "default must be true"),
+        ("start", lambda spec: spec.update(options=[None]), "options are forbidden"),
+        ("end", lambda spec: spec["optimize"].update(enabled=True), "optimize.enabled must be false"),
+        (
+            "end",
+            lambda spec: spec["optimize"].update(default_enabled=True),
+            "optimize.default_enabled must be false",
+        ),
+        ("warmupBars", lambda spec: spec.update(min=0), "min must be 100"),
+        ("warmupBars", lambda spec: spec.update(max=6000), "max must be 5000"),
+        (
+            "warmupBars",
+            lambda spec: spec["optimize"].update(min=100, max=5000),
+            "optimization axis metadata is forbidden",
+        ),
+        (
+            "warmupBars",
+            lambda spec: spec.update(gridValues=[1000]),
+            "optimization axis metadata is forbidden",
+        ),
     ],
 )
-def test_incompatible_reserved_declarations_fail(name, mutation):
+def test_incompatible_reserved_declarations_report_actionable_reason(
+    name, mutation, reason
+):
     config = _config()
     mutation(config["parameters"][name])
     with pytest.raises(V2RuntimeValidationError) as exc_info:
         validate_v2_runtime_declarations(config)
     assert exc_info.value.diagnostics[0].code == "V2_INCOMPATIBLE_RUNTIME_DECLARATION"
     assert exc_info.value.diagnostics[0].path == f"parameters.{name}"
+    assert reason in exc_info.value.diagnostics[0].message
+
+
+@pytest.mark.parametrize("optimize", ["yes", [], 1, None])
+def test_present_non_mapping_runtime_optimize_is_rejected(optimize):
+    config = _config()
+    config["parameters"]["warmupBars"]["optimize"] = optimize
+
+    with pytest.raises(V2RuntimeValidationError) as exc_info:
+        validate_v2_runtime_declarations(config)
+
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic.code == "V2_INCOMPATIBLE_RUNTIME_DECLARATION"
+    assert diagnostic.path == "parameters.warmupBars"
+    assert "optimize must be a mapping when present" in diagnostic.message
+
+
+@pytest.mark.parametrize("optimize", [pytest.param(None, id="absent"), {}, {"enabled": False, "default_enabled": False}])
+def test_absent_or_compatible_mapping_runtime_optimize_is_disabled(optimize):
+    config = _config()
+    if optimize is None:
+        del config["parameters"]["warmupBars"]["optimize"]
+    else:
+        config["parameters"]["warmupBars"]["optimize"] = optimize
+
+    validate_v2_runtime_declarations(config)
+
+
+def test_runtime_declaration_reasons_have_stable_property_order():
+    config = _config()
+    spec = config["parameters"]["warmupBars"]
+    spec.update(role="execution", type="float", default=10, min=0, max=10)
+    spec["optimize"] = "yes"
+    spec["depends_on"] = "dateFilter"
+
+    with pytest.raises(V2RuntimeValidationError) as exc_info:
+        validate_v2_runtime_declarations(config)
+
+    message = exc_info.value.diagnostics[0].message
+    fragments = (
+        "role must be 'runtime'",
+        "type must be 'int'",
+        "default must be 1000",
+        "min must be 100",
+        "max must be 5000",
+        "optimize must be a mapping",
+        "depends_on is forbidden",
+    )
+    positions = [message.index(fragment) for fragment in fragments]
+    assert positions == sorted(positions)
 
 
 def test_reserved_fields_cannot_be_selectors_dependencies_or_option_parameters():
@@ -142,19 +221,19 @@ def test_reserved_fields_cannot_be_selectors_dependencies_or_option_parameters()
     selector["execution"] = {
         "variantSelector": {"param": "dateFilter", "mapping": {"true": "x"}}
     }
-    with pytest.raises(V2RuntimeValidationError):
+    with pytest.raises(V2RuntimeValidationError, match="variant selectors"):
         validate_v2_runtime_declarations(selector)
 
     dependency = _config()
     dependency["parameters"]["child"] = {
         "type": "bool", "default": True, "role": "signal", "depends_on": "dateFilter"
     }
-    with pytest.raises(V2RuntimeValidationError):
+    with pytest.raises(V2RuntimeValidationError, match="participate in depends_on"):
         validate_v2_runtime_declarations(dependency)
 
     options = _config()
     options["parameters"]["start_options"] = {"default": [None]}
-    with pytest.raises(V2RuntimeValidationError):
+    with pytest.raises(V2RuntimeValidationError, match="option parameters"):
         validate_v2_runtime_declarations(options)
 
 
@@ -172,4 +251,3 @@ def test_all_production_v2_configs_validate_runtime_declarations():
         "s03_reversal_v11_regime_er_b2",
     ):
         validate_v2_runtime_declarations(copy.deepcopy(get_strategy_config(strategy_id)))
-

@@ -404,9 +404,12 @@ backend advertises capability via `get_backend_metadata()` (normalized by
     overrides. Only the three date fields are rebased for WFA windows.
   - V2 profiles are validated when parsed: certified execution modes,
     variant-selector mappings, declared consumers, and dependency topology must
-    be valid before runner or compiled packing. An optimized unbound execution
-    parameter is fatal; a fixed unbound execution parameter and an enabled axis
-    that is inactive for the selected run are structured warnings.
+    be valid before runner or compiled packing. An optimized truly unbound
+    execution parameter is fatal; a fixed truly unbound parameter is a warning.
+    A certified-but-unselected fixed mode parameter is informational, while an
+    optimized one is fatal. Bool-group block discriminators count as covered
+    axes; only axes inactive in every selected block warn. Plan diagnostics live
+    at top-level `metadata["diagnostics"]`, not inside planning metadata.
 
 - **Legacy V1 strategy-owned generation profiles**
   - S03 (`sampled_by_mode`): splits the search into `cc_only` / `tbands_only` /

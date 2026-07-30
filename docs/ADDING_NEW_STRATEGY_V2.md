@@ -103,6 +103,11 @@ placed in dependencies. They are excluded from candidate domains and both
 semantic and plan identity. WFA rebases only `dateFilter`, `start`, and `end`;
 `warmupBars` remains the run's configured runtime value.
 
+A reserved declaration may omit `optimize`, meaning disabled. If present,
+`optimize` must be a mapping with `enabled=false`, `default_enabled=false`, and
+no axis metadata. `optimize: null` and other non-mapping values are invalid;
+declaration diagnostics list incompatible properties in stable order.
+
 Declare `execution` with:
 
 - base modes such as `entryOrder`, `stop`, `sizing`, `maxDays`, `boundary`,
@@ -140,12 +145,19 @@ Profiles are validated when parsed, before reference execution or compiled
 packing. Every declared execution mode and variant-selector mapping must be a
 certified combination, every mode-consumed parameter must be declared as an
 execution parameter, and dependencies must be same-role boolean relationships.
-An optimized execution parameter with no consumer in any supported variant is
-fatal (`V2_UNBOUND_OPTIMIZED_EXECUTION_PARAM`). A fixed unbound execution
-parameter is allowed but reported as `V2_UNBOUND_FIXED_EXECUTION_PARAM` and is
-excluded from semantic identity. Enabling a child axis that is inactive for the
-selected run reports `V2_INACTIVE_ENABLED_AXIS`; it does not alter candidate
-count or identity. Diagnostics have stable fields `severity`, `code`,
+An optimized execution parameter with no currently certified consumer is fatal
+(`V2_UNBOUND_OPTIMIZED_EXECUTION_PARAM`). A fixed truly unbound parameter is
+allowed, reported as `V2_UNBOUND_FIXED_EXECUTION_PARAM`, and excluded from
+semantic identity. A parameter that has a certified consumer but whose mode is
+not selected is a separate case: fixed values produce the informational
+`V2_UNSELECTED_MODE_EXECUTION_PARAM`, while optimization-enabled values fail
+with `V2_UNSELECTED_MODE_OPTIMIZED_EXECUTION_PARAM` and name the required mode.
+Informational diagnostics are not projected into `validation_warnings`.
+
+`V2_INACTIVE_ENABLED_AXIS` applies only when an enabled, bound axis is inactive
+in every selected planning block; it does not alter candidate count or
+identity. Bool-group discriminators fixed per logical block are active covered
+axes, not inactive axes. Diagnostics have stable fields `severity`, `code`,
 `strategy_id`, `path`, `variant`, and `message`.
 
 Use `optimization_rules.bool_groups` for small declarative logical mode groups.
@@ -166,6 +178,10 @@ optional `logical_modes` metadata:
 
 These logical mode keys are user-facing Grid modes for S03-like planning. They
 are not execution variants and must not be encoded as core strategy branches.
+Each bool discriminator is validated as a declared non-runtime boolean with a
+Grid domain. It remains an active semantic discriminator even though the
+planner fixes its value in each logical block instead of enumerating it as a
+within-block axis.
 
 ## Signals.py Requirements
 

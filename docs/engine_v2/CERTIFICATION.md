@@ -144,6 +144,34 @@ Runtime/profile hardening certification (TZ61 Stage 1):
   exposure of the runtime contract is reserved for the separately gated Stage
   2 and is not certified here.
 
+TZ62 diagnostic corrections preserve all Stage 1 identity and candidate pins:
+
+- Bool-group discriminators fixed by logical blocks count as covered axes;
+  genuinely inactive selected-run axes still emit
+  `V2_INACTIVE_ENABLED_AXIS`.
+- Truly unbound execution parameters remain warning/fatal by optimization
+  state. Certified-but-unselected mode parameters instead emit
+  `V2_UNSELECTED_MODE_EXECUTION_PARAM` at info severity when fixed, or fail
+  with `V2_UNSELECTED_MODE_OPTIMIZED_EXECUTION_PARAM` when optimized.
+  Uncertified-only consumers remain unbound and say so explicitly.
+- Reserved runtime declarations reject all present non-mapping `optimize`
+  values, including `null`, and report an ordered actionable reason list.
+- Invalid bool groups fail with structured `V2_INVALID_BOOL_GROUP`
+  diagnostics. Defensive selector resolution fails with
+  `V2_INVALID_SELECTOR` and the real strategy identity.
+- Built and rebased plans keep their authoritative structured collection only
+  at `plan.metadata["diagnostics"]`; warning text is only at
+  `plan.metadata["validation_warnings"]`. Sampler diagnostics remain separately
+  under `planning.sampling_diagnostics`.
+- The full emitted/default compatibility code set also includes
+  `V2_VALIDATION_ERROR`, `V2_PROFILE_VALIDATION_ERROR`,
+  `V2_INVALID_RUNTIME_VALUE`,
+  `V2_INCOMPATIBLE_RUNTIME_DECLARATION`, `V2_INVALID_PARAMETER_ROLE`,
+  `V2_INVALID_PROFILE`, `V2_UNSUPPORTED_EXECUTION_MODE`,
+  `V2_UNDECLARED_CONSUMED_PARAMETER`, `V2_INVALID_DEPENDENCY`,
+  `V2_UNBOUND_OPTIMIZED_EXECUTION_PARAM`, and
+  `V2_UNBOUND_FIXED_EXECUTION_PARAM`.
+
 Grid V2 has two execution tiers:
 
 - reference tier: loops candidates through the shared public V2 runner;

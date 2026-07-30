@@ -7,6 +7,7 @@ import json
 import numpy as np
 import pytest
 
+from core.engine_v2.profile import ProfileValidationError
 from core.engine_v2.runtime_contract import V2_RUNTIME_CONTRACT_VERSION
 from core.grid_engine import (
     allocate_ordered_block_budgets,
@@ -98,6 +99,24 @@ def _semantic_digest(plan) -> str:
     return digest.hexdigest()
 
 
+def _ordered_row_digest(plan) -> str:
+    digest = hashlib.sha256()
+    for index in range(len(plan.candidate_table)):
+        candidate = plan.candidate_for_index(index)
+        payload = {
+            "candidate_id": candidate.candidate_id,
+            "variant_name": candidate.variant_name,
+            "grid_mode_name": candidate.grid_mode_name,
+            "params": dict(candidate.params),
+        }
+        digest.update(
+            (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode(
+                "utf-8"
+            )
+        )
+    return digest.hexdigest()
+
+
 def test_planning_policy_normalizer_accepts_documented_aliases_and_rejects_unknown():
     assert normalize_grid_v2_planning_policy(None) == "full"
     assert normalize_grid_v2_planning_policy("FULL-ENUMERATION-V2") == "full"
@@ -162,6 +181,10 @@ def test_sampled_plan_is_exact_deterministic_worker_invariant_and_seed_sensitive
     assert first.per_variant_counts == {"default": 11}
     assert first.plan_fingerprint == repeated.plan_fingerprint
     assert first.candidate_table.semantic_keys_by_row == repeated.candidate_table.semantic_keys_by_row
+    assert first.metadata["diagnostics"] == repeated.metadata["diagnostics"]
+    assert first.metadata["validation_warnings"] == repeated.metadata[
+        "validation_warnings"
+    ]
     assert first.candidate_table.semantic_keys_by_row != changed_seed.candidate_table.semantic_keys_by_row
     assert [first.candidate_for_index(index).candidate_id for index in range(11)] == list(range(1, 12))
     assert first.per_block_counts["default"]["generation_mode"] == GRID_V2_SAMPLER_VERSION
@@ -277,8 +300,121 @@ def test_bound_selected_run_inactive_axes_warn_without_multiplying_candidates(
 
     assert preview.planned_candidate_count == plan.planned_candidate_count == 1
     assert [item["path"] for item in warnings] == [f"parameters.{inactive_name}"]
-    assert preview.diagnostics == plan.metadata["planning"]["diagnostics"]
+    assert preview.diagnostics == plan.metadata["diagnostics"]
+    assert preview.validation_warnings == plan.metadata["validation_warnings"]
+    assert "diagnostics" not in plan.metadata["planning"]
+    assert "validation_warnings" not in plan.metadata["planning"]
     assert inactive_name not in json.loads(plan.candidate_table.semantic_key_for_index(0))["params"]
+
+
+def test_s03_bool_group_axes_are_covered_by_logical_blocks_not_inactive():
+    config = get_strategy_config("s03_reversal_v11_regime_er_b2")
+    preview = preview_grid_v2_counts(config)
+
+    assert list(preview.per_block_counts) == ["cc_only", "tbands_only", "both"]
+    assert preview.per_variant_counts == {
+        "cc_only": 71_280,
+        "tbands_only": 198_000,
+        "both": 7_128_000,
+    }
+    assert not any(
+        item["code"] == "V2_INACTIVE_ENABLED_AXIS"
+        and item["path"] in {"parameters.useCloseCount", "parameters.useTBands"}
+        for item in preview.diagnostics
+    )
+
+
+def test_single_value_bool_group_axes_still_define_the_only_selected_block():
+    config = copy.deepcopy(get_strategy_config("s03_reversal_v11_regime_er_b2"))
+    config["parameters"]["useCloseCount"]["gridValues"] = [True]
+    config["parameters"]["useTBands"]["gridValues"] = [False]
+
+    preview = preview_grid_v2_counts(config)
+
+    assert list(preview.per_block_counts) == ["cc_only"]
+    assert not any(
+        item["code"] == "V2_INACTIVE_ENABLED_AXIS"
+        and item["path"] in {"parameters.useCloseCount", "parameters.useTBands"}
+        for item in preview.diagnostics
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "path", "fragment"),
+    [
+        (
+            lambda config: config["optimization_rules"]["bool_groups"][0].update(
+                params=["dateFilter", "useTBands"]
+            ),
+            "optimization_rules.bool_groups[0].params",
+            "reserved/runtime",
+        ),
+        (
+            lambda config: config["optimization_rules"]["bool_groups"][0].update(
+                params=["missing", "useTBands"]
+            ),
+            "optimization_rules.bool_groups[0].params",
+            "not declared",
+        ),
+        (
+            lambda config: config["optimization_rules"]["bool_groups"][0].update(
+                params=["useTBands", "useTBands"]
+            ),
+            "optimization_rules.bool_groups[0].params",
+            "unique",
+        ),
+        (
+            lambda config: config["optimization_rules"]["bool_groups"][0].update(
+                params=["", "useTBands"]
+            ),
+            "optimization_rules.bool_groups[0].params",
+            "non-empty strings",
+        ),
+        (
+            lambda config: config["optimization_rules"]["bool_groups"][0].update(
+                params=["maLength3", "useTBands"]
+            ),
+            "optimization_rules.bool_groups[0].params",
+            "type 'bool'",
+        ),
+        (
+            lambda config: config["optimization_rules"]["bool_groups"][0].update(
+                params="useCloseCount"
+            ),
+            "optimization_rules.bool_groups[0].params",
+            "exactly two",
+        ),
+        (
+            lambda config: config["optimization_rules"]["bool_groups"][0].update(
+                mode="all_true"
+            ),
+            "optimization_rules.bool_groups[0].mode",
+            "at_least_one_true",
+        ),
+        (
+            lambda config: config["optimization_rules"]["bool_groups"].append(
+                copy.deepcopy(config["optimization_rules"]["bool_groups"][0])
+            ),
+            "optimization_rules.bool_groups",
+            "exactly one",
+        ),
+    ],
+)
+def test_invalid_bool_groups_fail_with_structured_diagnostics(
+    mutation, path, fragment
+):
+    config = copy.deepcopy(get_strategy_config("s03_reversal_v11_regime_er_b2"))
+    mutation(config)
+
+    with pytest.raises(ProfileValidationError) as exc_info:
+        preview_grid_v2_counts(config)
+
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic.severity == "error"
+    assert diagnostic.code == "V2_INVALID_BOOL_GROUP"
+    assert diagnostic.strategy_id == "s03_reversal_v11_regime_er_b2"
+    assert diagnostic.path == path
+    assert fragment in diagnostic.message
 
 
 @pytest.mark.parametrize(
@@ -315,6 +451,10 @@ def test_preview_and_plan_report_the_same_normalized_variant_and_block_order():
         "bracket", "trail"
     ]
     assert preview.mode_labels == plan.metadata["grid_mode_labels"]
+    assert preview.diagnostics == plan.metadata["diagnostics"]
+    assert preview.validation_warnings == plan.metadata["validation_warnings"]
+    assert "diagnostics" not in plan.metadata["planning"]
+    assert "validation_warnings" not in plan.metadata["planning"]
 
 
 def test_streaming_fingerprint_matches_small_canonical_reference_without_sequence_copy():
@@ -467,6 +607,39 @@ def test_full_s06_population_order_and_semantic_identity_v2_digest_are_pinned():
     # f1aa8bba4099d07f4d0d2865a72bf6537767329f3fdd9b324f07986b8b8369e4
     assert GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION == "grid_v2_semantic_identity_v2"
     assert _semantic_digest(plan) == "fc55d174e835e7196ae5fcf21427d318dc364241f6b10560aa32545e6910a08f"
+    assert plan.plan_fingerprint == "0f8d001c380df5ee95d34ca4e25910c674e20e9e8f34886a1bd2f1c261f019b2"
+
+
+def test_tz62_sampled_s06_and_s03_rows_and_fingerprints_are_unchanged():
+    settings = GridV2Settings(
+        planning_policy="sampled",
+        requested_budget=11,
+        seed=42,
+        allocation_method="auto_sqrt_space",
+    )
+    s06 = build_grid_v2_plan(get_strategy_config("s06_r_trend_v02_b2"), settings)
+    s03 = build_grid_v2_plan(
+        get_strategy_config("s03_reversal_v11_regime_er_b2"), settings
+    )
+
+    assert s06.per_variant_counts == {"bracket": 2, "trail": 9}
+    assert _ordered_row_digest(s06) == (
+        "7366aa9916b6c5bfec168295fa37388d3ba56c571b116d92efee35e4ad1d14d5"
+    )
+    assert s06.plan_fingerprint == (
+        "f2aa08f49666fc0f3ae75fda89421df5b5a20ffd2c4a987a8df53c2b1584db17"
+    )
+    assert s03.per_variant_counts == {
+        "cc_only": 2,
+        "tbands_only": 2,
+        "both": 7,
+    }
+    assert _ordered_row_digest(s03) == (
+        "61e1cfc5d9eb53ed1859d05bc9f99e3654727d43f80eb8c910a4a5a4aa12a51f"
+    )
+    assert s03.plan_fingerprint == (
+        "2f769df30fb03f981e6edd0e07b73b9d929627751fa867a9a6e1b3c759791670"
+    )
 
 
 def test_semantic_identity_migration_preserves_tied_metric_rank_order():

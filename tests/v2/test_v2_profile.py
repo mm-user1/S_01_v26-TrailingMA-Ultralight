@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -230,6 +231,61 @@ def test_fixed_unbound_execution_param_warns_and_is_not_active():
 
     assert "unboundExec" not in active_parameter_names(profile, {"selector": False})
     assert any("unboundExec" in warning for warning in profile.validation_warnings)
+    diagnostic = next(item for item in profile.diagnostics if "unboundExec" in item.message)
+    assert diagnostic.code == "V2_UNBOUND_FIXED_EXECUTION_PARAM"
+    assert diagnostic.severity == "warning"
+
+
+def test_certified_but_unselected_fixed_param_is_info_not_warning():
+    config = _variant_config()
+    config["parameters"]["tickSize"] = _param("execution", 0.01, optimize=False)
+    profile = parse_execution_profile(config)
+
+    diagnostic = next(item for item in profile.diagnostics if item.path == "parameters.tickSize")
+    assert diagnostic.code == "V2_UNSELECTED_MODE_EXECUTION_PARAM"
+    assert diagnostic.severity == "info"
+    assert "priceRounding=tick_outward" in diagnostic.message
+    assert diagnostic.message not in profile.validation_warnings
+    assert "tickSize" not in active_parameter_names(profile, {"selector": False})
+
+
+def test_certified_but_unselected_optimized_param_fails_actionably():
+    config = _variant_config()
+    config["parameters"]["tickSize"] = _param("execution", 0.01, optimize=True)
+
+    with pytest.raises(ProfileValidationError) as exc_info:
+        parse_execution_profile(config)
+
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic.code == "V2_UNSELECTED_MODE_OPTIMIZED_EXECUTION_PARAM"
+    assert diagnostic.path == "parameters.tickSize"
+    assert "priceRounding=tick_outward" in diagnostic.message
+
+
+def test_tick_outward_selects_and_consumes_tick_size():
+    config = _variant_config()
+    config["execution"]["priceRounding"] = "tick_outward"
+    config["parameters"]["tickSize"] = _param("execution", 0.01, optimize=True)
+    profile = parse_execution_profile(config)
+
+    assert "tickSize" in active_parameter_names(profile, {"selector": False})
+    assert not any(item.path == "parameters.tickSize" for item in profile.diagnostics)
+
+
+def test_later_only_consumer_is_unbound_and_names_uncertified_mode():
+    config = _variant_config()
+    config["parameters"]["trailAtrMult"] = _param(
+        "execution", 2.0, optimize=False
+    )
+    profile = parse_execution_profile(config)
+
+    diagnostic = next(
+        item for item in profile.diagnostics if item.path == "parameters.trailAtrMult"
+    )
+    assert diagnostic.code == "V2_UNBOUND_FIXED_EXECUTION_PARAM"
+    assert diagnostic.severity == "warning"
+    assert "uncertified" in diagnostic.message
+    assert "trail=atr" in diagnostic.message
 
 
 def test_selector_missing_from_params_uses_config_default():
@@ -243,8 +299,34 @@ def test_selector_missing_without_default_raises():
     del config["parameters"]["selector"]["default"]
     profile = parse_execution_profile(config)
 
-    with pytest.raises(ProfileValidationError, match="selector parameter 'selector' missing"):
+    with pytest.raises(ProfileValidationError) as exc_info:
         resolve_variant(profile, {})
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic.strategy_id == "generic_variant_fixture"
+    assert diagnostic.code == "V2_INVALID_SELECTOR"
+    assert diagnostic.path == "parameters.selector"
+
+
+def test_resolve_variant_defensive_errors_are_structured():
+    profile = parse_execution_profile(_variant_config())
+
+    with pytest.raises(ProfileValidationError) as missing_selector:
+        resolve_variant(replace(profile, variant_selector=None), {})
+    diagnostic = missing_selector.value.diagnostics[0]
+    assert (diagnostic.strategy_id, diagnostic.code, diagnostic.path) == (
+        "generic_variant_fixture",
+        "V2_INVALID_SELECTOR",
+        "execution.variantSelector",
+    )
+
+    with pytest.raises(ProfileValidationError) as unmapped:
+        resolve_variant(profile, {"selector": "not-mapped"})
+    diagnostic = unmapped.value.diagnostics[0]
+    assert (diagnostic.strategy_id, diagnostic.code, diagnostic.path) == (
+        "generic_variant_fixture",
+        "V2_INVALID_SELECTOR",
+        "execution.variantSelector.mapping",
+    )
 
 
 def test_selector_param_typo_fails_at_parse_time():
@@ -366,6 +448,13 @@ def test_all_production_profiles_validate_and_topology_wide_consumers_do_not_war
         warning_text = " ".join(profile.validation_warnings)
         for name in ("initialCapital", "commissionPct", "enableLong", "enableShort"):
             assert name not in warning_text
+        assert profile.validation_warnings == ()
+        if strategy_id.startswith("s06_"):
+            tick = next(
+                item for item in profile.diagnostics if item.path == "parameters.tickSize"
+            )
+            assert tick.code == "V2_UNSELECTED_MODE_EXECUTION_PARAM"
+            assert tick.severity == "info"
 
 
 def test_truly_unbound_optimized_execution_parameter_is_fatal():

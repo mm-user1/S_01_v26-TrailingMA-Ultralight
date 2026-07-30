@@ -176,8 +176,11 @@ def normalize_v2_runtime_values(
     )
     start = _utc_timestamp(source.get("start"), strategy_id=strategy_id, path="start")
     end = _utc_timestamp(source.get("end"), strategy_id=strategy_id, path="end")
+    warmup_field = _RUNTIME_FIELD_BY_NAME["warmupBars"]
     warmup = _integer(
-        source["warmupBars"] if "warmupBars" in source else 1000,
+        source["warmupBars"]
+        if "warmupBars" in source
+        else warmup_field.legacy_default,
         strategy_id=strategy_id,
         path="warmupBars",
     )
@@ -227,7 +230,10 @@ def validate_v2_runtime_declarations(config: Mapping[str, Any]) -> None:
                 strategy_id=strategy_id,
                 path=f"parameters.{option_name}",
                 code="V2_INCOMPATIBLE_RUNTIME_DECLARATION",
-                message=f"{strategy_id}: reserved runtime fields cannot be supplied through option parameters.",
+                message=(
+                    f"{strategy_id}: parameters.{option_name} is forbidden; reserved runtime "
+                    "fields cannot be supplied through option parameters."
+                ),
             )
     for name in V2_RESERVED_RUNTIME_PARAM_NAMES:
         if name not in params:
@@ -240,41 +246,80 @@ def validate_v2_runtime_declarations(config: Mapping[str, Any]) -> None:
                 strategy_id=strategy_id,
                 path=path,
                 code="V2_INCOMPATIBLE_RUNTIME_DECLARATION",
-                message=f"{strategy_id}: {path} must be a mapping compatible with the core runtime contract.",
+                message=(
+                    f"{strategy_id}: {path} must be a mapping compatible with the "
+                    f"core runtime contract, got {type(spec).__name__}."
+                ),
             )
-        optimize = spec.get("optimize", {})
-        optimize = optimize if isinstance(optimize, Mapping) else {}
-        has_axis_metadata = any(
-            key in spec for key in ("gridValues", "values", "options")
-        ) or any(
-            key in optimize for key in ("min", "max", "step", "gridValues", "values", "options")
-        )
-        compatible = (
-            str(spec.get("role") or "").strip().lower() == "runtime"
-            and str(spec.get("type") or "").strip().lower() == expected.type
-            and optimize.get("enabled", False) is False
-            and optimize.get("default_enabled", False) is False
-            and "depends_on" not in spec
-            and "options" not in spec
-            and not has_axis_metadata
-            and selector_param != name
-        )
+        reasons: list[str] = []
+        role = str(spec.get("role") or "").strip().lower()
+        if role != "runtime":
+            reasons.append(f"role must be 'runtime', got {spec.get('role')!r}")
+        declared_type = str(spec.get("type") or "").strip().lower()
+        if declared_type != expected.type:
+            reasons.append(f"type must be {expected.type!r}, got {spec.get('type')!r}")
+
+        default = spec.get("default")
         if name == "dateFilter":
-            compatible = compatible and spec.get("default") is True
+            if default is not expected.ui_default:
+                reasons.append(f"default must be true, got {default!r}")
         elif name in {"start", "end"}:
-            compatible = compatible and spec.get("default") in (None, "")
+            if default not in (None, ""):
+                reasons.append(f"default must be empty, got {default!r}")
         else:
-            compatible = compatible and (
-                spec.get("default") == 1000
-                and spec.get("min") == 100
-                and spec.get("max") == 5000
+            if default != expected.ui_default:
+                reasons.append(
+                    f"default must be {expected.ui_default}, got {default!r}"
+                )
+            if spec.get("min") != expected.minimum:
+                reasons.append(f"min must be {expected.minimum}, got {spec.get('min')!r}")
+            if spec.get("max") != expected.maximum:
+                reasons.append(f"max must be {expected.maximum}, got {spec.get('max')!r}")
+
+        raw_optimize = spec.get("optimize", {})
+        if "optimize" in spec and not isinstance(raw_optimize, Mapping):
+            reasons.append(
+                f"optimize must be a mapping when present, got {type(raw_optimize).__name__}"
             )
-        if not compatible:
+            optimize: Mapping[str, Any] = {}
+        else:
+            optimize = raw_optimize
+        if optimize.get("enabled", False) is not False:
+            reasons.append(
+                f"optimize.enabled must be false, got {optimize.get('enabled')!r}"
+            )
+        if optimize.get("default_enabled", False) is not False:
+            reasons.append(
+                "optimize.default_enabled must be false, "
+                f"got {optimize.get('default_enabled')!r}"
+            )
+        spec_axis_keys = [key for key in ("gridValues", "values") if key in spec]
+        optimize_axis_keys = [
+            key
+            for key in ("min", "max", "step", "gridValues", "values", "options")
+            if key in optimize
+        ]
+        if spec_axis_keys or optimize_axis_keys:
+            reasons.append(
+                "optimization axis metadata is forbidden "
+                f"(found {spec_axis_keys + optimize_axis_keys!r})"
+            )
+        if "options" in spec:
+            reasons.append("options are forbidden for reserved runtime fields")
+        if "depends_on" in spec:
+            reasons.append("depends_on is forbidden for reserved runtime fields")
+        if selector_param == name:
+            reasons.append("reserved runtime fields cannot be variant selectors")
+
+        if reasons:
             raise _runtime_error(
                 strategy_id=strategy_id,
                 path=path,
                 code="V2_INCOMPATIBLE_RUNTIME_DECLARATION",
-                message=f"{strategy_id}: {path} is incompatible with {V2_RUNTIME_CONTRACT_VERSION}.",
+                message=(
+                    f"{strategy_id}: {path} is incompatible with "
+                    f"{V2_RUNTIME_CONTRACT_VERSION}: {'; '.join(reasons)}."
+                ),
             )
 
     for child_name, raw_spec in params.items():

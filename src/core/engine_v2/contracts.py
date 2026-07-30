@@ -1,8 +1,9 @@
 """Backtester V2 Phase 0 contracts.
 
-These dataclasses define stable, importable shapes for later V2 phases. They
-intentionally avoid runtime behavior and pandas objects so future Numba-facing
-code can pack them into primitive arrays without inheriting V1 engine state.
+These dataclasses define stable, importable data and diagnostic shapes for later
+V2 phases. They intentionally avoid execution behavior and pandas objects so
+future Numba-facing code can pack them into primitive arrays without inheriting
+V1 engine state.
 """
 
 from __future__ import annotations
