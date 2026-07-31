@@ -4429,8 +4429,19 @@ def _prepare_study_config_payload(config: Any) -> Dict[str, Any]:
         strategy_id=strategy_id,
     )
     if not resolution.usable or resolution.source != "current":
+        from .engine_v2.diagnostics import V2Diagnostic, V2ValidationError
+
         detail = "; ".join(item.message for item in resolution.diagnostics)
-        raise ValueError(f"Invalid V2 runtime metadata: {detail}")
+        raise V2ValidationError(
+            V2Diagnostic(
+                severity="error",
+                code="V2_RUNTIME_METADATA_INVALID",
+                strategy_id=strategy_id,
+                path="config_json.v2_runtime",
+                variant=None,
+                message=f"{strategy_id}: invalid V2 runtime metadata: {detail}",
+            )
+        )
     return payload
 
 

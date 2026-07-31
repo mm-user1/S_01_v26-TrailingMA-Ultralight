@@ -905,6 +905,17 @@ def register_routes(app):
 
         try:
             result, study_id = engine.run_wf_optimization(df)
+        except V2ValidationError as exc:
+            _set_optimization_state(
+                {
+                    "status": "error",
+                    "mode": "wfa",
+                    "run_id": run_id,
+                    "strategy_id": strategy_id,
+                    "error": str(exc),
+                }
+            )
+            return _validation_error_response(exc)
         except ValueError as exc:
             app.logger.warning(
                 "Walk-forward optimization rejected "
@@ -1303,6 +1314,15 @@ def register_routes(app):
                 strategy_id,
                 warmup_bars,
             )
+        except V2ValidationError as exc:
+            _set_optimization_state({
+                "status": "error",
+                "mode": "grid" if requested_optimizer_mode == "grid" else "optuna",
+                "run_id": run_id,
+                "strategy_id": strategy_id,
+                "error": str(exc),
+            })
+            return _validation_error_response(exc)
         except ValueError as exc:
             _set_optimization_state({
                 "status": "error",
@@ -1460,6 +1480,15 @@ def register_routes(app):
                 "pareto_front_size": summary.get("pareto_front_size"),
                 "optimization_time": optimization_time_str,
             }
+        except V2ValidationError as exc:
+            _set_optimization_state({
+                "status": "error",
+                "mode": optimizer_mode,
+                "run_id": run_id,
+                "strategy_id": optimization_config.strategy_id,
+                "error": str(exc),
+            })
+            return _validation_error_response(exc)
         except ValueError as exc:
             _set_optimization_state({
                 "status": "error",

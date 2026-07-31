@@ -243,8 +243,11 @@ compared by canonical meaning rather than raw type or spelling.
 
 Forward Test and OOS Test intentionally override `dateFilter` to `true` while
 deriving the IS window. This is an orchestration fact required by the period
-split, not a second user-runtime parse. Derived V2 dates use the same canonical
-UTC `Z` formatter; V1 retains its existing `+00:00` representation.
+split, not a second user-runtime parse. Forward Test strips candidate runtime
+keys before dispatch, then applies the aligned dataframe start and inclusive
+end timestamps inside the worker so the strategy gate includes the final FT
+day. Derived V2 dates use the same canonical UTC `Z` formatter; V1 retains its
+existing `+00:00` representation outside the approved date-aware FT correction.
 
 The V2 config resource returns deep-copied additive `runtime_contract`,
 `runtime_values`, `diagnostics`, and `validation_warnings` facts. A known invalid
@@ -653,6 +656,17 @@ strategy on the `signal_reversal` topology:
 
 ## Baseline And Certification
 
+Use a TradingView or other external baseline when the strategy is meant to
+match an external reference, when execution semantics are newly introduced, or
+when the strategy will be used as a certification target. Keep raw exports and
+screenshots unchanged, and use normalized UTC machine-readable files in
+automated tests.
+
+A Merlin-only baseline is acceptable for an internal strategy that uses already
+certified execution modes and has no external parity claim. Store enough params,
+data-window metadata, metrics, and trade signatures to make regressions
+repeatable.
+
 ## Persisted Runtime And Stored Execution
 
 Every newly saved V2 Optuna, Grid, or WFA study carries one request-level
@@ -667,39 +681,30 @@ it.
 Stored reads prefer valid current metadata, then legacy fixed-param dates,
 then a non-NULL study Warmup, then a non-NULL config Warmup, and finally core
 defaults for genuinely absent old facts. Explicit false, blank, and internal
-zero values are presence-sensitive. Unknown metadata can use legacy fallback
-only when an independent legacy fact exists; otherwise it is unavailable. No
-read, post-process config update, or compatibility view rewrites the envelope.
-Existing stitched-equity backfill and Analytics cache behavior are separate
-storage concerns, not runtime migrations.
+zero values are presence-sensitive. Syntactically versioned future metadata or
+an unsupported runtime contract is unavailable and cannot downgrade to legacy
+facts. Malformed unversioned metadata may use legacy fallback only when an
+independent legacy fact validates. No read, post-process config update, or
+compatibility view rewrites the envelope.
 
-At stored V2 execution, the current registry/profile must still resolve.
-Candidate artifacts may retain old runtime-shaped keys, but those keys are
-removed before merge; the resolved runtime and any FT/OOS/manual/WFA operation
-dates are applied last, with Warmup passed separately. `dateFilter` continues
-to gate preparation, so false means full data and `trade_start_idx=0` even if
-dates are present. WFA execution mappings use canonical UTC `Z` timestamps;
-its FT `YYYY-MM-DD` and existing DSR/Stress scheduling transports remain
-unchanged. Unknown/removed strategies remain viewable from saved facts but
-cannot execute or export.
+At stored execution, the current registry/profile determines V1 versus V2;
+metadata is only a persistence carrier. Candidate artifacts cannot own runtime.
+Historical FT/OOS/manual/WFA exports apply operation dates last and keep Warmup
+separate. Every Lancelot bundle has `exportMode="live"`, strips all candidate
+runtime keys, and projects `dateFilter=false`, `start=null`, and `end=null` for
+both V1 and V2; its resolved Warmup stays at the bundle top level. Thus Merlin
+historical exports retain operation dates while live bundles never inherit a
+historical cutoff.
+
+Corrected FT metrics intentionally may differ for V2 and date-aware V1
+strategies such as S06 because candidate IS bounds no longer win and the aligned
+final FT day is included. No historical FT rows are backfilled. Re-run prior
+S06 V1 or V2 Forward Tests whenever their saved FT metrics affect a decision.
 
 The S06 B2 and S06 Regime-TL B2 configs declare `dateFilter` and `warmupBars`
 with `role="runtime"` and omit optional `start`/`end` declarations. The S03
 Regime-ER B2 config declares all four reserved fields with `role="runtime"`.
-These are declarations of the core contract, never candidate axes or
-strategy-owned parameters; omitted declarations do not remove fields from the
-four-value runtime metadata envelope.
-
-Use a TradingView or other external baseline when the strategy is meant to
-match an external reference, when execution semantics are newly introduced, or
-when the strategy will be used as a certification target. Keep raw exports and
-screenshots unchanged, and use normalized UTC machine-readable files in
-automated tests.
-
-A Merlin-only baseline is acceptable for an internal strategy that uses already
-certified execution modes and has no external parity claim. Store enough params,
-data-window metadata, metrics, and trade signatures to make regressions
-repeatable.
+These declarations never create candidate axes.
 
 ## Common Failure Modes
 

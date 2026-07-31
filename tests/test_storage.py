@@ -3,8 +3,10 @@ import sqlite3
 import sys
 import time
 import uuid
+from copy import deepcopy
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -26,14 +28,17 @@ from core.storage import (
     load_wfa_window_trials,
     save_dsr_results,
     save_grid_study_to_db,
+    save_optuna_study_to_db,
     reorder_study_sets,
     save_wfa_study_to_db,
     set_active_db,
+    update_study_config_json,
     update_study_sets_color,
     update_study_set,
 )
 from core.metrics import _calculate_r2_consistency
 from core.grid_engine import GRID_V2_SUPPORTED_FAST_OBJECTIVES, GridSettings
+from core.engine_v2 import V2ValidationError, build_v2_runtime_metadata
 from core.optuna_engine import OptimizationConfig, OptimizationResult
 from core.post_process import DSRConfig, DSRResult, PostProcessConfig, StressTestConfig
 from core.walkforward_engine import OOSStitchedResult, WFConfig, WFResult, WindowResult
@@ -124,6 +129,153 @@ def _build_dummy_wfa_result():
         warmup_bars=wf_config.warmup_bars,
     )
     return wf_result
+
+
+def _runtime_metadata_for_storage():
+    return build_v2_runtime_metadata(
+        {
+            "dateFilter": False,
+            "start": None,
+            "end": None,
+            "warmupBars": 20,
+        },
+        strategy_id="s06_r_trend_v02_b2",
+    )
+
+
+def _storage_optimization_config(*, strategy_id="s06_r_trend_v02_b2"):
+    return OptimizationConfig(
+        csv_file="storage.csv",
+        csv_original_name="OKX_LINKUSDT.P, 15 2025.01.01-2025.01.02.csv",
+        strategy_id=strategy_id,
+        enabled_params={},
+        param_ranges={},
+        param_types={},
+        fixed_params={"dateFilter": False},
+        warmup_bars=20,
+    )
+
+
+def test_runtime_metadata_persists_through_optuna_grid_and_wfa_writers(tmp_path):
+    csv_path = tmp_path / "OKX_LINKUSDT.P, 15 2025.01.01-2025.01.02.csv"
+    csv_path.write_text("timestamp,open,high,low,close,volume\n", encoding="utf-8")
+    metadata = _runtime_metadata_for_storage()
+    original = deepcopy(metadata)
+
+    with _temporary_active_db(f"runtime_writers_{uuid.uuid4().hex[:8]}"):
+        optuna_config = _storage_optimization_config()
+        optuna_config.v2_runtime = deepcopy(metadata)
+        optuna_id = save_optuna_study_to_db(
+            None,
+            optuna_config,
+            SimpleNamespace(
+                objectives=["net_profit_pct"],
+                primary_objective="net_profit_pct",
+                constraints=[],
+                sampler_config={},
+                budget_mode="trials",
+                n_trials=0,
+                time_limit=None,
+                convergence_patience=None,
+                sanitize_enabled=True,
+                sanitize_trades_threshold=0,
+            ),
+            [],
+            str(csv_path),
+            time.time(),
+        )
+
+        grid_ids = []
+        for policy in ("full", "sampled"):
+            grid_config = _storage_optimization_config()
+            grid_config.v2_runtime = deepcopy(metadata)
+            grid_config.grid_v2_planning_policy = policy
+            grid_ids.append(
+                save_grid_study_to_db(
+                    config=grid_config,
+                    grid_settings=GridSettings(requested_budget=1, top_candidates=1),
+                    grid_summary={"engine": "v2", "requested_planning_policy": policy},
+                    trial_results=[],
+                    csv_file_path=str(csv_path),
+                    start_time=time.time(),
+                )
+            )
+
+        wf_result = _build_dummy_wfa_result()
+        wf_result.strategy_id = "s06_r_trend_v02_b2"
+        wf_result.config.strategy_id = "s06_r_trend_v02_b2"
+        wfa_id = save_wfa_study_to_db(
+            wf_result,
+            {
+                "strategy_id": "s06_r_trend_v02_b2",
+                "fixed_params": {"dateFilter": False},
+                "v2_runtime": deepcopy(metadata),
+            },
+            str(csv_path),
+            time.time(),
+        )
+
+        for study_id in (optuna_id, *grid_ids, wfa_id):
+            loaded = load_study_from_db(study_id)
+            assert loaded["study"]["config_json"]["v2_runtime"] == metadata
+        assert all(
+            "v2_runtime" not in window
+            for window in load_study_from_db(wfa_id)["windows"]
+        )
+        assert metadata == original
+
+
+def test_v1_writer_omits_runtime_and_config_rewrite_preserves_carrier(tmp_path):
+    csv_path = tmp_path / "OKX_LINKUSDT.P, 15 2025.01.01-2025.01.02.csv"
+    csv_path.write_text("timestamp,open,high,low,close,volume\n", encoding="utf-8")
+    metadata = _runtime_metadata_for_storage()
+    with _temporary_active_db(f"runtime_rewrite_{uuid.uuid4().hex[:8]}"):
+        v1_config = _storage_optimization_config(strategy_id="s03_reversal_v10")
+        v1_id = save_optuna_study_to_db(
+            None,
+            v1_config,
+            SimpleNamespace(objectives=[], constraints=[], sampler_config={}),
+            [],
+            str(csv_path),
+            time.time(),
+        )
+        assert "v2_runtime" not in load_study_from_db(v1_id)["study"]["config_json"]
+
+        v2_config = _storage_optimization_config()
+        v2_config.v2_runtime = deepcopy(metadata)
+        v2_id = save_optuna_study_to_db(
+            None,
+            v2_config,
+            SimpleNamespace(objectives=[], constraints=[], sampler_config={}),
+            [],
+            str(csv_path),
+            time.time(),
+        )
+        updated = load_study_from_db(v2_id)["study"]["config_json"]
+        updated["postProcess"] = {"enabled": True}
+        updated["oosTest"] = {"enabled": True}
+        assert update_study_config_json(v2_id, updated) is True
+        assert load_study_from_db(v2_id)["study"]["config_json"]["v2_runtime"] == metadata
+
+
+def test_malformed_runtime_metadata_creates_no_study_row(tmp_path):
+    csv_path = tmp_path / "OKX_LINKUSDT.P, 15 2025.01.01-2025.01.02.csv"
+    csv_path.write_text("timestamp,open,high,low,close,volume\n", encoding="utf-8")
+    config = _storage_optimization_config()
+    config.v2_runtime = {"schema_version": "broken"}
+    with _temporary_active_db(f"runtime_invalid_{uuid.uuid4().hex[:8]}"):
+        with pytest.raises(V2ValidationError) as caught:
+            save_optuna_study_to_db(
+                None,
+                config,
+                SimpleNamespace(objectives=[], constraints=[], sampler_config={}),
+                [],
+                str(csv_path),
+                time.time(),
+            )
+        assert caught.value.diagnostics[0].code == "V2_RUNTIME_METADATA_INVALID"
+        with get_db_connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM studies").fetchone()[0] == 0
 
 
 def _build_grid_storage_config(csv_path: Path) -> OptimizationConfig:

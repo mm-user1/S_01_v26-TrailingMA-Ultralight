@@ -611,14 +611,14 @@ The benchmark helper writes schema version 1 JSON:
 The WFA inspection command uses the same top-level schema version and reports
 `studies` plus optional `comparisons`.
 
-## Future Run Template
-
 Runtime metadata build/parse and stored-runtime resolution are O(1) in the
 four-field contract and run once per request/study operation, never per Grid
 candidate or WFA row. Historical Grid Settings uses saved summaries first. If
 derivation is required during Analytics aggregation, one request-owned memo is
 keyed by strategy and deterministic derivation inputs; there is no global
 cache, full V2 enumeration, or per-row diagnostic logging.
+
+## Future Run Template
 
 | Field | Value |
 | --- | --- |

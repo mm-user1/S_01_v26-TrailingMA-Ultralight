@@ -310,12 +310,21 @@ class WalkForwardEngine:
         self.csv_file_path = csv_file_path
         self._grid_v2_plan_cache = None
 
-        from strategies import get_strategy
+        from strategies import get_strategy, get_strategy_config
 
         try:
             self.strategy_class = get_strategy(config.strategy_id)
+            strategy_config = get_strategy_config(config.strategy_id)
         except ValueError as e:  # noqa: BLE001
             raise ValueError(f"Failed to load strategy '{config.strategy_id}': {e}")
+        self._is_v2_strategy = (
+            str(strategy_config.get("engine", "v1") or "v1").strip().lower()
+            == "v2"
+        )
+        if self._is_v2_strategy:
+            from .engine_v2.profile import parse_execution_profile
+
+            parse_execution_profile(strategy_config)
 
     def split_data(
         self,
@@ -754,7 +763,7 @@ class WalkForwardEngine:
         """Apply authoritative WFA bounds without changing V1 representation."""
 
         run_params = deepcopy(params)
-        if isinstance(self.base_config_template.get("v2_runtime"), dict):
+        if self._is_v2_strategy:
             for name in V2_RESERVED_RUNTIME_PARAM_NAMES:
                 run_params.pop(name, None)
             run_params["dateFilter"] = True

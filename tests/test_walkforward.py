@@ -126,6 +126,40 @@ def test_param_id_ignores_runtime_fields_for_display_identity():
     assert engine._create_param_id(base).startswith("HMA 300_")
 
 
+def test_wfa_window_runtime_family_comes_from_registry_not_metadata_carrier():
+    start = pd.Timestamp("2025-01-01 12:00", tz="UTC")
+    end = pd.Timestamp("2025-01-02 12:00", tz="UTC")
+    v2 = WalkForwardEngine(
+        WFConfig(strategy_id="s06_r_trend_v02_b2"),
+        {"fixed_params": {}},
+        {},
+    )
+    v1 = WalkForwardEngine(
+        WFConfig(strategy_id="s03_reversal_v10"),
+        {"fixed_params": {}, "v2_runtime": {"lookalike": True}},
+        {},
+    )
+
+    assert v2._window_execution_params({}, start, end) == {
+        "dateFilter": True,
+        "start": "2025-01-01T12:00:00Z",
+        "end": "2025-01-02T12:00:00Z",
+    }
+    assert v1._window_execution_params({}, start, end) == {
+        "dateFilter": True,
+        "start": start,
+        "end": end,
+    }
+    assert v1._window_execution_params(
+        {}, start, end, legacy_isoformat=True
+    )["start"] == start.isoformat()
+
+
+def test_wfa_unknown_strategy_failure_order_remains_explicit():
+    with pytest.raises(ValueError, match="Failed to load strategy 'missing_strategy'"):
+        WalkForwardEngine(WFConfig(strategy_id="missing_strategy"), {}, {})
+
+
 def test_param_id_falls_back_and_logs_warning(monkeypatch, caplog):
     """
     Ensure _create_param_id logs and falls back to hash when strategy config cannot be read.
@@ -291,9 +325,9 @@ def test_s06_b2_grid_wfa_plan_reuse_matches_cache_disabled_windows():
     assert second_summary["grid"]["plan_reuse_hit_count"] == 1
     assert second_summary["grid"]["plan_reuse_miss_count"] == 1
     assert reuse_first_all[0].params["start"] == first_materialized_start
-    assert reuse_first_all[0].params["start"] == first_start.isoformat()
-    assert reuse_second_all[0].params["start"] == second_start.isoformat()
-    assert reuse_second_all[0].params["end"] == second_end.isoformat()
+    assert reuse_first_all[0].params["start"] == first_start.isoformat().replace("+00:00", "Z")
+    assert reuse_second_all[0].params["start"] == second_start.isoformat().replace("+00:00", "Z")
+    assert reuse_second_all[0].params["end"] == second_end.isoformat().replace("+00:00", "Z")
     assert no_reuse_engine._last_grid_summary["grid"]["plan_reuse_enabled"] is False
 
     def assert_same_results(left, right):

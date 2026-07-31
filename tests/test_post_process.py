@@ -1,5 +1,7 @@
 from pathlib import Path
+from copy import deepcopy
 import sys
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -7,6 +9,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core.post_process import (
+    PostProcessConfig,
+    _ft_worker_entry,
     annotate_ft_threshold,
     calculate_comparison_metrics,
     calculate_ft_dates,
@@ -15,7 +19,9 @@ from core.post_process import (
     filter_ft_passed_results,
     ft_result_meets_threshold,
     normalize_ft_reject_action,
+    run_forward_test,
 )
+from core.backtest_engine import StrategyResult, TradeRecord
 
 
 def test_calculate_ft_dates_basic():
@@ -121,3 +127,106 @@ def test_ft_threshold_helpers_support_signed_thresholds():
 def test_normalize_ft_reject_action_accepts_ui_labels():
     assert normalize_ft_reject_action("Cooldown + Re-optimize") == "cooldown_reoptimize"
     assert normalize_ft_reject_action("no_trade") == "no_trade"
+
+
+def test_forward_test_strips_candidate_runtime_without_mutation(monkeypatch):
+    captured = {}
+
+    class FakePool:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def starmap(self, _worker, worker_args):
+            captured["worker_args"] = worker_args
+            return []
+
+    class FakeContext:
+        @staticmethod
+        def Pool(*, processes):
+            captured["processes"] = processes
+            return FakePool()
+
+    monkeypatch.setattr("core.post_process.mp.get_context", lambda _method: FakeContext())
+    original = {
+        "maLength": 21,
+        "dateFilter": True,
+        "start": "hostile-start",
+        "end": "hostile-end",
+        "warmupBars": 9999,
+    }
+    candidate = SimpleNamespace(
+        optuna_trial_number=7,
+        params=deepcopy(original),
+        net_profit_pct=1.0,
+        max_drawdown_pct=1.0,
+        total_trades=1,
+        win_rate=100.0,
+        max_consecutive_losses=0,
+        sharpe_ratio=1.0,
+        romad=1.0,
+        profit_factor=1.0,
+    )
+
+    assert run_forward_test(
+        csv_path="unused.csv",
+        strategy_id="s06_r_trend_v02_b2",
+        optuna_results=[candidate],
+        config=PostProcessConfig(enabled=True, top_k=1, warmup_bars=20),
+        is_period_days=30,
+        ft_period_days=5,
+        ft_start_date="2025-01-01",
+        ft_end_date="2025-01-05",
+        n_workers=1,
+    ) == []
+    task = captured["worker_args"][0][2]
+    assert task["params"] == {"maLength": 21}
+    assert captured["worker_args"][0][3:5] == ("2025-01-01", "2025-01-05")
+    assert candidate.params == original
+
+
+def test_forward_test_worker_projects_aligned_inclusive_bounds(monkeypatch):
+    index = pd.date_range("2025-01-01", "2025-01-03 23:00", freq="h", tz="UTC")
+    df = pd.DataFrame(
+        {"Open": 1.0, "High": 1.0, "Low": 1.0, "Close": 1.0, "Volume": 1.0},
+        index=index,
+    )
+    captured = {}
+
+    class FakeStrategy:
+        @staticmethod
+        def run(df_slice, params, trade_start_idx):
+            captured.update(params=params, end=df_slice.index[-1], trade_start_idx=trade_start_idx)
+            final_bar = df_slice.index[-1]
+            return StrategyResult(
+                trades=[TradeRecord(entry_time=final_bar, exit_time=final_bar)],
+                equity_curve=[100.0] * len(df_slice),
+                balance_curve=[100.0] * len(df_slice),
+                timestamps=list(df_slice.index),
+            )
+
+    monkeypatch.setattr("core.backtest_engine.load_data", lambda _path: df)
+    monkeypatch.setattr("strategies.get_strategy", lambda _strategy_id: FakeStrategy)
+    payload = _ft_worker_entry(
+        "unused.csv",
+        "s06_r_trend_v02_b2",
+        {
+            "trial_number": 1,
+            "source_rank": 1,
+            "params": {"maLength": 21},
+            "is_metrics": {},
+        },
+        "2025-01-02",
+        "2025-01-03",
+        3,
+        30,
+        2,
+    )
+
+    assert payload is not None
+    assert captured["params"]["dateFilter"] is True
+    assert captured["params"]["start"] == pd.Timestamp("2025-01-02", tz="UTC")
+    assert captured["params"]["end"] == pd.Timestamp("2025-01-03 23:00", tz="UTC")
+    assert captured["end"] == captured["params"]["end"]

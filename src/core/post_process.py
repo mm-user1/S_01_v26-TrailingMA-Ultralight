@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import multiprocessing as mp
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 import math
@@ -278,7 +279,10 @@ def _ft_worker_entry(
 
         trade_start_idx = ft_start_idx - warmup_start_idx
 
-        params = task_dict["params"]
+        params = deepcopy(task_dict["params"])
+        params["dateFilter"] = True
+        params["start"] = ft_start
+        params["end"] = ft_end
         result = strategy_class.run(df_ft_with_warmup, params, trade_start_idx)
 
         basic = metrics.calculate_basic(result, 100.0)
@@ -894,11 +898,14 @@ def run_forward_test(
     tasks: List[Dict[str, Any]] = []
     for idx, result in enumerate(candidates[:top_k], 1):
         trial_number = getattr(result, "optuna_trial_number", None) or idx
+        params = deepcopy(getattr(result, "params", {}) or {})
+        for name in ("dateFilter", "start", "end", "warmupBars"):
+            params.pop(name, None)
         tasks.append(
             {
                 "trial_number": int(trial_number),
                 "source_rank": idx,
-                "params": dict(getattr(result, "params", {}) or {}),
+                "params": params,
                 "is_metrics": _build_is_metrics(result),
             }
         )

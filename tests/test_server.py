@@ -755,6 +755,42 @@ def test_unknown_run_strategy_is_structured_400_before_work(client):
     assert diagnostic["path"] == "strategy_id"
 
 
+@pytest.mark.parametrize("endpoint", ["/api/optimize", "/api/walkforward"])
+def test_v2_metadata_build_failure_is_structured_before_csv_work(
+    client, monkeypatch, endpoint
+):
+    from core.engine_v2 import V2Diagnostic, V2ValidationError
+    from ui import server_routes_run
+
+    monkeypatch.setattr(
+        server_routes_run,
+        "build_v2_runtime_metadata",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            V2ValidationError(
+                V2Diagnostic(
+                    severity="error",
+                    code="V2_RUNTIME_METADATA_INVALID",
+                    strategy_id="s03_reversal_v11_regime_er_b2",
+                    path="v2_runtime.values",
+                    variant=None,
+                    message="metadata build failed",
+                )
+            )
+        ),
+    )
+    response = client.post(
+        endpoint,
+        data={
+            "strategy": "s03_reversal_v11_regime_er_b2",
+            "config": json.dumps(_s03_regime_er_grid_preview_payload()),
+        },
+    )
+    assert response.status_code == 400
+    diagnostic = _v2_runtime_diagnostic(response)
+    assert diagnostic["code"] == "V2_RUNTIME_METADATA_INVALID"
+    assert diagnostic["path"] == "v2_runtime.values"
+
+
 def test_v2_config_api_adds_runtime_readiness_without_mutating_registry(client):
     before = deepcopy(get_strategy_config("s06_r_trend_v02_b2"))
 
@@ -3418,7 +3454,13 @@ def test_export_lancelot_bundle_from_optuna_trial(client, tmp_path):
             assert payload["timeframe"] == "15m"
             assert payload["warmupBars"] == 1000
             assert payload["exportMode"] == "live"
-            assert payload["params"] == {"closeCountLong": 3, "useTBands": True}
+            assert payload["params"] == {
+                "closeCountLong": 3,
+                "useTBands": True,
+                "dateFilter": False,
+                "start": None,
+                "end": None,
+            }
             assert payload["source"]["studyId"] == study_id
             assert payload["source"]["trialNumber"] == 42
             assert payload["source"]["studyName"] == "bundle_optuna_1"
@@ -3467,11 +3509,196 @@ def test_export_lancelot_bundle_from_grid_candidate(client, tmp_path):
             assert payload["symbol"] == "SOL/USDT:USDT"
             assert payload["timeframe"] == "5m"
             assert payload["warmupBars"] == 500
-            assert payload["params"] == {"maType3": "EMA", "maLength3": 75, "useCloseCount": True}
+            assert payload["params"] == {
+                "maType3": "EMA",
+                "maLength3": 75,
+                "useCloseCount": True,
+                "dateFilter": False,
+                "start": None,
+                "end": None,
+            }
             assert payload["source"]["trialNumber"] == 9
     finally:
         if csv_path.exists():
             csv_path.unlink()
+
+
+@pytest.mark.parametrize(
+    ("optimization_mode", "planning_policy"),
+    [("optuna", None), ("grid", "full"), ("grid", "sampled")],
+)
+def test_v2_live_bundle_runtime_is_inactive_and_candidate_cannot_inject(
+    client, tmp_path, optimization_mode, planning_policy
+):
+    csv_path = tmp_path / f"v2_live_{optimization_mode}_{planning_policy}.csv"
+    csv_path.write_text(
+        "timestamp,open,high,low,close,volume\n2025-01-01T00:00:00Z,1,1,1,1,1\n",
+        encoding="utf-8",
+    )
+    values = {
+        "dateFilter": True,
+        "start": "2025-01-01T00:00:00Z",
+        "end": "2025-01-02T00:00:00Z",
+        "warmupBars": 20,
+    }
+    config = {
+        "fixed_params": {"maLength": 21, **values},
+        "grid_v2_planning_policy": planning_policy,
+        "v2_runtime": {
+            "schema_version": "v2_runtime_metadata_v1",
+            "contract_version": "v2_runtime_contract_v1",
+            "values": values,
+            "diagnostics": [],
+            "validation_warnings": [],
+        },
+    }
+    with _temporary_active_db(f"v2_live_{uuid.uuid4().hex[:8]}"):
+        study_id = f"v2_live_{optimization_mode}_{planning_policy}"
+        _insert_lancelot_export_study(
+            study_id=study_id,
+            study_name=study_id,
+            strategy_id="s06_r_trend_v02_b2",
+            strategy_version="v02-b2",
+            optimization_mode=optimization_mode,
+            csv_file_path=str(csv_path),
+            csv_file_name="OKX_LINKUSDT.P, 15 2025.01.01-2025.01.02.csv",
+            warmup_bars=999,
+            config_json=config,
+        )
+        _insert_lancelot_export_trial(
+            study_id=study_id,
+            trial_number=4,
+            params={
+                "maLength": 50,
+                "dateFilter": True,
+                "start": "hostile",
+                "end": "hostile",
+                "warmupBars": 9999,
+            },
+        )
+
+        response = client.post(
+            f"/api/studies/{study_id}/export/lancelot", json={"trialNumber": 4}
+        )
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload["warmupBars"] == 20
+        assert payload["params"] == {
+            "maLength": 50,
+            "dateFilter": False,
+            "start": None,
+            "end": None,
+        }
+        assert set(payload) == {
+            "bundleSchemaVersion",
+            "strategyId",
+            "strategyVersion",
+            "symbol",
+            "timeframe",
+            "warmupBars",
+            "exportMode",
+            "params",
+            "source",
+        }
+
+
+def test_s06_v1_live_bundle_cannot_retain_historical_cutoff(client, tmp_path):
+    csv_path = tmp_path / "s06_v1_live.csv"
+    csv_path.write_text(
+        "timestamp,open,high,low,close,volume\n2025-01-01T00:00:00Z,1,1,1,1,1\n",
+        encoding="utf-8",
+    )
+    with _temporary_active_db(f"s06_v1_live_{uuid.uuid4().hex[:8]}"):
+        study_id = "s06_v1_live"
+        _insert_lancelot_export_study(
+            study_id=study_id,
+            study_name=study_id,
+            strategy_id="s06_r_trend_v02",
+            strategy_version="v02",
+            optimization_mode="optuna",
+            csv_file_path=str(csv_path),
+            csv_file_name="OKX_LINKUSDT.P, 15 2025.01.01-2025.01.02.csv",
+            warmup_bars=77,
+            config_json={
+                "fixed_params": {
+                    "maLength": 21,
+                    "dateFilter": True,
+                    "start": "2024-01-01",
+                    "end": "2024-12-31",
+                }
+            },
+        )
+        _insert_lancelot_export_trial(
+            study_id=study_id,
+            trial_number=3,
+            params={
+                "maLength": 50,
+                "dateFilter": True,
+                "end": "candidate-cutoff",
+                "warmupBars": 9999,
+            },
+        )
+        response = client.post(
+            f"/api/studies/{study_id}/export/lancelot", json={"trialNumber": 3}
+        )
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload["warmupBars"] == 77
+        assert payload["params"] == {
+            "maLength": 50,
+            "dateFilter": False,
+            "start": None,
+            "end": None,
+        }
+
+
+def test_v2_live_bundle_zero_warmup_is_structured_and_precedes_hashing(
+    client, tmp_path, monkeypatch
+):
+    from core import bundle_export
+
+    csv_path = tmp_path / "v2_zero_warmup.csv"
+    csv_path.write_text(
+        "timestamp,open,high,low,close,volume\n2025-01-01T00:00:00Z,1,1,1,1,1\n",
+        encoding="utf-8",
+    )
+    values = {"dateFilter": False, "start": None, "end": None, "warmupBars": 0}
+    monkeypatch.setattr(
+        bundle_export,
+        "_sha256_file",
+        lambda _path: (_ for _ in ()).throw(AssertionError("hashing continued")),
+    )
+    with _temporary_active_db(f"v2_zero_warmup_{uuid.uuid4().hex[:8]}"):
+        study_id = "v2_zero_warmup"
+        _insert_lancelot_export_study(
+            study_id=study_id,
+            study_name=study_id,
+            strategy_id="s06_r_trend_v02_b2",
+            strategy_version="v02-b2",
+            optimization_mode="optuna",
+            csv_file_path=str(csv_path),
+            csv_file_name="OKX_LINKUSDT.P, 15 2025.01.01-2025.01.02.csv",
+            config_json={
+                "fixed_params": {},
+                "v2_runtime": {
+                    "schema_version": "v2_runtime_metadata_v1",
+                    "contract_version": "v2_runtime_contract_v1",
+                    "values": values,
+                    "diagnostics": [],
+                    "validation_warnings": [],
+                },
+            },
+        )
+        _insert_lancelot_export_trial(
+            study_id=study_id, trial_number=1, params={"maLength": 21}
+        )
+        response = client.post(
+            f"/api/studies/{study_id}/export/lancelot", json={"trialNumber": 1}
+        )
+        assert response.status_code == 400
+        diagnostic = _v2_runtime_diagnostic(response)
+        assert diagnostic["code"] == "V2_EXPORT_RUNTIME_INCOMPATIBLE"
+        assert diagnostic["path"] == "v2_runtime.values.warmupBars"
 
 
 def test_study_endpoint_includes_single_grid_settings(client):
@@ -3561,6 +3788,46 @@ def test_study_endpoint_includes_single_grid_settings(client):
         assert allocation["CC only"] == "4 / 8 | 50.0% | LHS"
 
 
+def test_study_endpoint_isolates_only_unexpected_grid_enrichment_failure(
+    client, monkeypatch
+):
+    from ui import server_routes_data
+
+    logged = []
+    monkeypatch.setattr(
+        server_routes_data,
+        "build_grid_settings_view",
+        lambda _study: (_ for _ in ()).throw(RuntimeError("preview exploded")),
+    )
+    monkeypatch.setattr(app.logger, "exception", lambda *args: logged.append(args))
+
+    with _temporary_active_db(f"grid_isolation_{uuid.uuid4().hex[:8]}"):
+        with get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO studies (
+                    study_id, study_name, strategy_id, optimization_mode, config_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "grid_isolation",
+                    "GRID_ISOLATION",
+                    "s03_reversal_v10",
+                    "grid",
+                    json.dumps(_grid_sidebar_config()),
+                ),
+            )
+            conn.commit()
+
+        response = client.get("/api/studies/grid_isolation")
+        assert response.status_code == 200
+        study = response.get_json()["study"]
+        assert study["study_id"] == "grid_isolation"
+        assert "grid_settings" not in study
+        assert len(logged) == 1
+        assert logged[0][1:] == ("grid_isolation", "s03_reversal_v10")
+
+
 def test_export_lancelot_bundle_from_wfa_window_uses_window_trial_number(client, tmp_path):
     csv_path = tmp_path / "_tmp_lancelot_export_wfa.csv"
     csv_path.write_text(
@@ -3596,11 +3863,84 @@ def test_export_lancelot_bundle_from_wfa_window_uses_window_trial_number(client,
             assert payload["symbol"] == "BTC/USDT:USDT"
             assert payload["timeframe"] == "1h"
             assert payload["warmupBars"] == 1500
-            assert payload["params"] == {"maLength3": 75}
+            assert payload["params"] == {
+                "maLength3": 75,
+                "dateFilter": False,
+                "start": None,
+                "end": None,
+            }
             assert payload["source"]["trialNumber"] == 7
     finally:
         if csv_path.exists():
             csv_path.unlink()
+
+
+def test_v2_wfa_live_bundle_does_not_use_window_dates(client, tmp_path):
+    csv_path = tmp_path / "v2_wfa_live.csv"
+    csv_path.write_text(
+        "timestamp,open,high,low,close,volume\n2025-01-01T00:00:00Z,1,1,1,1,1\n",
+        encoding="utf-8",
+    )
+    values = {
+        "dateFilter": True,
+        "start": "2025-01-01T00:00:00Z",
+        "end": "2025-01-31T23:59:59.999999Z",
+        "warmupBars": 20,
+    }
+    with _temporary_active_db(f"v2_wfa_live_{uuid.uuid4().hex[:8]}"):
+        study_id = "v2_wfa_live"
+        _insert_lancelot_export_study(
+            study_id=study_id,
+            study_name=study_id,
+            strategy_id="s06_r_trend_v02_b2",
+            strategy_version="v02-b2",
+            optimization_mode="wfa",
+            csv_file_path=str(csv_path),
+            csv_file_name="OKX_BTCUSDT.P, 60 2025.01.01-2025.02.01.csv",
+            config_json={
+                "fixed_params": {},
+                "v2_runtime": {
+                    "schema_version": "v2_runtime_metadata_v1",
+                    "contract_version": "v2_runtime_contract_v1",
+                    "values": values,
+                    "diagnostics": [],
+                    "validation_warnings": [],
+                },
+            },
+        )
+        _insert_lancelot_export_wfa_window(
+            study_id=study_id,
+            window_number=1,
+            best_params={"maLength": 21, "end": "candidate-cutoff", "warmupBars": 1},
+            is_best_trial_number=8,
+        )
+        with get_db_connection() as conn:
+            conn.execute(
+                """
+                UPDATE wfa_windows
+                SET oos_start_ts = ?, oos_end_ts = ?
+                WHERE window_id = ?
+                """,
+                (
+                    "2025-02-01T00:00:00Z",
+                    "2025-02-10T23:00:00Z",
+                    f"{study_id}_w1",
+                ),
+            )
+            conn.commit()
+
+        response = client.post(
+            f"/api/studies/{study_id}/export/lancelot", json={"windowNumber": 1}
+        )
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload["warmupBars"] == 20
+        assert payload["params"] == {
+            "maLength": 21,
+            "dateFilter": False,
+            "start": None,
+            "end": None,
+        }
 
 
 def test_export_lancelot_bundle_from_wfa_window_falls_back_to_selected_module_trial(client, tmp_path):
@@ -4962,6 +5302,96 @@ def test_grid_settings_derivation_memo_ignores_study_row_identity(monkeypatch):
     assert build_grid_settings_view(first, memo=memo)["available"] is True
     assert build_grid_settings_view(second, memo=memo)["available"] is True
     assert len(calls) == 1
+
+
+def test_grid_settings_memo_caches_expected_failure_and_keeps_envelope_truthful(
+    monkeypatch,
+):
+    from ui import server_services
+
+    calls = []
+
+    def fail_derive(_config, study):
+        calls.append(study["study_id"])
+        raise server_services._grid_settings_error(
+            "stored_runtime_unavailable",
+            study["strategy_id"],
+            "config_json.v2_runtime",
+            "Stored runtime is unavailable.",
+        )
+
+    monkeypatch.setattr(server_services, "_derive_grid_preview", fail_derive)
+    base = {
+        "study_id": "one",
+        "strategy_id": "s06_r_trend_v02_b2",
+        "optimization_mode": "grid",
+        "config_json": _grid_sidebar_config(),
+        "grid_summary": {"requested_budget": 10},
+    }
+    memo = {}
+    first = build_grid_settings_view(base, memo=memo)
+    second_study = deepcopy(base)
+    second_study["study_id"] = "two"
+    second = build_grid_settings_view(second_study, memo=memo)
+
+    assert calls == ["one"]
+    for view in (first, second):
+        assert view["available"] is True
+        assert view["unavailable_reason"] is None
+        assert view["derivation_status"] == "unavailable"
+        assert view["derivation_unavailable_reason"] == "stored_runtime_unavailable"
+        assert view["diagnostics"][0]["code"] == "V2_STORED_RUNTIME_METADATA_INCOMPATIBLE"
+    first["diagnostics"].clear()
+    assert second["diagnostics"]
+
+
+def test_grid_settings_without_memo_skips_memo_key_serialization(monkeypatch):
+    from ui import server_services
+
+    monkeypatch.setattr(
+        server_services, "_derive_grid_preview", lambda _config, _study: {"modes": []}
+    )
+    monkeypatch.setattr(
+        server_services.json,
+        "dumps",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("serialized")),
+    )
+    view = build_grid_settings_view(
+        {
+            "strategy_id": "s03_reversal_v10",
+            "optimization_mode": "grid",
+            "config_json": _grid_sidebar_config(),
+        }
+    )
+    assert view["available"] is True
+    assert view["derivation_status"] == "available"
+
+
+def test_grid_settings_unusable_derivation_sets_only_unavailable_reason(monkeypatch):
+    from ui import server_services
+
+    monkeypatch.setattr(
+        server_services,
+        "_derive_grid_preview",
+        lambda _config, study: (_ for _ in ()).throw(
+            server_services._grid_settings_error(
+                "stored_runtime_unavailable",
+                study["strategy_id"],
+                "config_json.v2_runtime",
+                "Stored runtime is unavailable.",
+            )
+        ),
+    )
+    view = build_grid_settings_view(
+        {
+            "strategy_id": "s06_r_trend_v02_b2",
+            "optimization_mode": "grid",
+            "config_json": _grid_sidebar_config(),
+        }
+    )
+    assert view["available"] is False
+    assert view["unavailable_reason"] == "stored_runtime_unavailable"
+    assert view["derivation_unavailable_reason"] == "stored_runtime_unavailable"
 
 
 def test_grid_settings_unknown_strategy_is_viewable_without_substitution():

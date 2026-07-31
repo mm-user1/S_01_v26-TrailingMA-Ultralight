@@ -497,8 +497,19 @@ not carry persistence metadata. Canonical `Z` formatting is required at V2
 execution boundaries, not for the existing FT/DSR/Stress scheduling strings.
 The certified preparation invariant is `dateFilter`-gated: inactive filtering
 uses full data and index zero. This intentionally corrects V2 stored exports
-whose candidate artifacts previously overrode an inactive study filter while
-leaving every V1 representation unchanged.
+whose candidate artifacts previously overrode an inactive study filter.
+
+Forward Test removes all candidate runtime keys before dispatch and projects
+the aligned start and inclusive end timestamps after dataset alignment. This
+keeps the strategy date gate identical to the FT slice, including the final
+day. The correction applies to V2 and date-aware V1 strategies. Existing FT
+rows are not backfilled and must be rerun when they influence a decision.
+
+Lancelot partial bundles are live contracts for Optuna, full or sampled Grid,
+and WFA. Certified V1 and V2 exports resolve current strategy/runtime before
+hashing, keep resolved Warmup at the top level, omit param-level Warmup, and
+project the inactive live date triple (`false`, `null`, `null`) last. Historical
+Merlin trade/equity exports continue to use their study or window dates.
 
 The tick-rounding API is:
 

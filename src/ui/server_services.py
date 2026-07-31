@@ -34,7 +34,10 @@ from core.engine_v2.runtime_contract import (
     normalize_v2_runtime_field_value,
     normalize_v2_runtime_values,
 )
-from core.engine_v2.runtime_metadata import resolve_stored_v2_runtime
+from core.engine_v2.runtime_metadata import (
+    parse_stored_config_json,
+    resolve_stored_v2_runtime,
+)
 from core.grid_engine import (
     GRID_SUPPORTED_FAST_OBJECTIVES,
     GRID_SUPPORTED_SLOW_OBJECTIVES,
@@ -872,6 +875,20 @@ class ResolvedStoredExecutionContext:
         )
         return params
 
+    def live_params_for(
+        self, candidate_params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Project the existing Lancelot live contract for either engine."""
+
+        params = deepcopy(self.base_params)
+        candidate = deepcopy(candidate_params or {})
+        for name in V2_RESERVED_RUNTIME_PARAM_NAMES:
+            params.pop(name, None)
+            candidate.pop(name, None)
+        params.update(candidate)
+        params.update({"dateFilter": False, "start": None, "end": None})
+        return params
+
 
 def _validation_error(
     *,
@@ -982,12 +999,41 @@ def _resolve_stored_execution_context(
     """Resolve a stored study before any data access or execution work."""
 
     strategy_id = str(study.get("strategy_id") or "").strip()
-    context = _resolve_strategy_context(
-        [("study.strategy_id", bool(strategy_id), strategy_id)]
-    )
+    try:
+        context = _resolve_strategy_context(
+            [("study.strategy_id", bool(strategy_id), strategy_id)]
+        )
+    except V2ValidationError as exc:
+        if exc.diagnostics[0].code != "V2_UNKNOWN_STRATEGY_ID":
+            raise
+        raise _validation_error(
+            code="STORED_STRATEGY_UNAVAILABLE",
+            strategy_id=strategy_id or "<unknown strategy>",
+            path="study.strategy_id",
+            message=f"Stored strategy is unavailable: {strategy_id or '<missing>'}.",
+        ) from exc
     _require_valid_v2_context(context)
     raw_config = study.get("config_json")
-    config = raw_config if isinstance(raw_config, dict) else {}
+    if context.is_v2:
+        config, config_diagnostic = parse_stored_config_json(
+            raw_config,
+            strategy_id=strategy_id,
+            present="config_json" in study,
+        )
+        if config is None:
+            assert config_diagnostic is not None
+            raise V2ValidationError(
+                V2Diagnostic(
+                    severity="error",
+                    code="V2_STORED_CONFIG_INCOMPATIBLE",
+                    strategy_id=strategy_id,
+                    path=config_diagnostic.path,
+                    variant=None,
+                    message=config_diagnostic.message,
+                )
+            )
+    else:
+        config = raw_config if isinstance(raw_config, dict) else {}
     raw_fixed = config.get("fixed_params")
     base_params = deepcopy(raw_fixed) if isinstance(raw_fixed, dict) else {}
 
@@ -1006,7 +1052,11 @@ def _resolve_stored_execution_context(
             diagnostics=(),
         )
 
-    resolution = resolve_stored_v2_runtime(study, strategy_id=strategy_id)
+    runtime_study = dict(study)
+    runtime_study["config_json"] = config
+    resolution = resolve_stored_v2_runtime(
+        runtime_study, strategy_id=strategy_id
+    )
     if not resolution.usable or resolution.values is None:
         detail = "; ".join(item.message for item in resolution.diagnostics)
         raise _validation_error(
@@ -1653,6 +1703,13 @@ class _GridSettingsCompatibilityError(ValueError):
         super().__init__(diagnostic.message)
 
 
+@dataclass(frozen=True, slots=True)
+class _GridSettingsMemoResult:
+    preview: Dict[str, Any]
+    error_reason: Optional[str]
+    error_diagnostic: Optional[V2Diagnostic]
+
+
 def _grid_settings_error(
     reason: str,
     strategy_id: str,
@@ -1665,6 +1722,7 @@ def _grid_settings_error(
         "missing_legacy_facts": "V2_STORED_GRID_PREVIEW_UNAVAILABLE",
         "current_profile_incompatible": "V2_STORED_PROFILE_INCOMPATIBLE",
         "backend_unavailable": "V2_STORED_GRID_PREVIEW_UNAVAILABLE",
+        "stored_runtime_unavailable": "V2_STORED_RUNTIME_METADATA_INCOMPATIBLE",
         "strategy_unavailable": "V2_STORED_STRATEGY_UNAVAILABLE",
     }
     return _GridSettingsCompatibilityError(
@@ -1752,7 +1810,7 @@ def _derive_grid_preview(config: Dict[str, Any], study: Dict[str, Any]) -> Dict[
         )
         if not runtime.usable or runtime.values is None:
             raise _grid_settings_error(
-                "backend_unavailable",
+                "stored_runtime_unavailable",
                 strategy_id,
                 "config_json.v2_runtime",
                 "Stored V2 runtime facts are unavailable for Grid settings reconstruction.",
@@ -1816,26 +1874,45 @@ def build_grid_settings_view(
         grid_summary = _parse_json_dict(config.get("grid_summary"))
     preview = _grid_preview_from_summary(grid_summary)
     compatibility_error: Optional[_GridSettingsCompatibilityError] = None
+    derivation_attempted = not bool(preview)
     if not preview:
-        memo_key = json.dumps(
-            {
-                "strategy_id": study.get("strategy_id"),
-                "warmup_bars": study.get("warmup_bars"),
-                "config": config,
-            },
-            sort_keys=True,
-            default=str,
-        )
-        try:
-            if memo is not None and memo_key in memo:
-                preview = deepcopy(memo[memo_key])
-            else:
+        memo_key = None
+        if memo is not None:
+            memo_key = json.dumps(
+                {
+                    "strategy_id": study.get("strategy_id"),
+                    "warmup_bars": study.get("warmup_bars"),
+                    "config": config,
+                },
+                sort_keys=True,
+                default=str,
+            )
+        if memo is not None and memo_key in memo:
+            memo_result = deepcopy(memo[memo_key])
+            preview = memo_result.preview
+            if memo_result.error_reason is not None:
+                assert memo_result.error_diagnostic is not None
+                compatibility_error = _GridSettingsCompatibilityError(
+                    memo_result.error_reason, memo_result.error_diagnostic
+                )
+        else:
+            try:
                 preview = _derive_grid_preview(config, study)
-                if memo is not None:
-                    memo[memo_key] = deepcopy(preview)
-        except _GridSettingsCompatibilityError as exc:
-            compatibility_error = exc
-            preview = {}
+            except _GridSettingsCompatibilityError as exc:
+                compatibility_error = exc
+                preview = {}
+            if memo is not None:
+                memo[memo_key] = deepcopy(
+                    _GridSettingsMemoResult(
+                        preview,
+                        compatibility_error.reason
+                        if compatibility_error is not None
+                        else None,
+                        compatibility_error.diagnostic
+                        if compatibility_error is not None
+                        else None,
+                    )
+                )
 
     grid_section = _parse_json_dict(grid_summary.get("grid"))
     planning_summary = _parse_json_dict(grid_section.get("planning"))
@@ -2120,13 +2197,24 @@ def build_grid_settings_view(
     )
     allocation_rows = [{"key": "Allocation", "val": allocation_label}]
     allocation_rows.extend(mode_rows)
+    available = compatibility_error is None or bool(grid_summary)
     return {
         "enabled": True,
         "is_wfa_grid": is_wfa_grid,
         "rows": rows,
         "allocation_rows": allocation_rows,
-        "available": compatibility_error is None or bool(grid_summary),
+        "available": available,
         "unavailable_reason": (
+            compatibility_error.reason
+            if compatibility_error is not None and not available
+            else None
+        ),
+        "derivation_status": (
+            "unavailable"
+            if compatibility_error is not None
+            else "available" if derivation_attempted else "not_required"
+        ),
+        "derivation_unavailable_reason": (
             compatibility_error.reason if compatibility_error is not None else None
         ),
         "diagnostics": (

@@ -382,7 +382,16 @@ def register_routes(app):
         study_data = load_study_from_db(study_id)
         if not study_data:
             return jsonify({"error": "Study not found."}), HTTPStatus.NOT_FOUND
-        grid_settings = build_grid_settings_view(study_data.get("study") or {})
+        study = study_data.get("study") or {}
+        try:
+            grid_settings = build_grid_settings_view(study)
+        except Exception:  # noqa: BLE001 - isolate optional historical enrichment
+            app.logger.exception(
+                "Failed to build Grid Settings for study %s (strategy %s)",
+                study_id,
+                study.get("strategy_id") or "<unknown strategy>",
+            )
+            grid_settings = None
         if grid_settings:
             study_data["study"]["grid_settings"] = grid_settings
         return jsonify(_json_safe(study_data))
@@ -928,8 +937,6 @@ def register_routes(app):
 
         params: Dict[str, Any] = {}
         source_trial_number = 0
-        operation_start = None
-        operation_end = None
 
         if mode == "wfa":
             raw_window_number = payload.get("windowNumber")
@@ -945,8 +952,6 @@ def register_routes(app):
                 return jsonify({"error": "WFA window not found."}), HTTPStatus.NOT_FOUND
 
             params = dict(window.get("best_params") or {})
-            operation_start = window.get("oos_start_ts") or window.get("oos_start_date")
-            operation_end = window.get("oos_end_ts") or window.get("oos_end_date")
             source_trial_number = int(window.get("is_best_trial_number") or 0)
 
             if source_trial_number <= 0:
@@ -972,12 +977,8 @@ def register_routes(app):
             if not trial:
                 return jsonify({"error": "Trial/candidate not found."}), HTTPStatus.NOT_FOUND
             params = dict(trial.get("params") or {})
+        params = execution_context.live_params_for(params)
         if execution_context.strategy.is_v2:
-            params = execution_context.params_for(
-                params,
-                operation_start=operation_start,
-                operation_end=operation_end,
-            )
             if execution_context.warmup_bars <= 0:
                 exc = V2ValidationError(
                     V2Diagnostic(
@@ -993,10 +994,8 @@ def register_routes(app):
                     )
                 )
                 return _validation_error_response(exc)
-            bundle_study = dict(study)
-            bundle_study["warmup_bars"] = execution_context.warmup_bars
-        else:
-            bundle_study = study
+        bundle_study = dict(study)
+        bundle_study["warmup_bars"] = execution_context.warmup_bars
 
         try:
             bundle = build_lancelot_partial_bundle(

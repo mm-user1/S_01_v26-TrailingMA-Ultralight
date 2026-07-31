@@ -489,6 +489,7 @@ backend advertises capability via `get_backend_metadata()` (normalized by
   - **Optuna / Grid studies** — `trialNumber` in payload selects the trial/candidate.
   - **WFA studies** — `windowNumber` in payload selects the window; the source trial is resolved via `is_best_trial_number` (or the selected per-module trial in `wfa_window_trials`).
 - Bundle is built by `core.bundle_export.build_lancelot_partial_bundle`, which stamps the Merlin version, strategy version, CSV-derived symbol/timeframe, and canonical params.
+- Every exported bundle is live: V1 and V2 params receive `dateFilter=false`, `start=null`, and `end=null` after candidate merge, while resolved Warmup remains a top-level bundle field. Historical Merlin trade/equity exports continue to use study/window dates.
 
 
 ## UI Notes
