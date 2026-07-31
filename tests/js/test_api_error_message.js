@@ -16,6 +16,14 @@ const resultsFormatPath = path.join(
   'js',
   'results-format.js',
 );
+const resultsControllerPath = path.join(
+  repoRoot,
+  'src',
+  'ui',
+  'static',
+  'js',
+  'results-controller.js',
+);
 const context = {
   console,
   FormData,
@@ -90,6 +98,20 @@ async function main() {
 
   const helperUses = source.match(/await readApiErrorMessage\(/g) || [];
   assert.equal(helperUses.length, 3);
+
+  const resultsControllerSource = fs.readFileSync(resultsControllerPath, 'utf8');
+  assert.match(
+    resultsControllerSource,
+    /readApiErrorMessage\(response, 'Trade export failed\.'\)/,
+  );
+  assert.match(
+    resultsControllerSource,
+    /readApiErrorMessage\(response, 'Bundle export failed\.'\)/,
+  );
+  assert.equal(
+    (resultsControllerSource.match(/const message = await response\.text\(\);/g) || []).length,
+    0,
+  );
 
   const resultsSource = fs.readFileSync(resultsFormatPath, 'utf8');
   const resultsContext = {};

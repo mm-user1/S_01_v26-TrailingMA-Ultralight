@@ -34,6 +34,7 @@ from core.engine_v2.runtime_contract import (
     normalize_v2_runtime_field_value,
     normalize_v2_runtime_values,
 )
+from core.engine_v2.runtime_metadata import resolve_stored_v2_runtime
 from core.grid_engine import (
     GRID_SUPPORTED_FAST_OBJECTIVES,
     GRID_SUPPORTED_SLOW_OBJECTIVES,
@@ -813,6 +814,65 @@ class ResolvedV2Runtime:
     diagnostics: Tuple[V2Diagnostic, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedStoredExecutionContext:
+    """One strict stored-study context reused across an execution request."""
+
+    strategy: ResolvedStrategyContext
+    base_params: Dict[str, Any]
+    runtime_values: Optional[Dict[str, Any]]
+    warmup_bars: int
+    runtime_source: Optional[str]
+    diagnostics: Tuple[V2Diagnostic, ...]
+
+    def params_for(
+        self,
+        candidate_params: Optional[Dict[str, Any]] = None,
+        *,
+        operation_start: Any = None,
+        operation_end: Any = None,
+    ) -> Dict[str, Any]:
+        params = deepcopy(self.base_params)
+        candidate = deepcopy(candidate_params or {})
+        if not self.strategy.is_v2:
+            params.update(candidate)
+            if operation_start is not None or operation_end is not None:
+                params["dateFilter"] = True
+                params["start"] = operation_start
+                params["end"] = operation_end
+            return params
+
+        for name in V2_RESERVED_RUNTIME_PARAM_NAMES:
+            params.pop(name, None)
+            candidate.pop(name, None)
+        params.update(candidate)
+        runtime = dict(self.runtime_values or {})
+        if operation_start is not None or operation_end is not None:
+            runtime["dateFilter"] = True
+            runtime["start"] = normalize_v2_runtime_field_value(
+                "start",
+                operation_start,
+                strategy_id=self.strategy.strategy_id,
+                path="fixed_params.start",
+                user_boundary=False,
+            )
+            runtime["end"] = normalize_v2_runtime_field_value(
+                "end",
+                operation_end,
+                strategy_id=self.strategy.strategy_id,
+                path="fixed_params.end",
+                user_boundary=False,
+            )
+        params.update(
+            {
+                "dateFilter": runtime["dateFilter"],
+                "start": runtime["start"],
+                "end": runtime["end"],
+            }
+        )
+        return params
+
+
 def _validation_error(
     *,
     code: str,
@@ -912,6 +972,78 @@ def _resolve_strategy_id_from_request() -> ResolvedStrategyContext:
 def _require_valid_v2_context(context: ResolvedStrategyContext) -> None:
     if context.validation_error is not None:
         raise context.validation_error
+
+
+def _resolve_stored_execution_context(
+    study: Dict[str, Any],
+    *,
+    explicit_runtime: Optional[Dict[str, Any]] = None,
+) -> ResolvedStoredExecutionContext:
+    """Resolve a stored study before any data access or execution work."""
+
+    strategy_id = str(study.get("strategy_id") or "").strip()
+    context = _resolve_strategy_context(
+        [("study.strategy_id", bool(strategy_id), strategy_id)]
+    )
+    _require_valid_v2_context(context)
+    raw_config = study.get("config_json")
+    config = raw_config if isinstance(raw_config, dict) else {}
+    raw_fixed = config.get("fixed_params")
+    base_params = deepcopy(raw_fixed) if isinstance(raw_fixed, dict) else {}
+
+    if not context.is_v2:
+        warmup_bars = int(
+            study.get("warmup_bars")
+            or config.get("warmup_bars")
+            or 1000
+        )
+        return ResolvedStoredExecutionContext(
+            strategy=context,
+            base_params=base_params,
+            runtime_values=None,
+            warmup_bars=warmup_bars,
+            runtime_source=None,
+            diagnostics=(),
+        )
+
+    resolution = resolve_stored_v2_runtime(study, strategy_id=strategy_id)
+    if not resolution.usable or resolution.values is None:
+        detail = "; ".join(item.message for item in resolution.diagnostics)
+        raise _validation_error(
+            code="V2_STORED_RUNTIME_UNAVAILABLE",
+            strategy_id=strategy_id,
+            path="config_json.v2_runtime",
+            message=(
+                f"{strategy_id}: stored V2 runtime values are unavailable"
+                f"{': ' + detail if detail else '.'}"
+            ),
+        )
+
+    runtime_values = dict(resolution.values)
+    if explicit_runtime is not None:
+        if not isinstance(explicit_runtime, dict):
+            raise _validation_error(
+                code="V2_INVALID_RUNTIME_VALUE",
+                strategy_id=strategy_id,
+                path="runtime",
+                message=f"{strategy_id}: explicit runtime values must be a mapping.",
+            )
+        runtime_values.update(explicit_runtime)
+        runtime_values = normalize_v2_runtime_values(
+            runtime_values,
+            strategy_id=strategy_id,
+            user_boundary=False,
+            missing_date_filter=False,
+        )
+
+    return ResolvedStoredExecutionContext(
+        strategy=context,
+        base_params=base_params,
+        runtime_values=runtime_values,
+        warmup_bars=int(runtime_values["warmupBars"]),
+        runtime_source=resolution.source,
+        diagnostics=tuple(resolution.diagnostics),
+    )
 
 
 def _validation_error_response(
@@ -1514,6 +1646,40 @@ def _grid_preview_from_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
     return _parse_json_dict(summary.get("preview"))
 
 
+class _GridSettingsCompatibilityError(ValueError):
+    def __init__(self, reason: str, diagnostic: V2Diagnostic) -> None:
+        self.reason = reason
+        self.diagnostic = diagnostic
+        super().__init__(diagnostic.message)
+
+
+def _grid_settings_error(
+    reason: str,
+    strategy_id: str,
+    path: str,
+    message: str,
+    *,
+    code: Optional[str] = None,
+) -> _GridSettingsCompatibilityError:
+    default_codes = {
+        "missing_legacy_facts": "V2_STORED_GRID_PREVIEW_UNAVAILABLE",
+        "current_profile_incompatible": "V2_STORED_PROFILE_INCOMPATIBLE",
+        "backend_unavailable": "V2_STORED_GRID_PREVIEW_UNAVAILABLE",
+        "strategy_unavailable": "V2_STORED_STRATEGY_UNAVAILABLE",
+    }
+    return _GridSettingsCompatibilityError(
+        reason,
+        V2Diagnostic(
+            severity="warning",
+            code=code or default_codes[reason],
+            strategy_id=strategy_id or "<unknown strategy>",
+            path=path,
+            variant=None,
+            message=message,
+        ),
+    )
+
+
 def _derive_grid_preview(config: Dict[str, Any], study: Dict[str, Any]) -> Dict[str, Any]:
     payload = deepcopy(config)
     grid_config = _parse_json_dict(payload.get("grid_config"))
@@ -1540,29 +1706,90 @@ def _derive_grid_preview(config: Dict[str, Any], study: Dict[str, Any]) -> Dict[
                     break
     payload["optimization_mode"] = "grid"
 
-    strategy_id = str(
-        study.get("strategy_id")
-        or payload.get("strategy_id")
-        or "s03_reversal_v10"
-    )
+    strategy_id = str(study.get("strategy_id") or payload.get("strategy_id") or "").strip()
+    if not strategy_id:
+        raise _grid_settings_error(
+            "missing_legacy_facts",
+            strategy_id,
+            "study.strategy_id",
+            "Grid settings cannot be reconstructed because the stored strategy ID is missing.",
+        )
+    try:
+        context = _resolve_strategy_context(
+            [("study.strategy_id", True, strategy_id)]
+        )
+    except V2ValidationError as exc:
+        raise _grid_settings_error(
+            "strategy_unavailable",
+            strategy_id,
+            "study.strategy_id",
+            str(exc),
+        ) from exc
+    if context.validation_error is not None:
+        raise _grid_settings_error(
+            "current_profile_incompatible",
+            strategy_id,
+            "execution",
+            str(context.validation_error),
+        )
+    if not isinstance(payload.get("enabled_params"), dict) or not isinstance(
+        payload.get("fixed_params"), dict
+    ):
+        raise _grid_settings_error(
+            "missing_legacy_facts",
+            strategy_id,
+            "config_json",
+            "Stored Grid settings lack the parameter facts needed for preview reconstruction.",
+        )
     worker_processes = _grid_setting_number(
         payload.get("worker_processes", payload.get("workerProcesses")),
     )
-    warmup_bars = _grid_setting_number(payload.get("warmup_bars"))
+    if context.is_v2:
+        runtime_study = deepcopy(study)
+        runtime_study["config_json"] = config
+        runtime = resolve_stored_v2_runtime(
+            runtime_study, strategy_id=strategy_id
+        )
+        if not runtime.usable or runtime.values is None:
+            raise _grid_settings_error(
+                "backend_unavailable",
+                strategy_id,
+                "config_json.v2_runtime",
+                "Stored V2 runtime facts are unavailable for Grid settings reconstruction.",
+                code="V2_STORED_RUNTIME_METADATA_INCOMPATIBLE",
+            )
+        warmup_bars = int(runtime.values["warmupBars"])
+    else:
+        warmup_bars = _grid_setting_number(payload.get("warmup_bars"))
     try:
         config_obj = _build_optimization_config(
             "grid-sidebar.csv",
             payload,
             worker_processes or 1,
             strategy_id,
-            warmup_bars or 1000,
+            warmup_bars if warmup_bars is not None else 1000,
         )
         return preview_grid_parameter_space(config_obj)
-    except Exception:
-        return {}
+    except V2ValidationError as exc:
+        raise _grid_settings_error(
+            "current_profile_incompatible",
+            strategy_id,
+            "execution",
+            str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise _grid_settings_error(
+            "backend_unavailable",
+            strategy_id,
+            "config_json",
+            f"Grid settings backend is unavailable: {exc}",
+        ) from exc
 
 
-def build_grid_settings_view(study: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def build_grid_settings_view(
+    study: Dict[str, Any],
+    memo: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
     """Build compact Grid sidebar rows for Results and Analytics."""
     if not isinstance(study, dict):
         return None
@@ -1588,8 +1815,27 @@ def build_grid_settings_view(study: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not grid_summary:
         grid_summary = _parse_json_dict(config.get("grid_summary"))
     preview = _grid_preview_from_summary(grid_summary)
+    compatibility_error: Optional[_GridSettingsCompatibilityError] = None
     if not preview:
-        preview = _derive_grid_preview(config, study)
+        memo_key = json.dumps(
+            {
+                "strategy_id": study.get("strategy_id"),
+                "warmup_bars": study.get("warmup_bars"),
+                "config": config,
+            },
+            sort_keys=True,
+            default=str,
+        )
+        try:
+            if memo is not None and memo_key in memo:
+                preview = deepcopy(memo[memo_key])
+            else:
+                preview = _derive_grid_preview(config, study)
+                if memo is not None:
+                    memo[memo_key] = deepcopy(preview)
+        except _GridSettingsCompatibilityError as exc:
+            compatibility_error = exc
+            preview = {}
 
     grid_section = _parse_json_dict(grid_summary.get("grid"))
     planning_summary = _parse_json_dict(grid_section.get("planning"))
@@ -1879,6 +2125,20 @@ def build_grid_settings_view(study: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "is_wfa_grid": is_wfa_grid,
         "rows": rows,
         "allocation_rows": allocation_rows,
+        "available": compatibility_error is None or bool(grid_summary),
+        "unavailable_reason": (
+            compatibility_error.reason if compatibility_error is not None else None
+        ),
+        "diagnostics": (
+            [compatibility_error.diagnostic.to_dict()]
+            if compatibility_error is not None
+            else []
+        ),
+        "validation_warnings": (
+            [compatibility_error.diagnostic.message]
+            if compatibility_error is not None
+            else []
+        ),
     }
 
 

@@ -402,6 +402,12 @@ backend advertises capability via `get_backend_metadata()` (normalized by
     and `warmupBars`. They are normalized by the core, excluded from candidate
     domains and semantic/plan identity, and cannot be Grid axes or option
     overrides. Only the three date fields are rebased for WFA windows.
+  - New V2 Optuna, Grid, and WFA studies persist one exact request-level
+    `v2_runtime_metadata_v1` envelope in `config_json.v2_runtime`; V1 omits the
+    key and no migration is performed. Stored execution resolves the current
+    registry/profile first, uses the shared current/legacy/defaulted runtime
+    reader, ignores candidate runtime authority, applies operation dates last,
+    and keeps Warmup separate behind the `dateFilter` preparation gate.
   - V2 profiles are validated when parsed: certified execution modes,
     variant-selector mappings, declared consumers, and dependency topology must
     be valid before runner or compiled packing. An optimized truly unbound

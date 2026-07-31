@@ -1685,8 +1685,7 @@ function bindEventHandlers() {
       try {
         const response = await fetch(endpoint, requestOptions);
         if (!response.ok) {
-          const message = await response.text();
-          throw new Error(message || 'Trade export failed.');
+          throw new Error(await readApiErrorMessage(response, 'Trade export failed.'));
         }
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
@@ -1725,8 +1724,7 @@ function bindEventHandlers() {
           }
         );
         if (!response.ok) {
-          const message = await response.text();
-          throw new Error(message || 'Bundle export failed.');
+          throw new Error(await readApiErrorMessage(response, 'Bundle export failed.'));
         }
 
         const payload = await response.json();

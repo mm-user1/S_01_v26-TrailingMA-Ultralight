@@ -2188,6 +2188,7 @@ def save_optuna_study_to_db(
     import pandas as pd
     from optuna.trial import TrialState
 
+    config_payload = _prepare_study_config_payload(config)
     init_database()
 
     study_id = generate_study_id()
@@ -2310,7 +2311,6 @@ def save_optuna_study_to_db(
     except (TypeError, ValueError):
         optimization_time_seconds = None
 
-    config_payload = _safe_dict(config)
     if optuna_config is not None:
         config_payload["optuna_config"] = _safe_dict(optuna_config)
 
@@ -2519,6 +2519,8 @@ def save_grid_study_to_db(
     model for Results, Post Process, and trade export compatibility.
     """
 
+    config_payload = _prepare_study_config_payload(config)
+
     def json_safe(value: Any) -> Any:
         if isinstance(value, dict):
             return {str(k): json_safe(v) for k, v in value.items()}
@@ -2592,7 +2594,6 @@ def save_grid_study_to_db(
     except (TypeError, ValueError):
         optimization_time_seconds = None
 
-    config_payload = _safe_dict(config)
     config_payload["grid_settings"] = _safe_dict(grid_settings)
     config_payload["grid_summary"] = json_safe(grid_summary)
 
@@ -2772,6 +2773,7 @@ def save_wfa_study_to_db(
     start_time: float,
     score_config: Optional[Dict] = None,
 ) -> str:
+    config_payload = _prepare_study_config_payload(config)
     init_database()
 
     study_id = generate_study_id()
@@ -3098,7 +3100,7 @@ def save_wfa_study_to_db(
                 getattr(wf_result.stitched_oos, "wfe", None),
                 None,
                 json.dumps(score_config) if score_config else None,
-                json.dumps(_safe_dict(config)),
+                json.dumps(config_payload),
                 str(Path(csv_file_path).resolve()) if csv_file_path else "",
                 csv_display_name,
                 _format_date(wf_result.trading_start_date),
@@ -4406,6 +4408,30 @@ def _safe_dict(obj: Any) -> Dict[str, Any]:
     if isinstance(obj, dict):
         return _serialize_dict(obj)
     return {"value": str(obj)}
+
+
+def _prepare_study_config_payload(config: Any) -> Dict[str, Any]:
+    """Serialize and validate optional V2 runtime metadata before DB work."""
+
+    payload = _safe_dict(config)
+    if "v2_runtime" not in payload:
+        return payload
+    raw_metadata = payload.get("v2_runtime")
+    if raw_metadata is None:
+        payload.pop("v2_runtime", None)
+        return payload
+
+    from .engine_v2.runtime_metadata import parse_v2_runtime_metadata
+
+    strategy_id = str(payload.get("strategy_id") or "<unknown strategy>")
+    resolution = parse_v2_runtime_metadata(
+        raw_metadata,
+        strategy_id=strategy_id,
+    )
+    if not resolution.usable or resolution.source != "current":
+        detail = "; ".join(item.message for item in resolution.diagnostics)
+        raise ValueError(f"Invalid V2 runtime metadata: {detail}")
+    return payload
 
 
 def _serialize_dict(data: Dict[str, Any]) -> Dict[str, Any]:

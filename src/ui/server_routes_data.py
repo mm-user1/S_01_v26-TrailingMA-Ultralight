@@ -19,7 +19,7 @@ from core.backtest_engine import (
 )
 from core.bundle_export import build_lancelot_partial_bundle
 from core.export import export_trades_csv
-from core.engine_v2.diagnostics import V2ValidationError, warning_messages
+from core.engine_v2.diagnostics import V2Diagnostic, V2ValidationError, warning_messages
 from core.engine_v2.runtime_contract import runtime_contract_payload
 from core.optuna_engine import (
     CONSTRAINT_OPERATORS,
@@ -86,6 +86,7 @@ try:
         _resolve_csv_path,
         _resolve_strategy_context,
         _resolve_strategy_id_from_request,
+        _resolve_stored_execution_context,
         _resolve_wfa_period,
         _run_equity_export,
         _run_trade_export,
@@ -124,6 +125,7 @@ except ImportError:
         _resolve_csv_path,
         _resolve_strategy_context,
         _resolve_strategy_id_from_request,
+        _resolve_stored_execution_context,
         _resolve_wfa_period,
         _run_equity_export,
         _run_trade_export,
@@ -142,6 +144,12 @@ except ImportError:
 
 
 def register_routes(app):
+    def _stored_execution_or_response(study: Dict[str, Any]):
+        try:
+            return _resolve_stored_execution_context(study), None
+        except V2ValidationError as exc:
+            return None, _validation_error_response(exc)
+
     def _trade_time_ns(value: Any) -> int:
         if value is None:
             return -1
@@ -455,6 +463,9 @@ def register_routes(app):
         study = study_data["study"]
         if study.get("optimization_mode") not in {"optuna", "grid"}:
             return jsonify({"error": "Manual tests are supported only for Optuna/Grid studies."}), HTTPStatus.BAD_REQUEST
+        execution_context, error_response = _stored_execution_or_response(study)
+        if error_response:
+            return error_response
 
         if data_source == "original_csv":
             csv_path = study.get("csv_file_path")
@@ -481,8 +492,8 @@ def register_routes(app):
             return jsonify({"error": "Test period must be at least 1 day."}), HTTPStatus.BAD_REQUEST
 
         config = study.get("config_json") or {}
-        fixed_params = config.get("fixed_params") or {}
-        warmup_bars = study.get("warmup_bars") or config.get("warmup_bars") or 1000
+        fixed_params = execution_context.base_params
+        warmup_bars = execution_context.warmup_bars
 
         trials = study_data.get("trials") or []
         trial_map = {int(t.get("trial_number")): t for t in trials}
@@ -562,6 +573,13 @@ def register_routes(app):
                 baseline_period_days=int(baseline_period_days or 0),
                 test_period_days=int(test_period_days),
                 original_metrics_resolver=resolve_original_metrics,
+                execution_params_resolver=(
+                    lambda candidate, start, end: execution_context.params_for(
+                        candidate,
+                        operation_start=start,
+                        operation_end=end,
+                    )
+                ),
             )
         except Exception as exc:
             return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
@@ -654,6 +672,9 @@ def register_routes(app):
         study = study_data["study"]
         if study.get("optimization_mode") not in {"optuna", "grid"}:
             return jsonify({"error": "Trade export is only supported for Optuna/Grid studies."}), HTTPStatus.BAD_REQUEST
+        execution_context, error_response = _stored_execution_or_response(study)
+        if error_response:
+            return error_response
 
         csv_path = study.get("csv_file_path")
         csv_path, error_response = _resolve_csv_path_for_response(
@@ -668,11 +689,8 @@ def register_routes(app):
         if not trial:
             return jsonify({"error": "Trial not found."}), HTTPStatus.NOT_FOUND
 
-        config = study.get("config_json") or {}
-        fixed_params = config.get("fixed_params") or {}
-
-        params = {**fixed_params, **(trial.get("params") or {})}
-        warmup_bars = study.get("warmup_bars") or config.get("warmup_bars") or 1000
+        params = execution_context.params_for(trial.get("params") or {})
+        warmup_bars = execution_context.warmup_bars
 
         trades, error = _run_trade_export(
             strategy_id=study.get("strategy_id"),
@@ -704,6 +722,9 @@ def register_routes(app):
             return jsonify({"error": "Trade export is only supported for Optuna/Grid studies."}), HTTPStatus.BAD_REQUEST
         if not study.get("ft_enabled"):
             return jsonify({"error": "Forward test is not enabled for this study."}), HTTPStatus.BAD_REQUEST
+        execution_context, error_response = _stored_execution_or_response(study)
+        if error_response:
+            return error_response
 
         csv_path = study.get("csv_file_path")
         csv_path, error_response = _resolve_csv_path_for_response(
@@ -723,14 +744,12 @@ def register_routes(app):
         if not ft_start or not ft_end:
             return jsonify({"error": "Forward test date range is missing."}), HTTPStatus.BAD_REQUEST
 
-        config = study.get("config_json") or {}
-        fixed_params = config.get("fixed_params") or {}
-        params = {**fixed_params, **(trial.get("params") or {})}
-        params["dateFilter"] = True
-        params["start"] = ft_start
-        params["end"] = ft_end
-
-        warmup_bars = study.get("warmup_bars") or config.get("warmup_bars") or 1000
+        params = execution_context.params_for(
+            trial.get("params") or {},
+            operation_start=ft_start,
+            operation_end=ft_end,
+        )
+        warmup_bars = execution_context.warmup_bars
 
         trades, error = _run_trade_export(
             strategy_id=study.get("strategy_id"),
@@ -762,6 +781,9 @@ def register_routes(app):
             return jsonify({"error": "Trade export is only supported for Optuna/Grid studies."}), HTTPStatus.BAD_REQUEST
         if not study.get("oos_test_enabled"):
             return jsonify({"error": "OOS Test is not enabled for this study."}), HTTPStatus.BAD_REQUEST
+        execution_context, error_response = _stored_execution_or_response(study)
+        if error_response:
+            return error_response
 
         csv_path = study.get("csv_file_path")
         csv_path, error_response = _resolve_csv_path_for_response(
@@ -781,14 +803,12 @@ def register_routes(app):
         if not oos_start or not oos_end:
             return jsonify({"error": "OOS Test date range is missing."}), HTTPStatus.BAD_REQUEST
 
-        config = study.get("config_json") or {}
-        fixed_params = config.get("fixed_params") or {}
-        params = {**fixed_params, **(trial.get("params") or {})}
-        params["dateFilter"] = True
-        params["start"] = oos_start
-        params["end"] = oos_end
-
-        warmup_bars = study.get("warmup_bars") or config.get("warmup_bars") or 1000
+        params = execution_context.params_for(
+            trial.get("params") or {},
+            operation_start=oos_start,
+            operation_end=oos_end,
+        )
+        warmup_bars = execution_context.warmup_bars
 
         trades, error = _run_trade_export(
             strategy_id=study.get("strategy_id"),
@@ -818,6 +838,9 @@ def register_routes(app):
         study = study_data["study"]
         if study.get("optimization_mode") not in {"optuna", "grid"}:
             return jsonify({"error": "Manual trade export is only supported for Optuna/Grid studies."}), HTTPStatus.BAD_REQUEST
+        execution_context, error_response = _stored_execution_or_response(study)
+        if error_response:
+            return error_response
 
         test = load_manual_test_results(study_id, test_id)
         if not test:
@@ -851,14 +874,12 @@ def register_routes(app):
         if not start_date or not end_date:
             return jsonify({"error": "Manual test date range is missing."}), HTTPStatus.BAD_REQUEST
 
-        config = study.get("config_json") or {}
-        fixed_params = config.get("fixed_params") or {}
-        params = {**fixed_params, **(trial.get("params") or {})}
-        params["dateFilter"] = True
-        params["start"] = start_date
-        params["end"] = end_date
-
-        warmup_bars = study.get("warmup_bars") or config.get("warmup_bars") or 1000
+        params = execution_context.params_for(
+            trial.get("params") or {},
+            operation_start=start_date,
+            operation_end=end_date,
+        )
+        warmup_bars = execution_context.warmup_bars
 
         trades, error = _run_trade_export(
             strategy_id=study.get("strategy_id"),
@@ -890,6 +911,12 @@ def register_routes(app):
             return jsonify({"error": "Study not found."}), HTTPStatus.NOT_FOUND
 
         study = study_data["study"]
+        mode = str(study.get("optimization_mode") or "").lower()
+        if mode not in {"optuna", "grid", "wfa"}:
+            return jsonify({"error": "Bundle export is only supported for Optuna, Grid, and WFA studies."}), HTTPStatus.BAD_REQUEST
+        execution_context, error_response = _stored_execution_or_response(study)
+        if error_response:
+            return error_response
         csv_path = study.get("csv_file_path")
         csv_path, error_response = _resolve_csv_path_for_response(
             csv_path,
@@ -901,7 +928,8 @@ def register_routes(app):
 
         params: Dict[str, Any] = {}
         source_trial_number = 0
-        mode = str(study.get("optimization_mode") or "").lower()
+        operation_start = None
+        operation_end = None
 
         if mode == "wfa":
             raw_window_number = payload.get("windowNumber")
@@ -917,6 +945,8 @@ def register_routes(app):
                 return jsonify({"error": "WFA window not found."}), HTTPStatus.NOT_FOUND
 
             params = dict(window.get("best_params") or {})
+            operation_start = window.get("oos_start_ts") or window.get("oos_start_date")
+            operation_end = window.get("oos_end_ts") or window.get("oos_end_date")
             source_trial_number = int(window.get("is_best_trial_number") or 0)
 
             if source_trial_number <= 0:
@@ -942,12 +972,35 @@ def register_routes(app):
             if not trial:
                 return jsonify({"error": "Trial/candidate not found."}), HTTPStatus.NOT_FOUND
             params = dict(trial.get("params") or {})
+        if execution_context.strategy.is_v2:
+            params = execution_context.params_for(
+                params,
+                operation_start=operation_start,
+                operation_end=operation_end,
+            )
+            if execution_context.warmup_bars <= 0:
+                exc = V2ValidationError(
+                    V2Diagnostic(
+                        severity="error",
+                        code="V2_EXPORT_RUNTIME_INCOMPATIBLE",
+                        strategy_id=execution_context.strategy.strategy_id,
+                        path="v2_runtime.values.warmupBars",
+                        variant=None,
+                        message=(
+                            f"{execution_context.strategy.strategy_id}: Lancelot export "
+                            "requires warmupBars greater than zero."
+                        ),
+                    )
+                )
+                return _validation_error_response(exc)
+            bundle_study = dict(study)
+            bundle_study["warmup_bars"] = execution_context.warmup_bars
         else:
-            return jsonify({"error": "Bundle export is only supported for Optuna, Grid, and WFA studies."}), HTTPStatus.BAD_REQUEST
+            bundle_study = study
 
         try:
             bundle = build_lancelot_partial_bundle(
-                study=study,
+                study=bundle_study,
                 params=params,
                 trial_number=source_trial_number,
                 csv_path=csv_path,
@@ -1040,13 +1093,15 @@ def register_routes(app):
         study = study_data["study"]
         if study.get("optimization_mode") != "wfa":
             return jsonify({"error": "Equity export is only supported for WFA studies."}), HTTPStatus.BAD_REQUEST
+        execution_context, error_response = _stored_execution_or_response(study)
+        if error_response:
+            return error_response
 
         window = _find_wfa_window(study_data, window_number)
         if not window:
             return jsonify({"error": "WFA window not found."}), HTTPStatus.NOT_FOUND
 
         window_id = window.get("window_id") or f"{study_id}_w{window_number}"
-        fixed_params = (study.get("config_json") or {}).get("fixed_params") or {}
         params = window.get("best_params") or {}
 
         if module_type and module_type != "oos_result":
@@ -1104,12 +1159,12 @@ def register_routes(app):
         if error_response:
             return error_response
 
-        warmup_bars = study.get("warmup_bars") or (study.get("config_json") or {}).get("warmup_bars") or 1000
-
-        merged_params = {**fixed_params, **params}
-        merged_params["dateFilter"] = True
-        merged_params["start"] = actual_start
-        merged_params["end"] = actual_end
+        warmup_bars = execution_context.warmup_bars
+        merged_params = execution_context.params_for(
+            params,
+            operation_start=actual_start,
+            operation_end=actual_end,
+        )
 
         equity_curve, timestamps, error = _run_equity_export(
             strategy_id=study.get("strategy_id"),
@@ -1149,13 +1204,15 @@ def register_routes(app):
         study = study_data["study"]
         if study.get("optimization_mode") != "wfa":
             return jsonify({"error": "Trade export is only supported for WFA studies."}), HTTPStatus.BAD_REQUEST
+        execution_context, error_response = _stored_execution_or_response(study)
+        if error_response:
+            return error_response
 
         window = _find_wfa_window(study_data, window_number)
         if not window:
             return jsonify({"error": "WFA window not found."}), HTTPStatus.NOT_FOUND
 
         window_id = window.get("window_id") or f"{study_id}_w{window_number}"
-        fixed_params = (study.get("config_json") or {}).get("fixed_params") or {}
         params = window.get("best_params") or {}
 
         if module_type and module_type != "oos_result":
@@ -1205,12 +1262,12 @@ def register_routes(app):
         if error_response:
             return error_response
 
-        warmup_bars = study.get("warmup_bars") or (study.get("config_json") or {}).get("warmup_bars") or 1000
-
-        merged_params = {**fixed_params, **params}
-        merged_params["dateFilter"] = True
-        merged_params["start"] = actual_start
-        merged_params["end"] = actual_end
+        warmup_bars = execution_context.warmup_bars
+        merged_params = execution_context.params_for(
+            params,
+            operation_start=actual_start,
+            operation_end=actual_end,
+        )
 
         trades, error = _run_trade_export(
             strategy_id=study.get("strategy_id"),
@@ -1256,6 +1313,9 @@ def register_routes(app):
         study = study_data["study"]
         if study.get("optimization_mode") != "wfa":
             return jsonify({"error": "Trade export is only supported for WFA studies."}), HTTPStatus.BAD_REQUEST
+        execution_context, error_response = _stored_execution_or_response(study)
+        if error_response:
+            return error_response
 
         csv_path = study.get("csv_file_path")
         csv_path, error_response = _resolve_csv_path_for_response(
@@ -1270,9 +1330,7 @@ def register_routes(app):
         if not windows:
             return jsonify({"error": "No WFA windows available for this study."}), HTTPStatus.BAD_REQUEST
 
-        config = study.get("config_json") or {}
-        fixed_params = config.get("fixed_params") or {}
-        warmup_bars = study.get("warmup_bars") or config.get("warmup_bars") or 1000
+        warmup_bars = execution_context.warmup_bars
 
         from strategies import get_strategy
 
@@ -1296,10 +1354,11 @@ def register_routes(app):
             if start is None or end is None:
                 continue
 
-            params = {**fixed_params, **(window.get("best_params") or {})}
-            params["dateFilter"] = True
-            params["start"] = start
-            params["end"] = end
+            params = execution_context.params_for(
+                window.get("best_params") or {},
+                operation_start=start,
+                operation_end=end,
+            )
 
             try:
                 df_prepared, trade_start_idx = prepare_dataset_with_warmup(

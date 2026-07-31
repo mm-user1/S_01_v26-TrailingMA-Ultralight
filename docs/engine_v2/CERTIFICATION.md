@@ -479,6 +479,27 @@ runtime files are unchanged by Phase 2.5.
 
 ## Notes
 
+### Runtime persistence and replay gate
+
+Certified new V2 studies persist the exact `v2_runtime_metadata_v1` envelope
+under `config_json.v2_runtime`; V1 omits it and no migration/backfill is
+performed. Writer validation happens before the study transaction. Stored
+execution uses current registry/profile validation plus the shared
+current/legacy/defaulted reader, ignores candidate runtime authority, applies
+operation dates last, and keeps Warmup separate. A NULL study Warmup with no
+config Warmup or metadata is a usable defaulted value of 1000. Current metadata
+is preserved byte-for-byte as a JSON subobject when post-process/OOS config is
+updated and is never reconstructed on read.
+
+WFA persists request runtime only in its base study; window records remain the
+date authority for selected-window replay and per-window optimizer configs do
+not carry persistence metadata. Canonical `Z` formatting is required at V2
+execution boundaries, not for the existing FT/DSR/Stress scheduling strings.
+The certified preparation invariant is `dateFilter`-gated: inactive filtering
+uses full data and index zero. This intentionally corrects V2 stored exports
+whose candidate artifacts previously overrode an inactive study filter while
+leaving every V1 representation unchanged.
+
 The tick-rounding API is:
 
 - default: `priceRounding="none"`;

@@ -15,6 +15,10 @@ import pandas as pd
 from . import metrics
 from .backtest_engine import StrategyResult, prepare_dataset_with_warmup
 from .grid_engine import build_grid_dsr_results, run_grid_optimization, supports_grid_v2
+from .engine_v2.runtime_contract import (
+    V2_RESERVED_RUNTIME_PARAM_NAMES,
+    normalize_v2_runtime_field_value,
+)
 from .optuna_engine import OptunaConfig, OptimizationConfig, SamplerConfig, run_optuna_optimization
 from .param_identity import create_display_param_id
 from .storage import save_wfa_study_to_db
@@ -736,11 +740,43 @@ class WalkForwardEngine:
             df, start, end, self.config.warmup_bars
         )
 
-        run_params = params.copy()
-        run_params["dateFilter"] = True
-        run_params["start"] = start
-        run_params["end"] = end
+        run_params = self._window_execution_params(params, start, end)
         return self.strategy_class.run(df_prepared, run_params, trade_start_idx)
+
+    def _window_execution_params(
+        self,
+        params: Dict[str, Any],
+        start: pd.Timestamp,
+        end: pd.Timestamp,
+        *,
+        legacy_isoformat: bool = False,
+    ) -> Dict[str, Any]:
+        """Apply authoritative WFA bounds without changing V1 representation."""
+
+        run_params = deepcopy(params)
+        if isinstance(self.base_config_template.get("v2_runtime"), dict):
+            for name in V2_RESERVED_RUNTIME_PARAM_NAMES:
+                run_params.pop(name, None)
+            run_params["dateFilter"] = True
+            run_params["start"] = normalize_v2_runtime_field_value(
+                "start",
+                start,
+                strategy_id=self.config.strategy_id,
+                path="fixed_params.start",
+                user_boundary=False,
+            )
+            run_params["end"] = normalize_v2_runtime_field_value(
+                "end",
+                end,
+                strategy_id=self.config.strategy_id,
+                path="fixed_params.end",
+                user_boundary=False,
+            )
+        else:
+            run_params["dateFilter"] = True
+            run_params["start"] = start.isoformat() if legacy_isoformat else start
+            run_params["end"] = end.isoformat() if legacy_isoformat else end
+        return run_params
 
     def _run_window_is_pipeline(
         self,
@@ -2667,10 +2703,12 @@ class WalkForwardEngine:
         """Run the configured optimizer for a single WFA window."""
         csv_buffer = self._dataframe_to_csv_buffer(df)
 
-        fixed_params = deepcopy(self.base_config_template.get("fixed_params", {}))
-        fixed_params["dateFilter"] = True
-        fixed_params["start"] = start_time.isoformat()
-        fixed_params["end"] = end_time.isoformat()
+        fixed_params = self._window_execution_params(
+            self.base_config_template.get("fixed_params", {}),
+            start_time,
+            end_time,
+            legacy_isoformat=True,
+        )
 
         optimizer_mode = str(self.base_config_template.get("optimization_mode") or "optuna").lower()
         base_config = OptimizationConfig(

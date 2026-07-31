@@ -51,6 +51,13 @@ from .runtime_contract import (
     runtime_contract_payload,
     validate_v2_runtime_declarations,
 )
+from .runtime_metadata import (
+    V2_RUNTIME_METADATA_SCHEMA_VERSION,
+    V2RuntimeMetadataResolution,
+    build_v2_runtime_metadata,
+    parse_v2_runtime_metadata,
+    resolve_stored_v2_runtime,
+)
 
 __all__ = [
     "EXECUTION_REASON_BOUNDARY_STATE",
@@ -88,13 +95,17 @@ __all__ = [
     "V2_REBASABLE_DATE_PARAM_NAMES",
     "V2_RESERVED_RUNTIME_PARAM_NAMES",
     "V2_RUNTIME_CONTRACT_VERSION",
+    "V2_RUNTIME_METADATA_SCHEMA_VERSION",
+    "V2RuntimeMetadataResolution",
     "VariantSelector",
     "VariantSpec",
     "build_kernel_config",
+    "build_v2_runtime_metadata",
     "compute_core_metrics_from_balance_and_trades",
     "intrabar_path",
     "normalize_v2_runtime_field_value",
     "normalize_v2_runtime_values",
+    "parse_v2_runtime_metadata",
     "round_level_outward",
     "round_stop_level",
     "round_target_level",
@@ -103,6 +114,7 @@ __all__ = [
     "round_trail_level",
     "run_reference_kernel",
     "run_v2_strategy",
+    "resolve_stored_v2_runtime",
     "runtime_contract_payload",
     "validate_v2_runtime_declarations",
     "validate_tick_size",

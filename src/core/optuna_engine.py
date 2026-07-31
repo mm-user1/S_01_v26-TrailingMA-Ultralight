@@ -70,6 +70,7 @@ class OptimizationConfig:
     worker_processes: int = 1
     warmup_bars: int = 1000
     csv_original_name: Optional[str] = None
+    v2_runtime: Optional[Dict[str, Any]] = None
 
     # Strategy-specific execution defaults
     contract_size: float = 1.0

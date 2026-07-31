@@ -1520,12 +1520,62 @@ def test_v2_preview_and_direct_run_build_equal_runtime_and_grid_facts(
     for name in facts:
         assert getattr(preview_config, name) == getattr(run_config, name), name
     assert "warmupBars" not in preview_config.fixed_params
+    assert run_config.v2_runtime == {
+        "schema_version": "v2_runtime_metadata_v1",
+        "contract_version": "v2_runtime_contract_v1",
+        "values": {
+            "dateFilter": False,
+            "start": None,
+            "end": None,
+            "warmupBars": 250,
+        },
+        "diagnostics": [],
+        "validation_warnings": [],
+    }
     if "start" in fixed_params:
         assert preview_config.fixed_params["start"] is None
         assert preview_config.fixed_params["end"] is None
     else:
         assert "start" not in preview_config.fixed_params
         assert "end" not in preview_config.fixed_params
+
+
+def test_v2_walkforward_runtime_failure_precedes_cancellation_and_csv(
+    monkeypatch,
+    client,
+):
+    from ui import server_routes_run
+
+    monkeypatch.setattr(
+        server_routes_run,
+        "_clear_cancelled_run",
+        lambda _run_id: pytest.fail("cancellation state must not be touched"),
+    )
+    monkeypatch.setattr(
+        server_routes_run,
+        "_resolve_csv_path",
+        lambda _raw: pytest.fail("CSV must not be resolved"),
+    )
+    response = client.post(
+        "/api/walkforward",
+        data={
+            "strategy": "s06_r_trend_v02_b2",
+            "runId": "early-v2",
+            "csvPath": "missing.csv",
+            "warmupBars": "99",
+            "config": json.dumps(
+                {
+                    "strategy_id": "s06_r_trend_v02_b2",
+                    "fixed_params": {"dateFilter": False},
+                }
+            ),
+        },
+    )
+
+    assert response.status_code == 400
+    diagnostic = _v2_runtime_diagnostic(response)
+    assert diagnostic["code"] == "V2_INVALID_RUNTIME_VALUE"
+    assert diagnostic["path"] == "warmupBars"
 
 
 @pytest.mark.parametrize("optimization_mode", ["optuna", "grid"])
@@ -4886,6 +4936,45 @@ def _grid_settings_rows(view):
 def _grid_settings_allocation_rows(view):
     assert view is not None
     return {row["key"]: row["val"] for row in view["allocation_rows"]}
+
+
+def test_grid_settings_derivation_memo_ignores_study_row_identity(monkeypatch):
+    from ui import server_services
+
+    calls = []
+
+    def fake_derive(config, study):
+        calls.append((deepcopy(config), deepcopy(study)))
+        return {"candidate_count": 10, "modes": []}
+
+    monkeypatch.setattr(server_services, "_derive_grid_preview", fake_derive)
+    config = _grid_sidebar_config()
+    first = {
+        "study_id": "grid-one",
+        "strategy_id": "s03_reversal_v10",
+        "optimization_mode": "grid",
+        "config_json": config,
+    }
+    second = deepcopy(first)
+    second["study_id"] = "grid-two"
+    memo = {}
+
+    assert build_grid_settings_view(first, memo=memo)["available"] is True
+    assert build_grid_settings_view(second, memo=memo)["available"] is True
+    assert len(calls) == 1
+
+
+def test_grid_settings_unknown_strategy_is_viewable_without_substitution():
+    study = {
+        "strategy_id": "removed_strategy",
+        "optimization_mode": "grid",
+        "config_json": _grid_sidebar_config(),
+    }
+    view = build_grid_settings_view(study)
+
+    assert view["available"] is False
+    assert view["unavailable_reason"] == "strategy_unavailable"
+    assert view["diagnostics"][0]["strategy_id"] == "removed_strategy"
 
 
 def _assert_saved_v2_full_enumeration_grid_settings(view):

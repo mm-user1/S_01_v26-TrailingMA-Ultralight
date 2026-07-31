@@ -653,6 +653,43 @@ strategy on the `signal_reversal` topology:
 
 ## Baseline And Certification
 
+## Persisted Runtime And Stored Execution
+
+Every newly saved V2 Optuna, Grid, or WFA study carries one request-level
+`config_json.v2_runtime` envelope with schema `v2_runtime_metadata_v1` and
+contract `v2_runtime_contract_v1`. Its complete `values` mapping is ordered as
+`dateFilter`, `start`, `end`, `warmupBars`; diagnostics retain `info`, while
+`validation_warnings` is the warning-only ordered projection. V1 writers omit
+the key entirely. The envelope is transported by `OptimizationConfig` for
+direct runs and by the WFA base template; per-window configs deliberately omit
+it.
+
+Stored reads prefer valid current metadata, then legacy fixed-param dates,
+then a non-NULL study Warmup, then a non-NULL config Warmup, and finally core
+defaults for genuinely absent old facts. Explicit false, blank, and internal
+zero values are presence-sensitive. Unknown metadata can use legacy fallback
+only when an independent legacy fact exists; otherwise it is unavailable. No
+read, post-process config update, or compatibility view rewrites the envelope.
+Existing stitched-equity backfill and Analytics cache behavior are separate
+storage concerns, not runtime migrations.
+
+At stored V2 execution, the current registry/profile must still resolve.
+Candidate artifacts may retain old runtime-shaped keys, but those keys are
+removed before merge; the resolved runtime and any FT/OOS/manual/WFA operation
+dates are applied last, with Warmup passed separately. `dateFilter` continues
+to gate preparation, so false means full data and `trade_start_idx=0` even if
+dates are present. WFA execution mappings use canonical UTC `Z` timestamps;
+its FT `YYYY-MM-DD` and existing DSR/Stress scheduling transports remain
+unchanged. Unknown/removed strategies remain viewable from saved facts but
+cannot execute or export.
+
+The S06 B2 and S06 Regime-TL B2 configs declare `dateFilter` and `warmupBars`
+with `role="runtime"` and omit optional `start`/`end` declarations. The S03
+Regime-ER B2 config declares all four reserved fields with `role="runtime"`.
+These are declarations of the core contract, never candidate axes or
+strategy-owned parameters; omitted declarations do not remove fields from the
+four-value runtime metadata envelope.
+
 Use a TradingView or other external baseline when the strategy is meant to
 match an external reference, when execution semantics are newly introduced, or
 when the strategy will be used as a certification target. Keep raw exports and

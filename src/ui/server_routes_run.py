@@ -20,8 +20,9 @@ from core.backtest_engine import (
     prepare_dataset_with_warmup,
 )
 from core.export import export_trades_csv
-from core.engine_v2.diagnostics import V2ValidationError
+from core.engine_v2.diagnostics import V2Diagnostic, V2ValidationError
 from core.engine_v2.runtime_contract import normalize_v2_runtime_field_value
+from core.engine_v2.runtime_metadata import build_v2_runtime_metadata
 from core.grid_engine import build_grid_dsr_results, preview_grid_parameter_space
 from core.optuna_engine import (
     CONSTRAINT_OPERATORS,
@@ -156,6 +157,21 @@ def _objectives_for_route_validation(config_payload: Dict[str, Any]) -> Tuple[Li
         or config_payload.get("primary_objective")
     )
     return objectives, primary
+
+
+def _v2_request_payload_error(
+    strategy_id: str, path: str, message: str
+) -> V2ValidationError:
+    return V2ValidationError(
+        V2Diagnostic(
+            severity="error",
+            code="V2_INVALID_RUNTIME_REQUEST",
+            strategy_id=strategy_id,
+            path=path,
+            variant=None,
+            message=message,
+        )
+    )
 
 
 def register_routes(app):
@@ -353,6 +369,7 @@ def register_routes(app):
     def run_walkforward_optimization() -> object:
         """Run Walk-Forward Analysis"""
         data = request.form
+        v2_runtime_metadata = None
         try:
             strategy_context = _resolve_strategy_id_from_request()
             if strategy_context.is_v2:
@@ -360,6 +377,56 @@ def register_routes(app):
         except V2ValidationError as exc:
             return _validation_error_response(exc)
         strategy_id = strategy_context.strategy_id
+
+        if strategy_context.is_v2:
+            config_raw = data.get("config")
+            if not config_raw:
+                return _validation_error_response(
+                    _v2_request_payload_error(
+                        strategy_id,
+                        "config",
+                        f"{strategy_id}: missing optimization config.",
+                    )
+                )
+            try:
+                config_payload = json.loads(config_raw)
+            except json.JSONDecodeError as exc:
+                return _validation_error_response(
+                    _v2_request_payload_error(
+                        strategy_id,
+                        "config",
+                        f"{strategy_id}: optimization config must be valid JSON: {exc.msg}.",
+                    )
+                )
+            if not isinstance(config_payload, dict):
+                return _validation_error_response(
+                    _v2_request_payload_error(
+                        strategy_id,
+                        "config",
+                        f"{strategy_id}: optimization config must be a mapping.",
+                    )
+                )
+            warmup_members = []
+            if "warmupBars" in data:
+                warmup_members.append(
+                    ("warmupBars", "warmupBars", data.get("warmupBars"))
+                )
+            try:
+                config_payload, runtime = _normalize_v2_optimizer_payload(
+                    strategy_context,
+                    config_payload,
+                    warmup_members=warmup_members,
+                    missing_date_filter=False,
+                )
+                warmup_bars = runtime.values["warmupBars"]
+                v2_runtime_metadata = build_v2_runtime_metadata(
+                    runtime.values,
+                    runtime.diagnostics,
+                    strategy_id=strategy_id,
+                )
+            except V2ValidationError as exc:
+                return _validation_error_response(exc)
+
         run_id = _resolve_request_run_id(data)
         _clear_cancelled_run(run_id)
         csv_path_raw = (data.get("csvPath") or "").strip()
@@ -387,14 +454,15 @@ def register_routes(app):
         except OSError:
             return jsonify({"error": "Failed to access CSV file."}), HTTPStatus.BAD_REQUEST
 
-        config_raw = data.get("config")
-        if not config_raw:
-            return jsonify({"error": "Missing optimization config."}), HTTPStatus.BAD_REQUEST
+        if not strategy_context.is_v2:
+            config_raw = data.get("config")
+            if not config_raw:
+                return jsonify({"error": "Missing optimization config."}), HTTPStatus.BAD_REQUEST
 
-        try:
-            config_payload = json.loads(config_raw)
-        except json.JSONDecodeError:
-            return jsonify({"error": "Invalid optimization config JSON."}), HTTPStatus.BAD_REQUEST
+            try:
+                config_payload = json.loads(config_raw)
+            except json.JSONDecodeError:
+                return jsonify({"error": "Invalid optimization config JSON."}), HTTPStatus.BAD_REQUEST
 
         post_process_payload = config_payload.get("postProcess")
         if not isinstance(post_process_payload, dict):
@@ -426,12 +494,13 @@ def register_routes(app):
         if not valid:
             return jsonify({"error": error}), HTTPStatus.BAD_REQUEST
 
-        warmup_bars_raw = data.get("warmupBars", "1000")
-        try:
-            warmup_bars = int(warmup_bars_raw)
-            warmup_bars = max(100, min(5000, warmup_bars))
-        except (TypeError, ValueError):
-            warmup_bars = 1000
+        if not strategy_context.is_v2:
+            warmup_bars_raw = data.get("warmupBars", "1000")
+            try:
+                warmup_bars = int(warmup_bars_raw)
+                warmup_bars = max(100, min(5000, warmup_bars))
+            except (TypeError, ValueError):
+                warmup_bars = 1000
 
         try:
             optimization_config = _build_optimization_config(
@@ -508,6 +577,8 @@ def register_routes(app):
 
         optimization_config.warmup_bars = warmup_bars
         optimization_config.csv_original_name = original_csv_name
+        if strategy_context.is_v2:
+            optimization_config.v2_runtime = v2_runtime_metadata
 
         base_template = {
             "enabled_params": json.loads(json.dumps(optimization_config.enabled_params)),
@@ -573,6 +644,10 @@ def register_routes(app):
         }
         if post_process_payload:
             base_template["postProcess"] = post_process_payload
+        if v2_runtime_metadata is not None:
+            base_template["v2_runtime"] = json.loads(
+                json.dumps(v2_runtime_metadata)
+            )
 
         optuna_settings = {
             "objectives": list(getattr(optimization_config, "objectives", []) or []),
@@ -996,6 +1071,7 @@ def register_routes(app):
         config_raw = request.form.get("config")
         if not config_raw:
             return ("Optimization config is required.", HTTPStatus.BAD_REQUEST)
+        v2_runtime_metadata = None
         try:
             config_payload = json.loads(config_raw)
         except json.JSONDecodeError:
@@ -1017,6 +1093,11 @@ def register_routes(app):
                     warmup_members=warmup_members,
                 )
                 warmup_bars = runtime.values["warmupBars"]
+                v2_runtime_metadata = build_v2_runtime_metadata(
+                    runtime.values,
+                    runtime.diagnostics,
+                    strategy_id=strategy_context.strategy_id,
+                )
             else:
                 warmup_bars = _parse_warmup_bars(
                     request.form.get("warmupBars", "1000")
@@ -1241,6 +1322,8 @@ def register_routes(app):
             return ("Failed to prepare optimization config.", HTTPStatus.INTERNAL_SERVER_ERROR)
 
         optimization_config.csv_original_name = source_name
+        if v2_runtime_metadata is not None:
+            optimization_config.v2_runtime = v2_runtime_metadata
         optimizer_mode = str(getattr(optimization_config, "optimization_mode", "optuna") or "optuna").lower()
         optimization_config.grid_needs_dsr = bool(dsr_enabled)
         optimization_config.grid_dsr_top_k = int(dsr_top_k)

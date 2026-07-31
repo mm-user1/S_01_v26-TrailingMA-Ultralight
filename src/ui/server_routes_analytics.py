@@ -773,6 +773,8 @@ def register_routes(app):
         timeframe_values: set[str] = set()
         wfa_mode_values: set[str] = set()
         is_oos_values: set[str] = set()
+        grid_settings_memo: Dict[str, Any] = {}
+        grid_settings_failures: List[str] = []
 
         for row in rows:
             row_dict = dict(row)
@@ -917,6 +919,16 @@ def register_routes(app):
             run_time_seconds = _safe_int(row_dict.get("optimization_time_seconds"))
             if run_time_seconds is None and created_at_epoch is not None and completed_at_epoch is not None:
                 run_time_seconds = max(0, completed_at_epoch - created_at_epoch)
+
+            try:
+                grid_settings = build_grid_settings_view(
+                    row_dict, memo=grid_settings_memo
+                )
+            except Exception as exc:  # unexpected derivation failures are isolated per row
+                grid_settings = None
+                grid_settings_failures.append(
+                    f"{row_dict.get('study_id')}: {type(exc).__name__}: {exc}"
+                )
 
             studies.append(
                 {
@@ -1065,9 +1077,16 @@ def register_routes(app):
                         ),
                         "run_time_seconds": run_time_seconds,
                     },
-                    "grid_settings": build_grid_settings_view(row_dict),
+                    "grid_settings": grid_settings,
                     "post_process_settings": _extract_post_process_settings(config_payload),
                 }
+            )
+
+        if grid_settings_failures:
+            app.logger.error(
+                "Grid settings derivation failed for %d Analytics studies: %s",
+                len(grid_settings_failures),
+                "; ".join(grid_settings_failures),
             )
 
         studies.sort(

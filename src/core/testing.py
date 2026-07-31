@@ -117,6 +117,9 @@ def run_period_test_for_trials(
     baseline_period_days: int,
     test_period_days: int,
     original_metrics_resolver: Callable[[Dict[str, Any]], Dict[str, Any]],
+    execution_params_resolver: Optional[
+        Callable[[Dict[str, Any], pd.Timestamp, pd.Timestamp], Dict[str, Any]]
+    ] = None,
 ) -> List[Dict[str, Any]]:
     if df is None or df.empty:
         raise ValueError("Dataset is empty for period test.")
@@ -138,10 +141,15 @@ def run_period_test_for_trials(
         if not trial:
             continue
         trial_number = _extract_trial_number(trial, idx)
-        params = {**fixed_params, **(trial.get("params") or {})}
-        params["dateFilter"] = True
-        params["start"] = start_ts
-        params["end"] = end_ts
+        if execution_params_resolver is not None:
+            params = execution_params_resolver(
+                trial.get("params") or {}, start_ts, end_ts
+            )
+        else:
+            params = {**fixed_params, **(trial.get("params") or {})}
+            params["dateFilter"] = True
+            params["start"] = start_ts
+            params["end"] = end_ts
 
         result = strategy_class.run(df_prepared, params, trade_start_idx)
         test_metrics = build_test_metrics(result)
