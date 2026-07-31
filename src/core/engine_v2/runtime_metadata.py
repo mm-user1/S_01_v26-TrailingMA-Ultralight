@@ -88,6 +88,8 @@ def parse_stored_config_json(
 
     if not present:
         return {}, None
+    if raw is None or isinstance(raw, str) and not raw.strip():
+        return {}, None
     if isinstance(raw, Mapping):
         return dict(raw), None
     if isinstance(raw, str):
@@ -321,7 +323,7 @@ def resolve_stored_v2_runtime(
                 and schema_version != V2_RUNTIME_METADATA_SCHEMA_VERSION
             )
             unsupported_contract = (
-                isinstance(contract_version, str)
+                "contract_version" in raw_metadata
                 and contract_version != V2_RUNTIME_CONTRACT_VERSION
             )
             if unsupported_schema or unsupported_contract:

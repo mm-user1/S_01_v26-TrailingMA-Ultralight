@@ -324,6 +324,7 @@ class WalkForwardEngine:
         if self._is_v2_strategy:
             from .engine_v2.profile import parse_execution_profile
 
+            # Construction is the certification boundary for every caller.
             parse_execution_profile(strategy_config)
 
     def split_data(

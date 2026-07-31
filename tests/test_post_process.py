@@ -1,5 +1,6 @@
 from pathlib import Path
 from copy import deepcopy
+import json
 import sys
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from core.post_process import (
     PostProcessConfig,
     _ft_worker_entry,
+    _ft_result_from_payload,
     annotate_ft_threshold,
     calculate_comparison_metrics,
     calculate_ft_dates,
@@ -209,15 +211,17 @@ def test_forward_test_worker_projects_aligned_inclusive_bounds(monkeypatch):
 
     monkeypatch.setattr("core.backtest_engine.load_data", lambda _path: df)
     monkeypatch.setattr("strategies.get_strategy", lambda _strategy_id: FakeStrategy)
+    task = {
+        "trial_number": 1,
+        "source_rank": 1,
+        "params": {"maLength": 21},
+        "is_metrics": {},
+    }
+    original_task = deepcopy(task)
     payload = _ft_worker_entry(
         "unused.csv",
         "s06_r_trend_v02_b2",
-        {
-            "trial_number": 1,
-            "source_rank": 1,
-            "params": {"maLength": 21},
-            "is_metrics": {},
-        },
+        task,
         "2025-01-02",
         "2025-01-03",
         3,
@@ -230,3 +234,62 @@ def test_forward_test_worker_projects_aligned_inclusive_bounds(monkeypatch):
     assert captured["params"]["start"] == pd.Timestamp("2025-01-02", tz="UTC")
     assert captured["params"]["end"] == pd.Timestamp("2025-01-03 23:00", tz="UTC")
     assert captured["end"] == captured["params"]["end"]
+    assert payload["params"] == {"maLength": 21}
+    assert _ft_result_from_payload(payload).params == {"maLength": 21}
+    json.dumps(payload["params"])
+    assert task == original_task
+
+
+@pytest.mark.parametrize(
+    ("strategy_id", "expected_trades", "expected_profit"),
+    [
+        ("s06_r_trend_v02_b2", 17, 26.42572205385646),
+        ("s06_r_trend_v02", 17, 26.42572205385646),
+        ("s03_reversal_v10", 33, -5.974975912499943),
+    ],
+)
+def test_real_forward_test_worker_keeps_candidate_params_json_safe(
+    strategy_id, expected_trades, expected_profit
+):
+    from strategies import get_strategy_config
+
+    config = get_strategy_config(strategy_id)
+    candidate = {
+        name: spec["default"]
+        for name, spec in config.get("parameters", {}).items()
+        if isinstance(spec, dict)
+        and "default" in spec
+        and name not in {"dateFilter", "start", "end", "warmupBars"}
+    }
+    task = {
+        "trial_number": 1,
+        "source_rank": 1,
+        "params": candidate,
+        "is_metrics": {},
+    }
+    original_task = deepcopy(task)
+    csv_path = (
+        Path(__file__).parent.parent
+        / "data"
+        / "raw"
+        / "OKX_SUIUSDT.P, 30 2025.01.01-2026.02.01.csv"
+    )
+
+    payload = _ft_worker_entry(
+        str(csv_path),
+        strategy_id,
+        task,
+        "2025-05-01",
+        "2025-06-15",
+        200,
+        90,
+        45,
+    )
+
+    assert payload is not None
+    assert payload["ft_metrics"]["total_trades"] == expected_trades
+    assert payload["ft_metrics"]["net_profit_pct"] == pytest.approx(expected_profit)
+    assert payload["params"] == candidate
+    assert not {"dateFilter", "start", "end", "warmupBars"} & payload["params"].keys()
+    json.dumps(payload["params"])
+    assert task == original_task

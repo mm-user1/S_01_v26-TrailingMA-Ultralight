@@ -500,16 +500,25 @@ uses full data and index zero. This intentionally corrects V2 stored exports
 whose candidate artifacts previously overrode an inactive study filter.
 
 Forward Test removes all candidate runtime keys before dispatch and projects
-the aligned start and inclusive end timestamps after dataset alignment. This
-keeps the strategy date gate identical to the FT slice, including the final
-day. The correction applies to V2 and date-aware V1 strategies. Existing FT
-rows are not backfilled and must be rerun when they influence a decision.
+the aligned start and inclusive end timestamps into an execution-only mapping
+after dataset alignment. This keeps the strategy date gate identical to the FT
+slice, including the final day, while the returned module candidate remains
+JSON-safe for identity, Stress handoff, and WFA storage. The correction applies
+to V2 and date-aware V1 strategies. Existing FT rows are not backfilled and
+must be rerun when they influence a decision.
 
-Lancelot partial bundles are live contracts for Optuna, full or sampled Grid,
-and WFA. Certified V1 and V2 exports resolve current strategy/runtime before
-hashing, keep resolved Warmup at the top level, omit param-level Warmup, and
-project the inactive live date triple (`false`, `null`, `null`) last. Historical
-Merlin trade/equity exports continue to use their study or window dates.
+Lancelot partial-bundle export is certified only for the legacy
+`s03_reversal_v10` integration across Optuna, Grid, and WFA selection. It is not
+part of the generic Backtester V2 import or certification contract, and V2
+strategy certification requires neither Lancelot aliases nor export support.
+After a read-only `study_id`/`strategy_id` lookup, the API rejects every other
+strategy before full study/candidate loading, stitched-OOS backfill,
+stored-runtime resolution, CSV access, hashing, or bundle construction. Adding
+another strategy requires a separate reviewed Merlin/Lancelot contract and
+implementation task after its live-trading contract is known. The accepted S03
+v10 bundle remains candidate-only, keeps Warmup at the top level, and projects
+the inactive live date triple (`false`, `null`, `null`) last. Historical Merlin
+trade/equity exports continue to use their study or window dates.
 
 The tick-rounding API is:
 

@@ -70,7 +70,7 @@ Key: Flask, pandas, numpy, matplotlib, optuna==4.6.0
 8. **Database persistence** - All optimization results automatically saved to SQLite, browsable through web UI; analytics group caches keep aggregated WFA equity computations warm
 9. **Multi-database support** - Multiple `.db` files with active DB switching
 10. **Three-page UI** - Start (configuration), Results (studies browser), Analytics (WFA research)
-11. **Bundle export** - Optuna/Grid trials and WFA windows can be exported as a Lancelot-compatible partial bundle for downstream execution
+11. **Bundle export** - `s03_reversal_v10` Optuna/Grid trials and WFA windows can be exported as a Lancelot-compatible partial bundle for downstream execution
 
 ### Directory Structure
 ```
@@ -484,12 +484,13 @@ backend advertises capability via `get_backend_metadata()` (normalized by
 
 ## Lancelot Bundle Export
 
-- `POST /api/studies/<id>/export/lancelot` produces a partial bundle for the Lancelot downstream executor.
+- `POST /api/studies/<id>/export/lancelot` is a narrow legacy integration certified only for `s03_reversal_v10`; a read-only two-column identity lookup rejects every other strategy before full study/candidate loading, stitched-OOS backfill, stored-runtime resolution, CSV access, hashing, or bundle work.
 - Supported sources:
   - **Optuna / Grid studies** — `trialNumber` in payload selects the trial/candidate.
   - **WFA studies** — `windowNumber` in payload selects the window; the source trial is resolved via `is_best_trial_number` (or the selected per-module trial in `wfa_window_trials`).
 - Bundle is built by `core.bundle_export.build_lancelot_partial_bundle`, which stamps the Merlin version, strategy version, CSV-derived symbol/timeframe, and canonical params.
-- Every exported bundle is live: V1 and V2 params receive `dateFilter=false`, `start=null`, and `end=null` after candidate merge, while resolved Warmup remains a top-level bundle field. Historical Merlin trade/equity exports continue to use study/window dates.
+- Lancelot export is not part of the generic Backtester V2 import or certification contract. New V2 strategies require neither Lancelot aliases nor export certification. Supporting another strategy requires a separate reviewed Merlin/Lancelot contract and implementation task after its live-trading contract is known.
+- The accepted S03 v10 bundle remains live and candidate-only: `dateFilter=false`, `start=null`, and `end=null` are applied last, while Warmup remains a top-level bundle field. Historical Merlin trade/equity exports continue to use study/window dates.
 
 
 ## UI Notes
@@ -521,7 +522,7 @@ backend advertises capability via `get_backend_metadata()` (normalized by
 - Equity curve visualization
 - Parameter comparison tables
 - Download trades CSV for IS/FT/OOS/Manual/WFA results (on-demand generation)
-- Export selected trial or WFA window as a Lancelot partial bundle
+- Export an S03 v10 selected trial or WFA window as a Lancelot partial bundle
 - Delete studies or update CSV file paths
 
 **Analytics Page (`/analytics` - analytics.html):**
@@ -607,7 +608,7 @@ backend advertises capability via `get_backend_metadata()` (normalized by
 - `POST /api/studies/<study_id>/wfa/windows/<window_number>/equity` - Generate WFA window equity curve on-demand
 - `POST /api/studies/<study_id>/wfa/windows/<window_number>/trades` - Download WFA window trades CSV
 - `POST /api/studies/<study_id>/wfa/trades` - Download stitched WFA OOS trades CSV
-- `POST /api/studies/<study_id>/export/lancelot` - Build a Lancelot partial bundle from a trial (Optuna/Grid) or window (WFA)
+- `POST /api/studies/<study_id>/export/lancelot` - Build an S03 v10 Lancelot partial bundle from a trial (Optuna/Grid) or window (WFA); other strategies return HTTP 400
 
 ### Database Management
 - `GET /api/databases` - List all `.db` files with active marker

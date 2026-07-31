@@ -21,7 +21,15 @@ from core.walkforward_engine import (
     WindowResult,
 )
 from core.optuna_engine import OptimizationResult
-from core.post_process import DSRConfig, DSRResult, PostProcessConfig, StressTestConfig
+from core.post_process import (
+    DSRConfig,
+    DSRResult,
+    PostProcessConfig,
+    StressTestConfig,
+    _ft_result_from_payload,
+    _ft_worker_entry,
+)
+from core.engine_v2 import build_v2_runtime_metadata
 from core.backtest_engine import StrategyResult, TradeRecord
 from core.backtest_engine import load_data
 from strategies import get_strategy_config
@@ -158,6 +166,85 @@ def test_wfa_window_runtime_family_comes_from_registry_not_metadata_carrier():
 def test_wfa_unknown_strategy_failure_order_remains_explicit():
     with pytest.raises(ValueError, match="Failed to load strategy 'missing_strategy'"):
         WalkForwardEngine(WFConfig(strategy_id="missing_strategy"), {}, {})
+
+
+def test_real_ft_result_converts_and_persists_as_wfa_candidate_params():
+    strategy_id = "s06_r_trend_v02_b2"
+    candidate = _build_params_from_config(strategy_id)
+    for name in ("dateFilter", "start", "end", "warmupBars"):
+        candidate.pop(name, None)
+    task = {
+        "trial_number": 7,
+        "source_rank": 1,
+        "params": candidate,
+        "is_metrics": {},
+    }
+    csv_path = (
+        Path(__file__).parent.parent
+        / "data"
+        / "raw"
+        / "OKX_SUIUSDT.P, 30 2025.01.01-2026.02.01.csv"
+    )
+
+    payload = _ft_worker_entry(
+        str(csv_path),
+        strategy_id,
+        task,
+        "2025-05-01",
+        "2025-06-15",
+        200,
+        90,
+        45,
+    )
+    assert payload is not None
+    ft_result = _ft_result_from_payload(payload)
+    ft_result.ft_passes_threshold = True
+    engine = WalkForwardEngine(WFConfig(strategy_id=strategy_id), {}, {})
+    ft_trials = engine._convert_ft_results_for_storage([ft_result], 1, {})
+
+    json.dumps(ft_result.params)
+    json.dumps(ft_trials)
+    wf_result, _, _ = _build_wf_result(strategy_id)
+    window = wf_result.windows[0]
+    window.best_params = dict(ft_result.params)
+    window.param_id = engine._create_param_id(window.best_params)
+    window.best_params_source = "forward_test"
+    window.forward_test_trials = ft_trials
+    window.stress_test_trials = [
+        {
+            "trial_number": 7,
+            "params": dict(ft_result.params),
+            "param_id": window.param_id,
+            "is_selected": True,
+        }
+    ]
+    metadata = build_v2_runtime_metadata(
+        {
+            "dateFilter": False,
+            "start": None,
+            "end": None,
+            "warmupBars": 200,
+        },
+        strategy_id=strategy_id,
+    )
+
+    study_id = storage.save_wfa_study_to_db(
+        wf_result,
+        {
+            "strategy_id": strategy_id,
+            "fixed_params": {},
+            "v2_runtime": metadata,
+        },
+        str(csv_path),
+        0.0,
+    )
+    loaded = storage.load_study_from_db(study_id)
+    saved_window = loaded["windows"][0]
+    assert saved_window["best_params"] == candidate
+    modules = storage.load_wfa_window_trials(saved_window["window_id"])
+    assert modules["forward_test"][0]["params"] == candidate
+    assert modules["stress_test"][0]["params"] == candidate
+    assert task["params"] == candidate
 
 
 def test_param_id_falls_back_and_logs_warning(monkeypatch, caplog):

@@ -194,7 +194,7 @@ project-root/
 | `analytics.py` | Portfolio equity aggregation: equal-weight curve merging, forward-fill alignment, annualized profit, max drawdown for aggregated curves |
 | `storage.py` | SQLite database operations: save/load studies, manage trials/windows/wfa_window_trials, multi-database management, study sets CRUD with color/sort_order, analytics group cache, queue state persistence |
 | `export.py` | Export trade history to CSV (TradingView format) |
-| `bundle_export.py` | Build Lancelot partial bundles from a trial (Optuna/Grid) or WFA window |
+| `bundle_export.py` | Build the certified S03 v10 Lancelot partial bundle from a trial (Optuna/Grid) or WFA window |
 | `param_identity.py` | Display identity helpers: canonical param normalization and hashed IDs that ignore runtime-only fields |
 | `post_process.py` | Forward Test validation, DSR (Deflated Sharpe Ratio) analysis, Stress Test, profit degradation metrics |
 | `testing.py` | OOS selection utilities, stress test candidate filtering, comparison metrics |
@@ -304,12 +304,25 @@ User clicks "Download Trades"
 ```
 Results page -> POST /api/studies/{id}/export/lancelot
   body: trialNumber (Optuna/Grid) | windowNumber (WFA)
-  -> storage.py loads study + selected trial (or WFA window/module trial)
+  -> read-only identity lookup selects only study_id and strategy_id
+  -> endpoint accepts only strategy s03_reversal_v10
+     (all other strategies fail before full study/candidate loading,
+      stitched-OOS backfill, runtime, CSV, hash, or bundle work)
+  -> only the accepted S03 path loads the full study/trial/window data
+     and resolves the selected trial (or WFA window/module trial)
+  -> live runtime is applied last: dateFilter=false, start=null, end=null;
+     Warmup remains only in the existing top-level warmupBars field
   -> bundle_export.build_lancelot_partial_bundle
       (resolves Merlin version, strategy version, CSV-derived symbol/timeframe,
        canonical params via param_identity)
   -> JSON bundle returned to client
 ```
+
+This is a narrow legacy integration, not a generic Backtester V2 import or
+certification surface. New V2 strategies need no Lancelot aliases or export
+certification. Any additional strategy requires a separate reviewed
+Merlin/Lancelot contract and implementation task after its live contract is
+defined.
 
 ### Database Schema
 
@@ -397,7 +410,7 @@ SQLite database stored in `src/storage/` directory. Multiple `.db` files support
 | `/api/studies/<study_id>/wfa/windows/<window_number>/equity` | POST | Generate WFA window equity curve on-demand |
 | `/api/studies/<study_id>/wfa/windows/<window_number>/trades` | POST | Download WFA window trades CSV |
 | `/api/studies/<study_id>/wfa/trades` | POST | Generate and download stitched WFA OOS trades CSV |
-| `/api/studies/<study_id>/export/lancelot` | POST | Build a Lancelot partial bundle from a trial (Optuna/Grid) or window (WFA) |
+| `/api/studies/<study_id>/export/lancelot` | POST | Build the S03 v10 Lancelot partial bundle from a trial (Optuna/Grid) or window (WFA); reject all other strategies |
 
 #### Database Management
 | Endpoint | Method | Purpose |

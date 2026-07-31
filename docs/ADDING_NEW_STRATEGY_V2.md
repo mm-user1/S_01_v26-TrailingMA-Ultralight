@@ -102,6 +102,8 @@ optimized, selected through `{param}_options`, used as variant selectors, or
 placed in dependencies. They are excluded from candidate domains and both
 semantic and plan identity. WFA rebases only `dateFilter`, `start`, and `end`;
 `warmupBars` remains the run's configured runtime value.
+Omitting an optional declaration does not remove that field from persisted or
+resolved runtime metadata: the complete four-value envelope remains mandatory.
 
 A reserved declaration may omit `optimize`, meaning disabled. If present,
 `optimize` must be a mapping with `enabled=false`, `default_enabled=false`, and
@@ -245,9 +247,12 @@ Forward Test and OOS Test intentionally override `dateFilter` to `true` while
 deriving the IS window. This is an orchestration fact required by the period
 split, not a second user-runtime parse. Forward Test strips candidate runtime
 keys before dispatch, then applies the aligned dataframe start and inclusive
-end timestamps inside the worker so the strategy gate includes the final FT
-day. Derived V2 dates use the same canonical UTC `Z` formatter; V1 retains its
-existing `+00:00` representation outside the approved date-aware FT correction.
+end timestamps to an execution-only mapping so the strategy gate includes the
+final FT day. The returned FT result retains only the original JSON-safe
+candidate mapping; execution Timestamps never enter module identity or WFA
+storage. Derived V2 dates use the same canonical UTC `Z` formatter; V1 retains
+its existing `+00:00` representation outside the approved date-aware FT
+correction.
 
 The V2 config resource returns deep-copied additive `runtime_contract`,
 `runtime_values`, `diagnostics`, and `validation_warnings` facts. A known invalid
@@ -681,20 +686,38 @@ it.
 Stored reads prefer valid current metadata, then legacy fixed-param dates,
 then a non-NULL study Warmup, then a non-NULL config Warmup, and finally core
 defaults for genuinely absent old facts. Explicit false, blank, and internal
-zero values are presence-sensitive. Syntactically versioned future metadata or
-an unsupported runtime contract is unavailable and cannot downgrade to legacy
-facts. Malformed unversioned metadata may use legacy fallback only when an
-independent legacy fact validates. No read, post-process config update, or
-compatibility view rewrites the envelope.
+zero values are presence-sensitive. An absent `config_json` value, SQL `NULL`,
+or an empty/whitespace-only legacy string is treated as historical absence,
+because older rows could legitimately predate stored config metadata; this is
+why independently valid legacy/default runtime fallback is allowed. Non-empty
+invalid JSON, arrays/scalars, and unsupported objects are corruption and block
+strict V2 execution. Syntactically versioned future metadata such as
+`v2_runtime_metadata_v2` is unavailable, while malformed unversioned schema
+labels may use independently valid legacy facts. In contrast, any present
+contract version that is not exactly `v2_runtime_contract_v1` (including a
+blank, typo, or future value) is unsupported and cannot downgrade. A missing
+contract member is malformed metadata and may use independently valid legacy
+facts. No read, post-process config update, or compatibility view rewrites the
+envelope.
 
 At stored execution, the current registry/profile determines V1 versus V2;
 metadata is only a persistence carrier. Candidate artifacts cannot own runtime.
 Historical FT/OOS/manual/WFA exports apply operation dates last and keep Warmup
-separate. Every Lancelot bundle has `exportMode="live"`, strips all candidate
-runtime keys, and projects `dateFilter=false`, `start=null`, and `end=null` for
-both V1 and V2; its resolved Warmup stays at the bundle top level. Thus Merlin
-historical exports retain operation dates while live bundles never inherit a
-historical cutoff.
+separate. An inactive `dateFilter` means full data with `trade_start_idx=0`
+even when stored dates are present. Unknown or removed strategies remain
+viewable from saved facts but cannot execute or export without current registry
+authority. Every Lancelot bundle has `exportMode="live"`. The API exports only
+the currently certified legacy strategy, `s03_reversal_v10`; every other
+strategy is rejected after a read-only identity lookup and before full
+study/candidate loading, stitched-OOS backfill, runtime resolution, CSV access,
+hashing, or bundle construction. This narrow integration is not part of the
+Backtester V2 import or certification contract. A new V2 strategy does not
+require Lancelot aliases or export certification. Adding another Lancelot
+strategy requires a separate reviewed Merlin/Lancelot contract and
+implementation task after its live-trading contract is known. The accepted S03
+v10 projection remains candidate-only and applies `dateFilter=false`,
+`start=null`, and `end=null` last, with Warmup at the bundle top level.
+Historical Merlin exports retain their operation dates.
 
 Corrected FT metrics intentionally may differ for V2 and date-aware V1
 strategies such as S06 because candidate IS bounds no longer win and the aligned

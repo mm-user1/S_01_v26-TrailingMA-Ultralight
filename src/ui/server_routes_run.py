@@ -872,7 +872,15 @@ def register_routes(app):
             "cooldown_enabled": cooldown_enabled,
             "cooldown_days": cooldown_days,
         }
-        engine = WalkForwardEngine(wf_config, base_template, optuna_settings, csv_file_path=data_path)
+        try:
+            engine = WalkForwardEngine(
+                wf_config,
+                base_template,
+                optuna_settings,
+                csv_file_path=data_path,
+            )
+        except V2ValidationError as exc:
+            return _validation_error_response(exc)
 
         db_apply_error = _apply_db_target_from_form(data)
         if db_apply_error:

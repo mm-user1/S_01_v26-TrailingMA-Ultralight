@@ -51,6 +51,7 @@ from core.storage import (
     list_manual_tests,
     list_studies,
     load_manual_test_results,
+    load_study_identity_from_db,
     load_study_from_db,
     load_wfa_window_trials,
     save_dsr_results,
@@ -62,6 +63,25 @@ from core.storage import (
     update_csv_path,
     update_study_config_json,
 )
+
+LANCELOT_SUPPORTED_STRATEGY_IDS = frozenset({"s03_reversal_v10"})
+
+
+def _unsupported_lancelot_strategy_error(strategy_id: str) -> V2ValidationError:
+    return V2ValidationError(
+        V2Diagnostic(
+            severity="error",
+            code="LANCELOT_EXPORT_STRATEGY_UNSUPPORTED",
+            strategy_id=strategy_id,
+            path="strategy_id",
+            variant=None,
+            message=(
+                "Lancelot export currently supports only 's03_reversal_v10'. "
+                "Adding another strategy requires a separate Merlin/Lancelot "
+                "integration contract."
+            ),
+        )
+    )
 
 try:
     from .server_services import (
@@ -914,12 +934,28 @@ def register_routes(app):
         if not request.is_json:
             return jsonify({"error": "Expected JSON payload."}), HTTPStatus.BAD_REQUEST
 
-        payload = request.get_json(silent=True) or {}
+        study_identity = load_study_identity_from_db(study_id)
+        if not study_identity:
+            return jsonify({"error": "Study not found."}), HTTPStatus.NOT_FOUND
+
+        strategy_id = str(study_identity.get("strategy_id") or "<unknown strategy>").strip()
+        if strategy_id not in LANCELOT_SUPPORTED_STRATEGY_IDS:
+            return _validation_error_response(
+                _unsupported_lancelot_strategy_error(strategy_id)
+            )
+
         study_data = load_study_from_db(study_id)
         if not study_data:
             return jsonify({"error": "Study not found."}), HTTPStatus.NOT_FOUND
 
         study = study_data["study"]
+        strategy_id = str(study.get("strategy_id") or "<unknown strategy>").strip()
+        if strategy_id not in LANCELOT_SUPPORTED_STRATEGY_IDS:
+            return _validation_error_response(
+                _unsupported_lancelot_strategy_error(strategy_id)
+            )
+
+        payload = request.get_json(silent=True) or {}
         mode = str(study.get("optimization_mode") or "").lower()
         if mode not in {"optuna", "grid", "wfa"}:
             return jsonify({"error": "Bundle export is only supported for Optuna, Grid, and WFA studies."}), HTTPStatus.BAD_REQUEST

@@ -279,11 +279,12 @@ def _ft_worker_entry(
 
         trade_start_idx = ft_start_idx - warmup_start_idx
 
-        params = deepcopy(task_dict["params"])
-        params["dateFilter"] = True
-        params["start"] = ft_start
-        params["end"] = ft_end
-        result = strategy_class.run(df_ft_with_warmup, params, trade_start_idx)
+        candidate_params = deepcopy(task_dict["params"])
+        run_params = deepcopy(candidate_params)
+        run_params["dateFilter"] = True
+        run_params["start"] = ft_start
+        run_params["end"] = ft_end
+        result = strategy_class.run(df_ft_with_warmup, run_params, trade_start_idx)
 
         basic = metrics.calculate_basic(result, 100.0)
         advanced = metrics.calculate_advanced(result, 100.0)
@@ -311,7 +312,7 @@ def _ft_worker_entry(
         return {
             "trial_number": trial_number,
             "source_rank": task_dict["source_rank"],
-            "params": params,
+            "params": candidate_params,
             "is_metrics": is_metrics,
             "ft_metrics": ft_metrics,
             "comparison": comparison,
@@ -870,6 +871,44 @@ def run_dsr_analysis(
     return analysis_results, summary
 
 
+def _ft_result_from_payload(payload: Dict[str, Any]) -> FTResult:
+    """Convert one worker payload without altering its JSON-safe candidate params."""
+
+    is_metrics = payload["is_metrics"]
+    ft_metrics = payload["ft_metrics"]
+    comparison = payload["comparison"]
+    return FTResult(
+        trial_number=int(payload["trial_number"]),
+        source_rank=int(payload["source_rank"]),
+        params=deepcopy(payload["params"]),
+        is_net_profit_pct=is_metrics.get("net_profit_pct", 0.0),
+        is_max_drawdown_pct=is_metrics.get("max_drawdown_pct", 0.0),
+        is_total_trades=is_metrics.get("total_trades", 0),
+        is_win_rate=is_metrics.get("win_rate", 0.0),
+        is_max_consecutive_losses=is_metrics.get("max_consecutive_losses", 0),
+        is_sharpe_ratio=is_metrics.get("sharpe_ratio"),
+        is_romad=is_metrics.get("romad"),
+        is_profit_factor=is_metrics.get("profit_factor"),
+        ft_net_profit_pct=ft_metrics.get("net_profit_pct", 0.0),
+        ft_max_drawdown_pct=ft_metrics.get("max_drawdown_pct", 0.0),
+        ft_total_trades=ft_metrics.get("total_trades", 0),
+        ft_win_rate=ft_metrics.get("win_rate", 0.0),
+        ft_max_consecutive_losses=ft_metrics.get("max_consecutive_losses", 0),
+        ft_sharpe_ratio=ft_metrics.get("sharpe_ratio"),
+        ft_sortino_ratio=ft_metrics.get("sortino_ratio"),
+        ft_romad=ft_metrics.get("romad"),
+        ft_profit_factor=ft_metrics.get("profit_factor"),
+        ft_ulcer_index=ft_metrics.get("ulcer_index"),
+        ft_sqn=ft_metrics.get("sqn"),
+        ft_consistency_score=ft_metrics.get("consistency_score"),
+        profit_degradation=comparison.get("profit_degradation", 0.0),
+        max_dd_change=comparison.get("max_dd_change", 0.0),
+        romad_change=comparison.get("romad_change", 0.0),
+        sharpe_change=comparison.get("sharpe_change", 0.0),
+        pf_change=comparison.get("pf_change", 0.0),
+    )
+
+
 def run_forward_test(
     *,
     csv_path: str,
@@ -931,41 +970,7 @@ def run_forward_test(
         for payload in pool.starmap(_ft_worker_entry, worker_args):
             if not payload:
                 continue
-            is_metrics = payload["is_metrics"]
-            ft_metrics = payload["ft_metrics"]
-            comparison = payload["comparison"]
-            results.append(
-                FTResult(
-                    trial_number=int(payload["trial_number"]),
-                    source_rank=int(payload["source_rank"]),
-                    params=payload["params"],
-                    is_net_profit_pct=is_metrics.get("net_profit_pct", 0.0),
-                    is_max_drawdown_pct=is_metrics.get("max_drawdown_pct", 0.0),
-                    is_total_trades=is_metrics.get("total_trades", 0),
-                    is_win_rate=is_metrics.get("win_rate", 0.0),
-                    is_max_consecutive_losses=is_metrics.get("max_consecutive_losses", 0),
-                    is_sharpe_ratio=is_metrics.get("sharpe_ratio"),
-                    is_romad=is_metrics.get("romad"),
-                    is_profit_factor=is_metrics.get("profit_factor"),
-                    ft_net_profit_pct=ft_metrics.get("net_profit_pct", 0.0),
-                    ft_max_drawdown_pct=ft_metrics.get("max_drawdown_pct", 0.0),
-                    ft_total_trades=ft_metrics.get("total_trades", 0),
-                    ft_win_rate=ft_metrics.get("win_rate", 0.0),
-                    ft_max_consecutive_losses=ft_metrics.get("max_consecutive_losses", 0),
-                    ft_sharpe_ratio=ft_metrics.get("sharpe_ratio"),
-                    ft_sortino_ratio=ft_metrics.get("sortino_ratio"),
-                    ft_romad=ft_metrics.get("romad"),
-                    ft_profit_factor=ft_metrics.get("profit_factor"),
-                    ft_ulcer_index=ft_metrics.get("ulcer_index"),
-                    ft_sqn=ft_metrics.get("sqn"),
-                    ft_consistency_score=ft_metrics.get("consistency_score"),
-                    profit_degradation=comparison.get("profit_degradation", 0.0),
-                    max_dd_change=comparison.get("max_dd_change", 0.0),
-                    romad_change=comparison.get("romad_change", 0.0),
-                    sharpe_change=comparison.get("sharpe_change", 0.0),
-                    pf_change=comparison.get("pf_change", 0.0),
-                )
-            )
+            results.append(_ft_result_from_payload(payload))
 
     if not results:
         return []

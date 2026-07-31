@@ -3480,6 +3480,31 @@ def list_studies() -> List[Dict]:
         return rows
 
 
+def load_study_identity_from_db(study_id: str) -> Optional[Dict]:
+    """Load the minimal study identity through a read-only SQLite connection."""
+    with DB_ACCESS_LOCK:
+        path = _active_db_path
+
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    conn = sqlite3.connect(
+        uri,
+        uri=True,
+        check_same_thread=False,
+        timeout=30.0,
+        isolation_level=None,
+    )
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.execute(
+            "SELECT study_id, strategy_id FROM studies WHERE study_id = ?",
+            (study_id,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def load_study_from_db(study_id: str) -> Optional[Dict]:
     with get_db_connection() as conn:
         if backfill_stitched_oos_metadata(conn=conn, study_ids=[study_id]) > 0:

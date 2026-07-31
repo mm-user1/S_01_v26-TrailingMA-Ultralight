@@ -878,13 +878,27 @@ class ResolvedStoredExecutionContext:
     def live_params_for(
         self, candidate_params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Project the existing Lancelot live contract for either engine."""
+        """Project registry-declared strategy inputs into the live contract."""
 
-        params = deepcopy(self.base_params)
+        parameters = self.strategy.config.get("parameters")
+        declared_names = (
+            frozenset(parameters) if isinstance(parameters, dict) else frozenset()
+        )
+        params = deepcopy(self.base_params) if self.strategy.is_v2 else {}
         candidate = deepcopy(candidate_params or {})
         for name in V2_RESERVED_RUNTIME_PARAM_NAMES:
             params.pop(name, None)
             candidate.pop(name, None)
+        params = {
+            name: value
+            for name, value in params.items()
+            if name in declared_names and not name.endswith("_options")
+        }
+        candidate = {
+            name: value
+            for name, value in candidate.items()
+            if name in declared_names and not name.endswith("_options")
+        }
         params.update(candidate)
         params.update({"dateFilter": False, "start": None, "end": None})
         return params
@@ -1710,6 +1724,23 @@ class _GridSettingsMemoResult:
     error_diagnostic: Optional[V2Diagnostic]
 
 
+def _grid_settings_memo_key(
+    study: Dict[str, Any], config: Dict[str, Any]
+) -> str:
+    """Serialize the JSON-safe derivation facts without lossy string coercion."""
+
+    return json.dumps(
+        {
+            "strategy_id": study.get("strategy_id"),
+            "warmup_bars": study.get("warmup_bars"),
+            "config": config,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
 def _grid_settings_error(
     reason: str,
     strategy_id: str,
@@ -1848,7 +1879,7 @@ def build_grid_settings_view(
     study: Dict[str, Any],
     memo: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Build compact Grid sidebar rows for Results and Analytics."""
+    """Build Grid rows; ``available`` means saved or derived rows are renderable."""
     if not isinstance(study, dict):
         return None
 
@@ -1878,16 +1909,12 @@ def build_grid_settings_view(
     if not preview:
         memo_key = None
         if memo is not None:
-            memo_key = json.dumps(
-                {
-                    "strategy_id": study.get("strategy_id"),
-                    "warmup_bars": study.get("warmup_bars"),
-                    "config": config,
-                },
-                sort_keys=True,
-                default=str,
-            )
-        if memo is not None and memo_key in memo:
+            try:
+                memo_key = _grid_settings_memo_key(study, config)
+            except (TypeError, ValueError):
+                # Memoization is optional; non-canonical stored values still derive.
+                memo_key = None
+        if memo is not None and memo_key is not None and memo_key in memo:
             memo_result = deepcopy(memo[memo_key])
             preview = memo_result.preview
             if memo_result.error_reason is not None:
@@ -1901,7 +1928,7 @@ def build_grid_settings_view(
             except _GridSettingsCompatibilityError as exc:
                 compatibility_error = exc
                 preview = {}
-            if memo is not None:
+            if memo is not None and memo_key is not None:
                 memo[memo_key] = deepcopy(
                     _GridSettingsMemoResult(
                         preview,
@@ -2212,7 +2239,7 @@ def build_grid_settings_view(
         "derivation_status": (
             "unavailable"
             if compatibility_error is not None
-            else "available" if derivation_attempted else "not_required"
+            else "succeeded" if derivation_attempted else "not_required"
         ),
         "derivation_unavailable_reason": (
             compatibility_error.reason if compatibility_error is not None else None

@@ -470,6 +470,53 @@ def _insert_lancelot_export_wfa_trial(
         conn.commit()
 
 
+def _insert_stored_execution_inventory(
+    *, study_id: str, csv_path: Path, config_json: dict | str
+) -> None:
+    _insert_lancelot_export_study(
+        study_id=study_id,
+        study_name=study_id,
+        strategy_id="s06_r_trend_v02_b2",
+        strategy_version="v02-b2",
+        optimization_mode="optuna",
+        csv_file_path=str(csv_path),
+        csv_file_name="OKX_SUIUSDT.P, 30 2025.01.01-2026.02.01.csv",
+        warmup_bars=999,
+        config_json=config_json if isinstance(config_json, dict) else {},
+    )
+    with get_db_connection() as conn:
+        if isinstance(config_json, str):
+            conn.execute(
+                "UPDATE studies SET config_json = ? WHERE study_id = ?",
+                (config_json, study_id),
+            )
+        conn.execute(
+            """
+            UPDATE studies
+            SET ft_enabled = 1,
+                ft_start_date = '2025-05-01',
+                ft_end_date = '2025-05-10',
+                oos_test_enabled = 1,
+                oos_test_start_date = '2025-06-01',
+                oos_test_end_date = '2025-06-10'
+            WHERE study_id = ?
+            """,
+            (study_id,),
+        )
+        conn.commit()
+    _insert_lancelot_export_trial(
+        study_id=study_id,
+        trial_number=7,
+        params={
+            "fastLength": 50,
+            "dateFilter": True,
+            "start": "candidate-start",
+            "end": "candidate-end",
+            "warmupBars": 9999,
+        },
+    )
+
+
 def test_csv_import_s01_parameters(client):
     csv_content = "parameter,value\nmaType,ema\nmaLength,45\n"
 
@@ -2928,6 +2975,67 @@ def test_walkforward_route_logs_value_error_details(client, monkeypatch, caplog,
     assert any(error_text in record.getMessage() for record in caplog.records)
 
 
+def test_walkforward_construction_validation_is_structured_before_state(
+    client, monkeypatch, tmp_path
+):
+    import core.walkforward_engine as walkforward_engine
+    from core.engine_v2 import V2Diagnostic, V2ValidationError
+    from ui import server_routes_run
+
+    csv_path = tmp_path / "wfa_construction_validation.csv"
+    csv_path.write_text("placeholder", encoding="utf-8")
+    df = pd.DataFrame(
+        {"open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0], "volume": [1.0]},
+        index=pd.to_datetime(["2026-01-01T00:00:00Z"]),
+    )
+    diagnostic = V2Diagnostic(
+        severity="error",
+        code="V2_INVALID_EXECUTION_PROFILE",
+        strategy_id="s06_r_trend_v02_b2",
+        path="execution",
+        variant=None,
+        message="Construction profile is invalid.",
+    )
+
+    class InvalidWalkForwardEngine:
+        def __init__(self, *_args, **_kwargs):
+            raise V2ValidationError(diagnostic)
+
+    monkeypatch.setattr(server_routes_run, "_resolve_csv_path", lambda _raw: csv_path)
+    monkeypatch.setattr(server_routes_run, "load_data", lambda _path: df)
+    monkeypatch.setattr(walkforward_engine, "WalkForwardEngine", InvalidWalkForwardEngine)
+    monkeypatch.setattr(
+        server_routes_run,
+        "_set_optimization_state",
+        lambda *_args, **_kwargs: pytest.fail("run state must not begin"),
+    )
+
+    response = client.post(
+        "/api/walkforward",
+        data={
+            "strategy": "s06_r_trend_v02_b2",
+            "csvPath": str(csv_path),
+            "config": json.dumps(
+                {
+                    "strategy_id": "s06_r_trend_v02_b2",
+                    "optimization_mode": "optuna",
+                    "enabled_params": {},
+                    "param_ranges": {},
+                    "param_types": {},
+                    "fixed_params": {"dateFilter": False},
+                    "objectives": ["net_profit_pct"],
+                }
+            ),
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "Construction profile is invalid.",
+        "diagnostics": [diagnostic.to_dict()],
+    }
+
+
 def test_walkforward_route_parses_adaptive_cooldown_fields(client, monkeypatch, tmp_path):
     from ui import server_routes_run
     import core.walkforward_engine as walkforward_engine
@@ -3417,6 +3525,226 @@ def test_download_wfa_trades_uses_precise_oos_bounds(client, monkeypatch, tmp_pa
             csv_path.unlink()
 
 
+def test_stored_execution_endpoint_inventory_uses_shared_runtime_and_reads_tests(
+    client, monkeypatch, tmp_path
+):
+    from core.storage import get_study_trial, load_study_from_db
+    from ui import server_routes_data
+
+    csv_path = tmp_path / "stored_execution_inventory.csv"
+    csv_path.write_text(
+        "timestamp,open,high,low,close,volume\n"
+        "2025-01-01T00:00:00Z,1,1,1,1,1\n",
+        encoding="utf-8",
+    )
+    values = {
+        "dateFilter": False,
+        "start": "2025-01-01T00:00:00Z",
+        "end": "2025-02-01T00:00:00Z",
+        "warmupBars": 20,
+    }
+    config = {
+        "fixed_params": {"slowLength": 70},
+        "v2_runtime": {
+            "schema_version": "v2_runtime_metadata_v1",
+            "contract_version": "v2_runtime_contract_v1",
+            "values": values,
+            "diagnostics": [],
+            "validation_warnings": [],
+        },
+    }
+    frame = pd.DataFrame(
+        {"Open": 1.0, "High": 1.0, "Low": 1.0, "Close": 1.0, "Volume": 1.0},
+        index=pd.date_range("2025-01-01", "2025-08-01", freq="D", tz="UTC"),
+    )
+    captured = []
+
+    def fake_period_test(**kwargs):
+        candidate = kwargs["trials"][0]["params"]
+        captured.append(
+            (
+                "manual",
+                kwargs["execution_params_resolver"](
+                    candidate, kwargs["start_ts"], kwargs["end_ts"]
+                ),
+                kwargs["warmup_bars"],
+            )
+        )
+        return []
+
+    def fake_trade_export(**kwargs):
+        captured.append(("trade", deepcopy(kwargs["params"]), kwargs["warmup_bars"]))
+        return [], None
+
+    monkeypatch.setattr(server_routes_data, "load_data", lambda _path: frame)
+    monkeypatch.setattr(server_routes_data, "run_period_test_for_trials", fake_period_test)
+    monkeypatch.setattr(server_routes_data, "_run_trade_export", fake_trade_export)
+
+    with _temporary_active_db(f"stored_inventory_{uuid.uuid4().hex[:8]}"):
+        study_id = "stored_execution_inventory"
+        _insert_stored_execution_inventory(
+            study_id=study_id,
+            csv_path=csv_path,
+            config_json=config,
+        )
+        original_study = deepcopy(load_study_from_db(study_id)["study"])
+        original_trial = deepcopy(get_study_trial(study_id, 7))
+
+        manual = client.post(
+            f"/api/studies/{study_id}/test",
+            json={
+                "dataSource": "original_csv",
+                "startDate": "2025-07-01",
+                "endDate": "2025-07-03",
+                "trialNumbers": [7],
+                "sourceTab": "optuna",
+                "testName": "inventory",
+            },
+        )
+        assert manual.status_code == 200
+        test_id = manual.get_json()["test_id"]
+        listed = client.get(f"/api/studies/{study_id}/tests")
+        detail = client.get(f"/api/studies/{study_id}/tests/{test_id}")
+        assert listed.status_code == detail.status_code == 200
+        assert listed.get_json()["tests"][0]["id"] == test_id
+        assert detail.get_json()["results_json"]["config"]["start_date"] == "2025-07-01"
+
+        routes = [
+            f"/api/studies/{study_id}/trials/7/trades",
+            f"/api/studies/{study_id}/trials/7/ft-trades",
+            f"/api/studies/{study_id}/trials/7/oos-trades",
+            f"/api/studies/{study_id}/tests/{test_id}/trials/7/mt-trades",
+        ]
+        for route in routes:
+            assert client.post(route).status_code == 200
+
+        assert captured[0] == (
+            "manual",
+            {
+                "slowLength": 70,
+                "fastLength": 50,
+                "dateFilter": True,
+                "start": "2025-07-01T00:00:00Z",
+                "end": "2025-07-03T00:00:00Z",
+            },
+            20,
+        )
+        exported = [item[1] for item in captured[1:]]
+        assert exported[0] == {
+            "slowLength": 70,
+            "fastLength": 50,
+            "dateFilter": False,
+            "start": "2025-01-01T00:00:00Z",
+            "end": "2025-02-01T00:00:00Z",
+        }
+        assert exported[1]["start"] == "2025-05-01T00:00:00Z"
+        assert exported[1]["end"] == "2025-05-10T23:59:59.999999Z"
+        assert exported[2]["start"] == "2025-06-01T00:00:00Z"
+        assert exported[2]["end"] == "2025-06-10T23:59:59.999999Z"
+        assert exported[3]["start"] == "2025-07-01T00:00:00Z"
+        assert exported[3]["end"] == "2025-07-03T23:59:59.999999Z"
+        assert all(item[2] == 20 for item in captured)
+        assert load_study_from_db(study_id)["study"] == original_study
+        assert get_study_trial(study_id, 7) == original_trial
+
+
+@pytest.mark.parametrize(
+    ("route_suffix", "payload"),
+    [
+        (
+            "/test",
+            {
+                "dataSource": "original_csv",
+                "startDate": "2025-07-01",
+                "endDate": "2025-07-03",
+                "trialNumbers": [7],
+                "sourceTab": "optuna",
+            },
+        ),
+        ("/trials/7/trades", None),
+        ("/trials/7/ft-trades", None),
+        ("/trials/7/oos-trades", None),
+        ("/tests/1/trials/7/mt-trades", None),
+    ],
+)
+def test_stored_execution_inventory_corruption_stops_before_csv(
+    client, tmp_path, route_suffix, payload
+):
+    csv_path = tmp_path / "must_not_be_read.csv"
+    assert not csv_path.exists()
+    with _temporary_active_db(f"stored_corrupt_{uuid.uuid4().hex[:8]}"):
+        study_id = "stored_corrupt"
+        _insert_stored_execution_inventory(
+            study_id=study_id,
+            csv_path=csv_path,
+            config_json="{not-json",
+        )
+        response = client.post(
+            f"/api/studies/{study_id}{route_suffix}",
+            json=payload,
+        )
+
+    assert response.status_code == 400
+    diagnostic = _v2_runtime_diagnostic(response)
+    assert diagnostic["code"] == "V2_STORED_CONFIG_INCOMPATIBLE"
+    assert diagnostic["path"] == "config_json"
+
+
+def test_v1_stored_trade_export_keeps_legacy_merge_semantics(
+    client, monkeypatch, tmp_path
+):
+    from ui import server_routes_data
+
+    csv_path = tmp_path / "v1_stored_trade.csv"
+    csv_path.write_text(
+        "timestamp,open,high,low,close,volume\n"
+        "2025-01-01T00:00:00Z,1,1,1,1,1\n",
+        encoding="utf-8",
+    )
+    captured = {}
+    monkeypatch.setattr(
+        server_routes_data,
+        "_run_trade_export",
+        lambda **kwargs: (captured.update(deepcopy(kwargs)) or [], None),
+    )
+    with _temporary_active_db(f"v1_stored_trade_{uuid.uuid4().hex[:8]}"):
+        study_id = "v1_stored_trade"
+        _insert_lancelot_export_study(
+            study_id=study_id,
+            study_name=study_id,
+            strategy_id="s03_reversal_v10",
+            strategy_version="v10",
+            optimization_mode="optuna",
+            csv_file_path=str(csv_path),
+            csv_file_name="OKX_LINKUSDT.P, 15 2025.01.01-2025.01.02.csv",
+            warmup_bars=20,
+            config_json={
+                "fixed_params": {
+                    "maType3": "HMA",
+                    "maType3_options": ["SMA", "HMA"],
+                    "dateFilter": False,
+                }
+            },
+        )
+        _insert_lancelot_export_trial(
+            study_id=study_id,
+            trial_number=7,
+            params={"maLength3": 75, "dateFilter": True, "start": "candidate"},
+        )
+
+        response = client.post(f"/api/studies/{study_id}/trials/7/trades")
+
+    assert response.status_code == 200
+    assert captured["params"] == {
+        "maType3": "HMA",
+        "maType3_options": ["SMA", "HMA"],
+        "dateFilter": True,
+        "maLength3": 75,
+        "start": "candidate",
+    }
+    assert captured["warmup_bars"] == 20
+
+
 def test_export_lancelot_bundle_from_optuna_trial(client, tmp_path):
     csv_path = tmp_path / "_tmp_lancelot_export_optuna.csv"
     csv_path.write_text(
@@ -3433,6 +3761,15 @@ def test_export_lancelot_bundle_from_optuna_trial(client, tmp_path):
                 optimization_mode="optuna",
                 csv_file_path=str(csv_path),
                 csv_file_name="OKX_LINKUSDT.P, 15 2025.05.01-2025.11.20.csv",
+                config_json={
+                    "fixed_params": {
+                        "maType3": "HMA",
+                        "maType3_options": ["SMA", "HMA"],
+                        "undeclaredControl": "must-not-export",
+                        "dateFilter": True,
+                        "warmupBars": 9999,
+                    }
+                },
             )
             _insert_lancelot_export_trial(
                 study_id=study_id,
@@ -3492,6 +3829,13 @@ def test_export_lancelot_bundle_from_grid_candidate(client, tmp_path):
                 csv_file_path=str(csv_path),
                 csv_file_name="OKX_SOLUSDT.P, 5 2025.05.01-2025.11.20.csv",
                 warmup_bars=500,
+                config_json={
+                    "fixed_params": {
+                        "maType3": "HMA",
+                        "useCloseCount_options": [True, False],
+                        "undeclaredControl": "must-not-export",
+                    }
+                },
             )
             _insert_lancelot_export_trial(
                 study_id=study_id,
@@ -3524,181 +3868,124 @@ def test_export_lancelot_bundle_from_grid_candidate(client, tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("optimization_mode", "planning_policy"),
-    [("optuna", None), ("grid", "full"), ("grid", "sampled")],
+    ("strategy_id", "strategy_version", "optimization_mode", "selection"),
+    [
+        ("s06_r_trend_v02", "v02", "optuna", {"trialNumber": 3}),
+        ("s06_r_trend_v02_b2", "v02-b2", "wfa", {"windowNumber": 1}),
+    ],
 )
-def test_v2_live_bundle_runtime_is_inactive_and_candidate_cannot_inject(
-    client, tmp_path, optimization_mode, planning_policy
+def test_lancelot_rejects_unsupported_v1_and_v2_before_export_work(
+    client,
+    monkeypatch,
+    tmp_path,
+    strategy_id,
+    strategy_version,
+    optimization_mode,
+    selection,
 ):
-    csv_path = tmp_path / f"v2_live_{optimization_mode}_{planning_policy}.csv"
-    csv_path.write_text(
-        "timestamp,open,high,low,close,volume\n2025-01-01T00:00:00Z,1,1,1,1,1\n",
-        encoding="utf-8",
-    )
-    values = {
-        "dateFilter": True,
-        "start": "2025-01-01T00:00:00Z",
-        "end": "2025-01-02T00:00:00Z",
-        "warmupBars": 20,
-    }
-    config = {
-        "fixed_params": {"maLength": 21, **values},
-        "grid_v2_planning_policy": planning_policy,
-        "v2_runtime": {
-            "schema_version": "v2_runtime_metadata_v1",
-            "contract_version": "v2_runtime_contract_v1",
-            "values": values,
-            "diagnostics": [],
-            "validation_warnings": [],
-        },
-    }
-    with _temporary_active_db(f"v2_live_{uuid.uuid4().hex[:8]}"):
-        study_id = f"v2_live_{optimization_mode}_{planning_policy}"
+    from core import storage
+    from ui import server_routes_data
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("unsupported Lancelot export continued past strategy gate")
+
+    for name in (
+        "load_study_from_db",
+        "_resolve_stored_execution_context",
+        "_resolve_csv_path",
+        "get_study_trial",
+        "_find_wfa_window",
+        "load_wfa_window_trials",
+        "build_lancelot_partial_bundle",
+    ):
+        monkeypatch.setattr(server_routes_data, name, fail_if_called)
+    monkeypatch.setattr(storage, "backfill_stitched_oos_metadata", fail_if_called)
+
+    missing_csv = tmp_path / "must_not_be_read.csv"
+    assert not missing_csv.exists()
+    with _temporary_active_db(f"unsupported_lancelot_{uuid.uuid4().hex[:8]}"):
+        study_id = f"unsupported_{strategy_id}_{optimization_mode}"
         _insert_lancelot_export_study(
             study_id=study_id,
             study_name=study_id,
-            strategy_id="s06_r_trend_v02_b2",
-            strategy_version="v02-b2",
+            strategy_id=strategy_id,
+            strategy_version=strategy_version,
             optimization_mode=optimization_mode,
-            csv_file_path=str(csv_path),
-            csv_file_name="OKX_LINKUSDT.P, 15 2025.01.01-2025.01.02.csv",
-            warmup_bars=999,
-            config_json=config,
-        )
-        _insert_lancelot_export_trial(
-            study_id=study_id,
-            trial_number=4,
-            params={
-                "maLength": 50,
-                "dateFilter": True,
-                "start": "hostile",
-                "end": "hostile",
-                "warmupBars": 9999,
-            },
-        )
-
-        response = client.post(
-            f"/api/studies/{study_id}/export/lancelot", json={"trialNumber": 4}
-        )
-        assert response.status_code == 200
-        payload = response.get_json()
-        assert payload["warmupBars"] == 20
-        assert payload["params"] == {
-            "maLength": 50,
-            "dateFilter": False,
-            "start": None,
-            "end": None,
-        }
-        assert set(payload) == {
-            "bundleSchemaVersion",
-            "strategyId",
-            "strategyVersion",
-            "symbol",
-            "timeframe",
-            "warmupBars",
-            "exportMode",
-            "params",
-            "source",
-        }
-
-
-def test_s06_v1_live_bundle_cannot_retain_historical_cutoff(client, tmp_path):
-    csv_path = tmp_path / "s06_v1_live.csv"
-    csv_path.write_text(
-        "timestamp,open,high,low,close,volume\n2025-01-01T00:00:00Z,1,1,1,1,1\n",
-        encoding="utf-8",
-    )
-    with _temporary_active_db(f"s06_v1_live_{uuid.uuid4().hex[:8]}"):
-        study_id = "s06_v1_live"
-        _insert_lancelot_export_study(
-            study_id=study_id,
-            study_name=study_id,
-            strategy_id="s06_r_trend_v02",
-            strategy_version="v02",
-            optimization_mode="optuna",
-            csv_file_path=str(csv_path),
-            csv_file_name="OKX_LINKUSDT.P, 15 2025.01.01-2025.01.02.csv",
-            warmup_bars=77,
-            config_json={
-                "fixed_params": {
-                    "maLength": 21,
-                    "dateFilter": True,
-                    "start": "2024-01-01",
-                    "end": "2024-12-31",
-                }
-            },
-        )
-        _insert_lancelot_export_trial(
-            study_id=study_id,
-            trial_number=3,
-            params={
-                "maLength": 50,
-                "dateFilter": True,
-                "end": "candidate-cutoff",
-                "warmupBars": 9999,
-            },
+            csv_file_path=str(missing_csv),
+            csv_file_name="must_not_be_read.csv",
+            config_json={"fixed_params": {}},
         )
         response = client.post(
-            f"/api/studies/{study_id}/export/lancelot", json={"trialNumber": 3}
+            f"/api/studies/{study_id}/export/lancelot", json=selection
         )
-        assert response.status_code == 200
-        payload = response.get_json()
-        assert payload["warmupBars"] == 77
-        assert payload["params"] == {
-            "maLength": 50,
-            "dateFilter": False,
-            "start": None,
-            "end": None,
-        }
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert "currently supports only 's03_reversal_v10'" in payload["error"]
+    diagnostic = _v2_runtime_diagnostic(response)
+    assert diagnostic == {
+        "severity": "error",
+        "code": "LANCELOT_EXPORT_STRATEGY_UNSUPPORTED",
+        "strategy_id": strategy_id,
+        "path": "strategy_id",
+        "variant": None,
+        "message": payload["error"],
+    }
 
 
-def test_v2_live_bundle_zero_warmup_is_structured_and_precedes_hashing(
-    client, tmp_path, monkeypatch
+def test_lancelot_supported_identity_disappearing_before_full_load_returns_404(
+    client, monkeypatch
 ):
-    from core import bundle_export
+    from ui import server_routes_data
 
-    csv_path = tmp_path / "v2_zero_warmup.csv"
-    csv_path.write_text(
-        "timestamp,open,high,low,close,volume\n2025-01-01T00:00:00Z,1,1,1,1,1\n",
-        encoding="utf-8",
-    )
-    values = {"dateFilter": False, "start": None, "end": None, "warmupBars": 0}
     monkeypatch.setattr(
-        bundle_export,
-        "_sha256_file",
-        lambda _path: (_ for _ in ()).throw(AssertionError("hashing continued")),
+        server_routes_data,
+        "load_study_identity_from_db",
+        lambda _study_id: {
+            "study_id": "disappearing-study",
+            "strategy_id": "s03_reversal_v10",
+        },
     )
-    with _temporary_active_db(f"v2_zero_warmup_{uuid.uuid4().hex[:8]}"):
-        study_id = "v2_zero_warmup"
-        _insert_lancelot_export_study(
-            study_id=study_id,
-            study_name=study_id,
-            strategy_id="s06_r_trend_v02_b2",
-            strategy_version="v02-b2",
-            optimization_mode="optuna",
-            csv_file_path=str(csv_path),
-            csv_file_name="OKX_LINKUSDT.P, 15 2025.01.01-2025.01.02.csv",
-            config_json={
-                "fixed_params": {},
-                "v2_runtime": {
-                    "schema_version": "v2_runtime_metadata_v1",
-                    "contract_version": "v2_runtime_contract_v1",
-                    "values": values,
-                    "diagnostics": [],
-                    "validation_warnings": [],
-                },
-            },
-        )
-        _insert_lancelot_export_trial(
-            study_id=study_id, trial_number=1, params={"maLength": 21}
-        )
-        response = client.post(
-            f"/api/studies/{study_id}/export/lancelot", json={"trialNumber": 1}
-        )
-        assert response.status_code == 400
-        diagnostic = _v2_runtime_diagnostic(response)
-        assert diagnostic["code"] == "V2_EXPORT_RUNTIME_INCOMPATIBLE"
-        assert diagnostic["path"] == "v2_runtime.values.warmupBars"
+    monkeypatch.setattr(server_routes_data, "load_study_from_db", lambda _study_id: None)
+
+    response = client.post(
+        "/api/studies/disappearing-study/export/lancelot",
+        json={"trialNumber": 1},
+    )
+
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "Study not found."}
+
+
+def test_lancelot_strategy_change_between_identity_and_full_load_is_rejected(
+    client, monkeypatch
+):
+    from ui import server_routes_data
+
+    monkeypatch.setattr(
+        server_routes_data,
+        "load_study_identity_from_db",
+        lambda _study_id: {
+            "study_id": "changed-study",
+            "strategy_id": "s03_reversal_v10",
+        },
+    )
+    monkeypatch.setattr(
+        server_routes_data,
+        "load_study_from_db",
+        lambda _study_id: {"study": {"strategy_id": "s06_r_trend_v02_b2"}},
+    )
+
+    response = client.post(
+        "/api/studies/changed-study/export/lancelot",
+        json={"trialNumber": 1},
+    )
+
+    assert response.status_code == 400
+    diagnostic = _v2_runtime_diagnostic(response)
+    assert diagnostic["code"] == "LANCELOT_EXPORT_STRATEGY_UNSUPPORTED"
+    assert diagnostic["strategy_id"] == "s06_r_trend_v02_b2"
+    assert diagnostic["path"] == "strategy_id"
 
 
 def test_study_endpoint_includes_single_grid_settings(client):
@@ -3845,6 +4132,13 @@ def test_export_lancelot_bundle_from_wfa_window_uses_window_trial_number(client,
                 csv_file_path=str(csv_path),
                 csv_file_name="OKX_BTCUSDT.P, 1h 2025.05.01-2025.11.20.csv",
                 warmup_bars=1500,
+                config_json={
+                    "fixed_params": {
+                        "maType3": "HMA",
+                        "useTBands_options": [True, False],
+                        "undeclaredControl": "must-not-export",
+                    }
+                },
             )
             _insert_lancelot_export_wfa_window(
                 study_id=study_id,
@@ -3873,74 +4167,6 @@ def test_export_lancelot_bundle_from_wfa_window_uses_window_trial_number(client,
     finally:
         if csv_path.exists():
             csv_path.unlink()
-
-
-def test_v2_wfa_live_bundle_does_not_use_window_dates(client, tmp_path):
-    csv_path = tmp_path / "v2_wfa_live.csv"
-    csv_path.write_text(
-        "timestamp,open,high,low,close,volume\n2025-01-01T00:00:00Z,1,1,1,1,1\n",
-        encoding="utf-8",
-    )
-    values = {
-        "dateFilter": True,
-        "start": "2025-01-01T00:00:00Z",
-        "end": "2025-01-31T23:59:59.999999Z",
-        "warmupBars": 20,
-    }
-    with _temporary_active_db(f"v2_wfa_live_{uuid.uuid4().hex[:8]}"):
-        study_id = "v2_wfa_live"
-        _insert_lancelot_export_study(
-            study_id=study_id,
-            study_name=study_id,
-            strategy_id="s06_r_trend_v02_b2",
-            strategy_version="v02-b2",
-            optimization_mode="wfa",
-            csv_file_path=str(csv_path),
-            csv_file_name="OKX_BTCUSDT.P, 60 2025.01.01-2025.02.01.csv",
-            config_json={
-                "fixed_params": {},
-                "v2_runtime": {
-                    "schema_version": "v2_runtime_metadata_v1",
-                    "contract_version": "v2_runtime_contract_v1",
-                    "values": values,
-                    "diagnostics": [],
-                    "validation_warnings": [],
-                },
-            },
-        )
-        _insert_lancelot_export_wfa_window(
-            study_id=study_id,
-            window_number=1,
-            best_params={"maLength": 21, "end": "candidate-cutoff", "warmupBars": 1},
-            is_best_trial_number=8,
-        )
-        with get_db_connection() as conn:
-            conn.execute(
-                """
-                UPDATE wfa_windows
-                SET oos_start_ts = ?, oos_end_ts = ?
-                WHERE window_id = ?
-                """,
-                (
-                    "2025-02-01T00:00:00Z",
-                    "2025-02-10T23:00:00Z",
-                    f"{study_id}_w1",
-                ),
-            )
-            conn.commit()
-
-        response = client.post(
-            f"/api/studies/{study_id}/export/lancelot", json={"windowNumber": 1}
-        )
-        assert response.status_code == 200
-        payload = response.get_json()
-        assert payload["warmupBars"] == 20
-        assert payload["params"] == {
-            "maLength": 21,
-            "dateFilter": False,
-            "start": None,
-            "end": None,
-        }
 
 
 def test_export_lancelot_bundle_from_wfa_window_falls_back_to_selected_module_trial(client, tmp_path):
@@ -5352,9 +5578,11 @@ def test_grid_settings_without_memo_skips_memo_key_serialization(monkeypatch):
         server_services, "_derive_grid_preview", lambda _config, _study: {"modes": []}
     )
     monkeypatch.setattr(
-        server_services.json,
-        "dumps",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("serialized")),
+        server_services,
+        "_grid_settings_memo_key",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("memo key computed")
+        ),
     )
     view = build_grid_settings_view(
         {
@@ -5364,7 +5592,39 @@ def test_grid_settings_without_memo_skips_memo_key_serialization(monkeypatch):
         }
     )
     assert view["available"] is True
-    assert view["derivation_status"] == "available"
+    assert view["derivation_status"] == "succeeded"
+
+
+@pytest.mark.parametrize("noncanonical", [float("nan"), float("inf"), float("-inf")])
+def test_grid_settings_noncanonical_memo_key_derives_without_caching(
+    monkeypatch, noncanonical
+):
+    from ui import server_services
+
+    calls = []
+    monkeypatch.setattr(
+        server_services,
+        "_derive_grid_preview",
+        lambda _config, _study: calls.append(True) or {"modes": []},
+    )
+    config = _grid_sidebar_config()
+    config["noncanonicalMemoValue"] = noncanonical
+    memo = {"sentinel": object()}
+
+    study = {
+        "strategy_id": "s03_reversal_v10",
+        "optimization_mode": "grid",
+        "config_json": config,
+    }
+    first_view = build_grid_settings_view(study, memo=memo)
+    second_view = build_grid_settings_view(study, memo=memo)
+
+    assert first_view["available"] is True
+    assert first_view["derivation_status"] == "succeeded"
+    assert second_view == first_view
+    assert calls == [True, True]
+    assert set(memo) == {"sentinel"}
+    assert None not in memo
 
 
 def test_grid_settings_unusable_derivation_sets_only_unavailable_reason(monkeypatch):

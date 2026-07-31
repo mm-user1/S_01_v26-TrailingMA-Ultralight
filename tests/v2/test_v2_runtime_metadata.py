@@ -17,7 +17,11 @@ from core.engine_v2 import (
 )
 from core.optuna_engine import OptimizationConfig
 from core.storage import _prepare_study_config_payload
-from ui.server_services import _resolve_stored_execution_context
+from ui.server_services import (
+    ResolvedStoredExecutionContext,
+    ResolvedStrategyContext,
+    _resolve_stored_execution_context,
+)
 
 
 STRATEGY_ID = "s06_r_trend_v02_b2"
@@ -255,6 +259,68 @@ def test_runtime_metadata_future_versions_hard_block_legacy_fallback() -> None:
 
 
 @pytest.mark.parametrize(
+    "contract_version",
+    ["v2_runtime_contract_v2", "v2_runtime_contract_v1_typo", "", None, 2],
+)
+def test_any_present_unsupported_contract_hard_blocks_fallback(
+    contract_version,
+) -> None:
+    metadata = _metadata()
+    metadata["contract_version"] = contract_version
+    resolution = resolve_stored_v2_runtime(
+        {
+            "strategy_id": STRATEGY_ID,
+            "warmup_bars": 20,
+            "config_json": {
+                "v2_runtime": metadata,
+                "fixed_params": {"dateFilter": False},
+            },
+        }
+    )
+
+    assert resolution.source == "unavailable"
+    assert resolution.usable is False
+
+
+def test_missing_contract_can_use_independent_legacy_fallback() -> None:
+    metadata = _metadata()
+    del metadata["contract_version"]
+
+    resolution = resolve_stored_v2_runtime(
+        {
+            "strategy_id": STRATEGY_ID,
+            "warmup_bars": 20,
+            "config_json": {
+                "v2_runtime": metadata,
+                "fixed_params": {"dateFilter": False},
+            },
+        }
+    )
+
+    assert resolution.source == "legacy"
+    assert resolution.usable is True
+    assert resolution.values == _values(warmupBars=20)
+
+
+@pytest.mark.parametrize("raw_config", [None, "", "   \t\r\n"])
+def test_sql_null_and_blank_config_are_absent_not_corrupt(raw_config) -> None:
+    study = {
+        "strategy_id": STRATEGY_ID,
+        "warmup_bars": None,
+        "config_json": raw_config,
+    }
+
+    resolution = resolve_stored_v2_runtime(study)
+    context = _resolve_stored_execution_context(study)
+
+    assert resolution.source == "defaulted"
+    assert resolution.usable is True
+    assert resolution.values == _values()
+    assert context.runtime_source == "defaulted"
+    assert context.runtime_values == _values()
+
+
+@pytest.mark.parametrize(
     "raw_config",
     ["not-json", "[]", "1", "true", [], 1, True, object()],
 )
@@ -278,14 +344,22 @@ def test_raw_json_object_config_is_parsed_once_and_live_projection_is_detached()
         "strategy_id": STRATEGY_ID,
         "config_json": json.dumps(
             {
-                "fixed_params": {"maLength": 21, "dateFilter": True},
+                "fixed_params": {
+                    "fastLength": 21,
+                    "slowLength": 70,
+                    "trailMAType_options": ["SMA", "EMA"],
+                    "undeclaredControl": "blocked",
+                    "dateFilter": True,
+                },
                 "v2_runtime": metadata,
             }
         ),
     }
     context = _resolve_stored_execution_context(study)
     candidate = {
-        "maLength": 50,
+        "fastLength": 50,
+        "stopX": 2.5,
+        "candidateControl": "blocked",
         "dateFilter": True,
         "start": "hostile",
         "end": "hostile",
@@ -294,12 +368,75 @@ def test_raw_json_object_config_is_parsed_once_and_live_projection_is_detached()
 
     assert context.warmup_bars == 20
     assert context.live_params_for(candidate) == {
-        "maLength": 50,
+        "fastLength": 50,
+        "slowLength": 70,
+        "stopX": 2.5,
         "dateFilter": False,
         "start": None,
         "end": None,
     }
     assert candidate["start"] == "hostile"
+
+
+def test_v1_live_projection_is_candidate_only_and_registry_filtered() -> None:
+    study = {
+        "strategy_id": "s03_reversal_v10",
+        "warmup_bars": 20,
+        "config_json": {
+            "fixed_params": {
+                "maType3": "HMA",
+                "maType3_options": ["SMA", "HMA"],
+                "undeclaredControl": "blocked",
+            }
+        },
+    }
+    candidate = {
+        "maLength3": 75,
+        "useTBands": True,
+        "candidateControl": "blocked",
+        "dateFilter": True,
+        "warmupBars": 9999,
+    }
+    original = deepcopy(candidate)
+
+    context = _resolve_stored_execution_context(study)
+
+    assert context.live_params_for(candidate) == {
+        "maLength3": 75,
+        "useTBands": True,
+        "dateFilter": False,
+        "start": None,
+        "end": None,
+    }
+    assert candidate == original
+
+
+def test_live_projection_excludes_options_even_if_registry_declares_the_name() -> None:
+    strategy = ResolvedStrategyContext(
+        strategy_id="synthetic_v2",
+        engine="v2",
+        config={"parameters": {"legitimate": {}, "legitimate_options": {}}},
+        profile=None,
+        diagnostics=(),
+        validation_error=None,
+    )
+    context = ResolvedStoredExecutionContext(
+        strategy=strategy,
+        base_params={"legitimate": 1, "legitimate_options": [1, 2]},
+        runtime_values=_values(),
+        warmup_bars=1000,
+        runtime_source="current",
+        diagnostics=(),
+    )
+
+    assert context.live_params_for(
+        {"legitimate": 2, "legitimate_options": [2, 3]}
+    ) == {
+        "legitimate": 2,
+        "dateFilter": False,
+        "start": None,
+        "end": None,
+    }
 
 
 def test_stored_unknown_strategy_uses_engine_neutral_diagnostic() -> None:

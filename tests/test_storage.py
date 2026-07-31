@@ -54,6 +54,72 @@ def _temporary_active_db(label: str):
         set_active_db(previous_db)
 
 
+def test_load_study_identity_is_one_read_only_select(monkeypatch):
+    with _temporary_active_db(f"identity_{uuid.uuid4().hex[:8]}"):
+        with get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO studies (
+                    study_id, study_name, strategy_id, optimization_mode
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("identity-study", "Identity Study", "s03_reversal_v10", "optuna"),
+            )
+            conn.commit()
+
+        statements = []
+        connect_calls = []
+        original_connect = storage.sqlite3.connect
+
+        class RecordingConnection:
+            def __init__(self, connection):
+                self.connection = connection
+
+            @property
+            def row_factory(self):
+                return self.connection.row_factory
+
+            @row_factory.setter
+            def row_factory(self, value):
+                self.connection.row_factory = value
+
+            def execute(self, sql, params):
+                statements.append((" ".join(sql.split()), params))
+                return self.connection.execute(sql, params)
+
+            def commit(self):
+                raise AssertionError("identity lookup must not commit")
+
+            def close(self):
+                self.connection.close()
+
+        def recording_connect(*args, **kwargs):
+            connect_calls.append((args, kwargs))
+            return RecordingConnection(original_connect(*args, **kwargs))
+
+        monkeypatch.setattr(storage.sqlite3, "connect", recording_connect)
+
+        assert storage.load_study_identity_from_db("identity-study") == {
+            "study_id": "identity-study",
+            "strategy_id": "s03_reversal_v10",
+        }
+        assert storage.load_study_identity_from_db("missing-study") is None
+
+        assert statements == [
+            (
+                "SELECT study_id, strategy_id FROM studies WHERE study_id = ?",
+                ("identity-study",),
+            ),
+            (
+                "SELECT study_id, strategy_id FROM studies WHERE study_id = ?",
+                ("missing-study",),
+            ),
+        ]
+        assert len(connect_calls) == 2
+        assert all(call_kwargs["uri"] is True for _, call_kwargs in connect_calls)
+        assert all("mode=ro" in call_args[0] for call_args, _ in connect_calls)
+
+
 def _build_dummy_wfa_result():
     wf_config = WFConfig(strategy_id="s01_trailing_ma", is_period_days=10, oos_period_days=5)
     params = {"maType": "EMA", "maLength": 50, "closeCountLong": 7}
