@@ -206,9 +206,14 @@ the core runtime or identity versions:
   Omitted dates retain the omitted-key digest
   `e0ba87a4dbf66a843d462d0f73d8b1c991841b247acbb6051d999bd5767b5f7c`.
 
-Queue/preset, WFA-window runtime, stored-study, rerun, export, and UI severity
-integration remain outside TZ64A. `_derive_grid_preview` deliberately retains
-its prior internal runtime behavior pending the next integration phase.
+Queue is certified as a generic V1/V2 transport through the normal Optimize/WFA
+runtime boundary. Queue GET is non-mutating: unreadable encoding/JSON and
+invalid top-level shapes return a visible conflict while preserving the source
+bytes, and valid empty or leniently normalized legacy state is not rewritten or
+deleted merely by reading. Missing legacy `warmupBars` is omitted at launch and
+uses the core default `1000`; present malformed values remain strict runtime
+errors. Queue does not add another runtime normalization authority. Preset
+runtime integration remains deferred and uncertified.
 
 TZ64A-1 corrects the runtime boundary without changing any contract or identity
 version:

@@ -431,6 +431,13 @@ SQLite database stored in `src/storage/` directory. Multiple `.db` files support
 | `/api/queue` | PUT | Save/update queue state |
 | `/api/queue` | DELETE | Clear queue state |
 
+Queue transports both V1 and V2 run configuration and delegates runtime
+semantics to the normal Optimize/WFA launch boundary. GET never rewrites or
+deletes Queue storage; unreadable content is preserved and returned as a load
+error. Legacy item/source normalization remains lenient, and a missing legacy
+Warmup value uses the core default `1000`. Preset runtime support is separate,
+deferred work and is not certified by the Queue integration.
+
 #### Analytics
 | Endpoint | Method | Purpose |
 |----------|--------|---------|

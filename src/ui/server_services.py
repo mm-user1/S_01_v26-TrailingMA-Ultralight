@@ -142,6 +142,11 @@ CSV_ALLOWED_ROOTS = _collect_allowed_csv_roots(DEFAULT_CSV_ROOT)
 STRICT_CSV_PATH_MODE = True
 QUEUE_STATE_PATTERN = re.compile(r"^[A-Za-z]:[\\/]|^\\\\[^\\]|^/")
 QUEUE_STORAGE_FILE = Path(__file__).resolve().parent.parent / "storage" / "queue.json"
+QUEUE_STATE_LOAD_ERROR = "Stored Queue state is unreadable. The source file was preserved."
+
+
+class QueueStateLoadError(ValueError):
+    """Expected persisted Queue content failure that must not mutate storage."""
 
 
 def _is_csv_path_allowed(path: Path) -> bool:
@@ -378,26 +383,23 @@ def _normalize_queue_payload(raw_payload: Any) -> Dict[str, Any]:
 def _load_queue_state() -> Dict[str, Any]:
     path = _queue_storage_file_path()
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
         return _default_queue_state()
+    except UnicodeDecodeError as exc:
+        raise QueueStateLoadError(QUEUE_STATE_LOAD_ERROR) from exc
 
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        try:
-            path.unlink()
-        except OSError:
-            pass
-        return _default_queue_state()
+    except json.JSONDecodeError as exc:
+        raise QueueStateLoadError(QUEUE_STATE_LOAD_ERROR) from exc
 
-    normalized = _normalize_queue_payload(parsed)
-    if not normalized.get("items"):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-    return normalized
+    if not isinstance(parsed, dict):
+        raise QueueStateLoadError(QUEUE_STATE_LOAD_ERROR)
+    if "items" in parsed and not isinstance(parsed["items"], list):
+        raise QueueStateLoadError(QUEUE_STATE_LOAD_ERROR)
+
+    return _normalize_queue_payload(parsed)
 
 
 def _save_queue_state(raw_payload: Any) -> Dict[str, Any]:

@@ -623,6 +623,14 @@ backend advertises capability via `get_backend_metadata()` (normalized by
 - `PUT /api/queue` - Save/update queue state
 - `DELETE /api/queue` - Clear queue state
 
+Queue is a generic V1/V2 transport; normal Optimize/WFA launch boundaries own
+runtime validation. Queue reads never rewrite or delete `src/storage/queue.json`.
+Unreadable encoding/JSON or invalid top-level Queue shape is preserved and
+reported to the UI, while legacy item/source normalization remains lenient.
+A legacy item without `warmupBars` omits that launch field so the core default
+`1000` applies; an explicitly present malformed value still reaches strict V2
+validation. Preset runtime integration remains deferred and uncertified.
+
 ### Analytics
 - `GET /api/analytics/summary` - WFA studies summary with filters and aggregated metrics
 - `POST /api/analytics/equity` - Aggregate equity curves for selected study IDs

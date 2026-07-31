@@ -66,6 +66,20 @@ def isolate_storage_for_test_session(tmp_path_factory):
 
 
 @pytest.fixture(scope="session", autouse=True)
+def isolate_queue_for_test_session(tmp_path_factory):
+    """Keep every test away from the production Queue file by default."""
+    from ui import server_services
+
+    queue_root = tmp_path_factory.mktemp("merlin_test_queue").resolve()
+    original_queue_storage_file = server_services.QUEUE_STORAGE_FILE
+    server_services.QUEUE_STORAGE_FILE = queue_root / "queue.json"
+    try:
+        yield
+    finally:
+        server_services.QUEUE_STORAGE_FILE = original_queue_storage_file
+
+
+@pytest.fixture(scope="session", autouse=True)
 def allow_test_csv_roots(tmp_path_factory):
     """
     In tests, permit CSV paths under the repository working directory and under

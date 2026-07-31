@@ -87,6 +87,7 @@ try:
     from .server_services import (
         DEFAULT_PRESET_NAME,
         DEFAULT_CSV_ROOT,
+        QueueStateLoadError,
         _build_optimization_config,
         _build_trial_metrics,
         _clear_queue_state,
@@ -126,6 +127,7 @@ except ImportError:
     from server_services import (
         DEFAULT_PRESET_NAME,
         DEFAULT_CSV_ROOT,
+        QueueStateLoadError,
         _build_optimization_config,
         _build_trial_metrics,
         _clear_queue_state,
@@ -363,6 +365,8 @@ def register_routes(app):
     def get_queue_state_endpoint() -> object:
         try:
             payload = _load_queue_state()
+        except QueueStateLoadError as exc:
+            return jsonify({"error": str(exc)}), HTTPStatus.CONFLICT
         except OSError:
             return jsonify({"error": "Failed to load queue state."}), HTTPStatus.INTERNAL_SERVER_ERROR
         return jsonify(payload)

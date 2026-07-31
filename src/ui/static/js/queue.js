@@ -383,15 +383,14 @@ async function ensureQueueStateLoaded() {
   }
 
   queueStateLoadPromise = (async () => {
-    await reloadQueueStateFromServer();
+    try {
+      await reloadQueueStateFromServer();
+    } catch (error) {
+      console.warn('Failed to load queue state from server', error);
+      throw error;
+    }
     await migrateLegacyQueueStateIfNeeded();
   })()
-    .catch((error) => {
-      console.warn('Failed to load queue state from server', error);
-      if (!queueStateLoaded) {
-        applyQueueState(null);
-      }
-    })
     .finally(() => {
       queueStateLoadPromise = null;
     });
@@ -2632,6 +2631,12 @@ async function persistItemProgress(itemId, patch) {
   await saveQueue(queue);
 }
 
+function appendQueueWarmupField(formData, item) {
+  if (Object.prototype.hasOwnProperty.call(item, 'warmupBars')) {
+    formData.append('warmupBars', String(item.warmupBars));
+  }
+}
+
 async function finalizeQueueItem(itemId, finalState, patch = {}) {
   const normalizedFinalState = normalizeQueueFinalState(finalState);
   if (!normalizedFinalState) return;
@@ -2791,7 +2796,7 @@ async function runQueue() {
 
         const formData = new FormData();
         formData.append('strategy', item.strategyId);
-        formData.append('warmupBars', String(item.warmupBars));
+        appendQueueWarmupField(formData, item);
         formData.append('config', JSON.stringify(item.config));
         if (item.dbTarget) {
           formData.append('dbTarget', item.dbTarget);

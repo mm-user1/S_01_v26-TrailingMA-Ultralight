@@ -258,9 +258,17 @@ The V2 config resource returns deep-copied additive `runtime_contract`,
 `runtime_values`, `diagnostics`, and `validation_warnings` facts. A known invalid
 V2 profile returns structured HTTP 422 there and HTTP 400 on Phase-A run
 surfaces; an unknown config resource returns structured JSON 404. V1 config and
-runtime shapes remain unchanged. The stored-study `_derive_grid_preview`
-runtime path is intentionally deferred with Queue/preset, WFA-window, storage,
-rerun, and export normalization.
+runtime shapes remain unchanged.
+
+Queue is a supported generic V1/V2 JSON transport and does not own a second
+runtime schema or strategy-specific normalization layer. Optimize/WFA launch
+performs the authoritative runtime validation. A missing legacy Queue
+`warmupBars` key remains absent at launch and therefore uses the core default
+`1000`; present malformed values remain strict validation errors. Queue reads
+do not rewrite or delete stored state: unreadable encoding/JSON and invalid
+top-level shapes are preserved and reported, while legacy item/source
+normalization stays lenient for compatibility. Preset runtime integration is
+still deferred and is not certified by this phase.
 
 Server validation bodies remain structured JSON with the compatibility `error`
 string and authoritative diagnostics. The current Backtest, trade-download,
