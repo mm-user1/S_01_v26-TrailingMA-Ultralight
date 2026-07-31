@@ -21,6 +21,7 @@ from core.backtest_engine import (
 )
 from core.export import export_trades_csv
 from core.engine_v2.diagnostics import V2ValidationError
+from core.engine_v2.runtime_contract import normalize_v2_runtime_field_value
 from core.grid_engine import build_grid_dsr_results, preview_grid_parameter_space
 from core.optuna_engine import (
     CONSTRAINT_OPERATORS,
@@ -84,6 +85,7 @@ try:
         _parse_warmup_bars,
         _preset_path,
         _register_cancelled_run,
+        _require_valid_v2_context,
         _resolve_csv_path,
         _resolve_strategy_context,
         _resolve_strategy_id_from_request,
@@ -121,6 +123,7 @@ except ImportError:
         _parse_warmup_bars,
         _preset_path,
         _register_cancelled_run,
+        _require_valid_v2_context,
         _resolve_csv_path,
         _resolve_strategy_context,
         _resolve_strategy_id_from_request,
@@ -352,6 +355,8 @@ def register_routes(app):
         data = request.form
         try:
             strategy_context = _resolve_strategy_id_from_request()
+            if strategy_context.is_v2:
+                _require_valid_v2_context(strategy_context)
         except V2ValidationError as exc:
             return _validation_error_response(exc)
         strategy_id = strategy_context.strategy_id
@@ -1162,9 +1167,32 @@ def register_routes(app):
             oos_days = period_dates.get("oos_days")
 
             fixed_params_payload["dateFilter"] = True
-            if not fixed_params_payload.get("start"):
-                fixed_params_payload["start"] = user_start.isoformat()
-            fixed_params_payload["end"] = period_dates["is_end"].isoformat()
+            try:
+                if not fixed_params_payload.get("start"):
+                    fixed_params_payload["start"] = (
+                        normalize_v2_runtime_field_value(
+                            "start",
+                            user_start,
+                            strategy_id=strategy_id,
+                            path="fixed_params.start",
+                            user_boundary=False,
+                        )
+                        if strategy_context.is_v2
+                        else user_start.isoformat()
+                    )
+                fixed_params_payload["end"] = (
+                    normalize_v2_runtime_field_value(
+                        "end",
+                        period_dates["is_end"],
+                        strategy_id=strategy_id,
+                        path="fixed_params.end",
+                        user_boundary=False,
+                    )
+                    if strategy_context.is_v2
+                    else period_dates["is_end"].isoformat()
+                )
+            except V2ValidationError as exc:
+                return _validation_error_response(exc)
 
         fixed_params_payload = config_payload.get("fixed_params") or {}
         is_start_date = fixed_params_payload.get("start")

@@ -218,7 +218,9 @@ aliases do not override a real value, and distinct non-empty aliases fail with
 `V2_CONFLICTING_STRATEGY_ID`. Missing and unknown identities use
 `V2_MISSING_STRATEGY_ID` and `V2_UNKNOWN_STRATEGY_ID`. There is no first-strategy
 or S03 fallback. Walk-Forward uses the same strict identity rule, while its
-window runtime orchestration remains a later integration phase.
+window runtime orchestration remains a later integration phase. A known V2
+profile with fatal declarations is nevertheless rejected before WFA dataset,
+window, worker, optimizer, state, or storage work.
 
 At these V2 user boundaries, one server adapter calls the core runtime
 normalizer once. Its complete mapping always contains all four runtime fields,
@@ -231,6 +233,19 @@ preparation value. Reserved fields in `enabled_params`/`param_ranges`, reserved
 `*_options`, `fixed_params.warmupBars`, and Backtest
 `parameters.warmupBars` fail by presence with `V2_RESERVED_RUNTIME_AXIS`.
 
+A strict date-only `start` such as `2025-06-01` canonicalizes to
+`2025-06-01T00:00:00Z`. A strict date-only `end` canonicalizes to the inclusive
+end of that UTC day, `23:59:59.999999Z`, so legacy inclusive-day alignment and
+same-day date ranges are preserved. Naive datetime input remains UTC and
+timezone-bearing input is converted to the equivalent UTC instant. Runtime
+field values share one core normalization authority; duplicate transports are
+compared by canonical meaning rather than raw type or spelling.
+
+Forward Test and OOS Test intentionally override `dateFilter` to `true` while
+deriving the IS window. This is an orchestration fact required by the period
+split, not a second user-runtime parse. Derived V2 dates use the same canonical
+UTC `Z` formatter; V1 retains its existing `+00:00` representation.
+
 The V2 config resource returns deep-copied additive `runtime_contract`,
 `runtime_values`, `diagnostics`, and `validation_warnings` facts. A known invalid
 V2 profile returns structured HTTP 422 there and HTTP 400 on Phase-A run
@@ -238,6 +253,13 @@ surfaces; an unknown config resource returns structured JSON 404. V1 config and
 runtime shapes remain unchanged. The stored-study `_derive_grid_preview`
 runtime path is intentionally deferred with Queue/preset, WFA-window, storage,
 rerun, and export normalization.
+
+Server validation bodies remain structured JSON with the compatibility `error`
+string and authoritative diagnostics. The current Backtest, trade-download,
+and Optimize API clients extract only that concise `error` text for their normal
+message surface while preserving legacy plain-text failures. Runtime fields are
+excluded from both Python and JavaScript display-parameter identity, so runtime
+canonicalization does not change display IDs.
 
 ## Signals.py Requirements
 

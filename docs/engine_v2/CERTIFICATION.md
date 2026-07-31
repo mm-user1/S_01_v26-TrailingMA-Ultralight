@@ -210,6 +210,37 @@ Queue/preset, WFA-window runtime, stored-study, rerun, export, and UI severity
 integration remain outside TZ64A. `_derive_grid_preview` deliberately retains
 its prior internal runtime behavior pending the next integration phase.
 
+TZ64A-1 corrects the runtime boundary without changing any contract or identity
+version:
+
+- strict date-only V2 starts canonicalize to UTC `00:00:00Z`; strict date-only
+  ends canonicalize to inclusive UTC `23:59:59.999999Z`. A June 1 through June
+  30 synthetic 15-minute window retains all 2,880 bars, and a same-day window
+  retains all 96 bars, matching legacy date-only alignment;
+- duplicate runtime transports compare core-canonical values, so `1000` and
+  `"1000"`, false aliases, equivalent UTC timestamps, and a date-only end plus
+  its inclusive canonical instant agree. The complete mapping normalizer still
+  runs exactly once per request;
+- Forward Test/OOS period splitting intentionally sets `dateFilter=true` for
+  the derived IS window. Derived V2 bounds use canonical UTC `Z` strings without
+  a second complete user-runtime normalization; V1 derivation is unchanged;
+- structured server diagnostics remain authoritative JSON. The three existing
+  Start-page clients that previously displayed `response.text()` now extract a
+  concise non-empty `error` string while preserving legacy text failures;
+- WFA still defers date/Warmup/reserved-axis runtime integration, but known
+  fatal V2 profile declarations now fail before dataset, window, run-state,
+  worker, optimizer, or storage work;
+- Python `DISPLAY_PARAM_ID_IGNORED_KEYS` and JavaScript
+  `PARAM_ID_IGNORED_KEYS` exclude all four runtime fields. Contrary to the
+  historical TZ64A implementation-report hedge, runtime representation does
+  not change current display identity;
+- the added S06 date-only raw/canonical ordered-row digests are
+  `b1900647b0afefb3f8f11b5150426ef04c4dc8164221f51eb260e19f1c46339c`
+  and `9faf81224522a95727fb39961e3a7ea9da010c3dc4655e99ce84be11edd24e68`.
+  The 48,480 count, semantic digest, full fingerprint, existing six row
+  digests, sampled pins, allocation, ranking, parity, and trading semantics
+  remain unchanged.
+
 Grid V2 has two execution tiers:
 
 - reference tier: loops candidates through the shared public V2 runner;

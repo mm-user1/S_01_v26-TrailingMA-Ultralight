@@ -29,6 +29,20 @@ async function fetchStrategyConfig(strategyId) {
   return config;
 }
 
+async function readApiErrorMessage(response, fallback) {
+  const body = await response.text();
+  if (!body) return fallback;
+  try {
+    const payload = JSON.parse(body);
+    if (payload && typeof payload.error === 'string' && payload.error.trim()) {
+      return payload.error;
+    }
+    return body;
+  } catch (error) {
+    return body || fallback;
+  }
+}
+
 async function runBacktestRequest(formData) {
   const response = await fetch('/api/backtest', {
     method: 'POST',
@@ -36,8 +50,7 @@ async function runBacktestRequest(formData) {
   });
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || 'Backtest request failed.');
+    throw new Error(await readApiErrorMessage(response, 'Backtest request failed.'));
   }
 
   return response.json();
@@ -50,8 +63,7 @@ async function downloadBacktestTradesRequest(formData) {
   });
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || 'Backtest trade export failed.');
+    throw new Error(await readApiErrorMessage(response, 'Backtest trade export failed.'));
   }
 
   return response;
@@ -65,8 +77,7 @@ async function runOptimizationRequest(formData, signal = null) {
   });
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || 'Optimization request failed.');
+    throw new Error(await readApiErrorMessage(response, 'Optimization request failed.'));
   }
 
   const data = await response.json();

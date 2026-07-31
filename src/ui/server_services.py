@@ -31,6 +31,7 @@ from core.engine_v2.profile import ExecutionProfile, ProfileValidationError, par
 from core.engine_v2.runtime_contract import (
     V2_RESERVED_RUNTIME_PARAM_NAMES,
     V2RuntimeValidationError,
+    normalize_v2_runtime_field_value,
     normalize_v2_runtime_values,
 )
 from core.grid_engine import (
@@ -541,8 +542,14 @@ def _execute_backtest_request(
         )
         payload = _with_runtime_projection(payload, runtime.execution_projection)
         warmup_bars = runtime.values["warmupBars"]
+        use_date_filter = runtime.values["dateFilter"]
+        start_raw = runtime.values["start"]
+        end_raw = runtime.values["end"]
     else:
         warmup_bars = _parse_warmup_bars(request.form.get("warmupBars", "1000"))
+        use_date_filter = bool(payload.get("dateFilter", False))
+        start_raw = payload.get("start")
+        end_raw = payload.get("end")
 
     csv_path_raw = (request.form.get("csvPath") or "").strip()
     data_source = None
@@ -603,14 +610,6 @@ def _execute_backtest_request(
         _close_opened_file()
 
     trade_start_idx = 0
-    use_date_filter = (
-        runtime.values["dateFilter"]
-        if strategy_context.is_v2
-        else bool(payload.get("dateFilter", False))
-    )
-    start_raw = runtime.values["start"] if strategy_context.is_v2 else payload.get("start")
-    end_raw = runtime.values["end"] if strategy_context.is_v2 else payload.get("end")
-
     if use_date_filter and (start_raw is not None or end_raw is not None):
         start, end = align_date_bounds(df.index, start_raw, end_raw)
         if start_raw not in (None, "") and start is None:
@@ -965,9 +964,17 @@ def _normalize_v2_request_runtime(
 
     _require_valid_v2_context(context)
     raw_values: Dict[str, Any] = {}
+    canonical_values: Dict[str, Any] = {}
     paths: Dict[str, str] = {}
     for name, path, value in members:
-        if name in raw_values and raw_values[name] != value:
+        canonical_value = normalize_v2_runtime_field_value(
+            name,
+            value,
+            strategy_id=context.strategy_id,
+            path=path,
+            user_boundary=user_boundary,
+        )
+        if name in canonical_values and canonical_values[name] != canonical_value:
             raise _validation_error(
                 code="V2_INVALID_RUNTIME_VALUE",
                 strategy_id=context.strategy_id,
@@ -979,6 +986,7 @@ def _normalize_v2_request_runtime(
             )
         if name not in raw_values:
             raw_values[name] = value
+            canonical_values[name] = canonical_value
             paths[name] = path
     try:
         values = normalize_v2_runtime_values(
@@ -988,18 +996,25 @@ def _normalize_v2_request_runtime(
             missing_date_filter=missing_date_filter,
         )
     except V2RuntimeValidationError as exc:
-        remapped = tuple(
-            V2Diagnostic(
-                severity=item.severity,
-                code=item.code,
-                strategy_id=item.strategy_id,
-                path=paths.get(item.path, item.path),
-                variant=item.variant,
-                message=item.message,
+        remapped = []
+        for item in exc.diagnostics:
+            final_path = paths.get(item.path, item.path)
+            old_prefix = f"{item.strategy_id}: {item.path}"
+            new_prefix = f"{item.strategy_id}: {final_path}"
+            message = item.message
+            if final_path != item.path and message.startswith(old_prefix):
+                message = new_prefix + message[len(old_prefix):]
+            remapped.append(
+                V2Diagnostic(
+                    severity=item.severity,
+                    code=item.code,
+                    strategy_id=item.strategy_id,
+                    path=final_path,
+                    variant=item.variant,
+                    message=message,
+                )
             )
-            for item in exc.diagnostics
-        )
-        raise V2RuntimeValidationError(remapped) from exc
+        raise V2RuntimeValidationError(tuple(remapped)) from exc
 
     projection = {
         name: values[name]

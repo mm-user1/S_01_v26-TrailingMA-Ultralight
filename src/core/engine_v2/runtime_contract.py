@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -23,6 +24,7 @@ V2_REBASABLE_DATE_PARAM_NAMES = frozenset({"dateFilter", "start", "end"})
 
 _TRUE_VALUES = frozenset({"true", "1", "yes", "y", "on"})
 _FALSE_VALUES = frozenset({"false", "0", "no", "n", "off"})
+_DATE_ONLY_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,9 +124,19 @@ def _integer(value: Any, *, strategy_id: str, path: str) -> int:
     return parsed
 
 
-def _utc_timestamp(value: Any, *, strategy_id: str, path: str) -> str | None:
+def _utc_timestamp(
+    value: Any,
+    *,
+    strategy_id: str,
+    path: str,
+    field_name: str,
+) -> str | None:
     if value in (None, ""):
         return None
+    is_date_only = (
+        isinstance(value, str)
+        and _DATE_ONLY_PATTERN.fullmatch(value.strip()) is not None
+    )
     try:
         timestamp = pd.Timestamp(value)
     except (TypeError, ValueError, OverflowError) as exc:
@@ -143,7 +155,60 @@ def _utc_timestamp(value: Any, *, strategy_id: str, path: str) -> str | None:
         timestamp = timestamp.tz_localize("UTC")
     else:
         timestamp = timestamp.tz_convert("UTC")
+    if is_date_only:
+        timestamp = timestamp.normalize()
+        if field_name == "end":
+            timestamp += pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
     return timestamp.isoformat().replace("+00:00", "Z")
+
+
+def normalize_v2_runtime_field_value(
+    name: str,
+    value: Any,
+    *,
+    strategy_id: str = "<unknown strategy>",
+    path: str | None = None,
+    user_boundary: bool = True,
+) -> Any:
+    """Normalize one core-owned V2 runtime field to its canonical scalar."""
+
+    diagnostic_path = path or name
+    if name == "dateFilter":
+        return _strict_bool(value, strategy_id=strategy_id, path=diagnostic_path)
+    if name in {"start", "end"}:
+        return _utc_timestamp(
+            value,
+            strategy_id=strategy_id,
+            path=diagnostic_path,
+            field_name=name,
+        )
+    if name == "warmupBars":
+        warmup = _integer(value, strategy_id=strategy_id, path=diagnostic_path)
+        warmup_field = _RUNTIME_FIELD_BY_NAME["warmupBars"]
+        minimum = warmup_field.minimum
+        maximum = warmup_field.maximum
+        outside_user_bounds = (
+            user_boundary
+            and minimum is not None
+            and maximum is not None
+            and not minimum <= warmup <= maximum
+        )
+        if warmup < 0 or outside_user_bounds:
+            expected = (
+                f"between {minimum} and {maximum}"
+                if user_boundary
+                else "non-negative"
+            )
+            raise _runtime_error(
+                strategy_id=strategy_id,
+                path=diagnostic_path,
+                message=(
+                    f"{strategy_id}: {diagnostic_path} must be {expected}, "
+                    f"got {warmup}."
+                ),
+            )
+        return warmup
+    raise ValueError(f"Unknown V2 runtime field: {name}")
 
 
 def normalize_v2_runtime_values(
@@ -169,40 +234,26 @@ def normalize_v2_runtime_values(
             path="runtime",
             message=f"{strategy_id}: runtime values must be a mapping.",
         )
-    date_filter = (
-        _strict_bool(source["dateFilter"], strategy_id=strategy_id, path="dateFilter")
-        if "dateFilter" in source
-        else bool(missing_date_filter)
+    date_filter = normalize_v2_runtime_field_value(
+        "dateFilter",
+        source["dateFilter"] if "dateFilter" in source else bool(missing_date_filter),
+        strategy_id=strategy_id,
     )
-    start = _utc_timestamp(source.get("start"), strategy_id=strategy_id, path="start")
-    end = _utc_timestamp(source.get("end"), strategy_id=strategy_id, path="end")
+    start = normalize_v2_runtime_field_value(
+        "start", source.get("start"), strategy_id=strategy_id
+    )
+    end = normalize_v2_runtime_field_value(
+        "end", source.get("end"), strategy_id=strategy_id
+    )
     warmup_field = _RUNTIME_FIELD_BY_NAME["warmupBars"]
-    warmup = _integer(
+    warmup = normalize_v2_runtime_field_value(
+        "warmupBars",
         source["warmupBars"]
         if "warmupBars" in source
         else warmup_field.legacy_default,
         strategy_id=strategy_id,
-        path="warmupBars",
+        user_boundary=user_boundary,
     )
-    minimum = warmup_field.minimum
-    maximum = warmup_field.maximum
-    outside_user_bounds = (
-        user_boundary
-        and minimum is not None
-        and maximum is not None
-        and not minimum <= warmup <= maximum
-    )
-    if warmup < 0 or outside_user_bounds:
-        expected = (
-            f"between {minimum} and {maximum}"
-            if user_boundary
-            else "non-negative"
-        )
-        raise _runtime_error(
-            strategy_id=strategy_id,
-            path="warmupBars",
-            message=f"{strategy_id}: warmupBars must be {expected}, got {warmup}.",
-        )
     if date_filter and start is not None and end is not None:
         if pd.Timestamp(end) <= pd.Timestamp(start):
             raise _runtime_error(
@@ -375,6 +426,7 @@ __all__ = [
     "V2_RUNTIME_FIELDS",
     "V2RuntimeField",
     "V2RuntimeValidationError",
+    "normalize_v2_runtime_field_value",
     "normalize_v2_runtime_values",
     "runtime_contract_payload",
     "validate_v2_runtime_declarations",

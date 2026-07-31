@@ -843,6 +843,64 @@ def test_invalid_v2_profile_is_422_on_config_and_400_on_preview(monkeypatch, cli
     assert client.get(f"/api/strategy/{invalid['id']}/config").status_code == 200
 
 
+def test_invalid_v2_profile_fails_walkforward_before_work(monkeypatch, client):
+    import strategies
+    from ui import server_routes_run
+
+    original = strategies.get_strategy_config
+    invalid = deepcopy(original("s06_r_trend_v02_b2"))
+    invalid["execution"]["entryOrder"] = "unsupported"
+    monkeypatch.setattr(
+        strategies,
+        "get_strategy_config",
+        lambda strategy_id: invalid if strategy_id == invalid["id"] else original(strategy_id),
+    )
+    monkeypatch.setattr(
+        server_routes_run,
+        "_clear_cancelled_run",
+        lambda _run_id: pytest.fail("run state must not be mutated"),
+    )
+    monkeypatch.setattr(
+        server_routes_run,
+        "_resolve_csv_path",
+        lambda _path: pytest.fail("CSV resolution must not start"),
+    )
+    monkeypatch.setattr(
+        server_routes_run,
+        "_build_optimization_config",
+        lambda *_args, **_kwargs: pytest.fail("window config must not be built"),
+    )
+    monkeypatch.setattr(
+        server_routes_run,
+        "load_data",
+        lambda _source: pytest.fail("dataset load must not start"),
+    )
+
+    response = client.post(
+        "/api/walkforward",
+        data={"strategy": invalid["id"], "config": "{}"},
+    )
+
+    assert response.status_code == 400
+    diagnostic = _v2_runtime_diagnostic(response)
+    assert diagnostic["code"] == "V2_UNSUPPORTED_EXECUTION_MODE"
+    assert diagnostic["strategy_id"] == invalid["id"]
+
+
+@pytest.mark.parametrize(
+    "strategy_id", ["s06_r_trend_v02_b2", "s03_reversal_v10"]
+)
+def test_valid_v2_and_v1_walkforward_retain_existing_post_profile_path(
+    client, strategy_id
+):
+    response = client.post(
+        "/api/walkforward",
+        data={"strategy": strategy_id, "config": "{}"},
+    )
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "CSV path is required."}
+
+
 def test_config_api_unexpected_failure_uses_app_logger(monkeypatch, client, caplog):
     import strategies
 
@@ -906,6 +964,155 @@ def test_v2_runtime_adapter_preserves_presence_and_calls_core_once(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("name", "first", "second", "expected"),
+    [
+        ("warmupBars", 1000, "1000", 1000),
+        ("dateFilter", False, "0", False),
+        (
+            "start",
+            "2025-05-01T00:00",
+            "2025-05-01T00:00:00Z",
+            "2025-05-01T00:00:00Z",
+        ),
+        (
+            "end",
+            "2025-06-30",
+            "2025-06-30T23:59:59.999999Z",
+            "2025-06-30T23:59:59.999999Z",
+        ),
+    ],
+)
+def test_v2_runtime_adapter_duplicate_sources_compare_canonical_meaning(
+    monkeypatch,
+    name,
+    first,
+    second,
+    expected,
+):
+    from ui import server_services
+
+    context = server_services._resolve_strategy_context(
+        [("strategy_id", True, "s06_r_trend_v02_b2")]
+    )
+    original = server_services.normalize_v2_runtime_values
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(server_services, "normalize_v2_runtime_values", counted)
+    runtime = server_services._normalize_v2_request_runtime(
+        context,
+        [
+            (name, f"first.{name}", first),
+            (name, f"second.{name}", second),
+        ],
+        missing_date_filter=False,
+    )
+
+    assert runtime.values[name] == expected
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "first", "second"),
+    [
+        ("warmupBars", 1000, 1001),
+        ("dateFilter", False, True),
+        ("start", "2025-05-01T00:00:00Z", "2025-05-01T00:15:00Z"),
+    ],
+)
+def test_v2_runtime_adapter_duplicate_conflicts_name_both_paths(
+    name, first, second
+):
+    from core.engine_v2.diagnostics import V2ValidationError
+    from ui import server_services
+
+    context = server_services._resolve_strategy_context(
+        [("strategy_id", True, "s06_r_trend_v02_b2")]
+    )
+    with pytest.raises(V2ValidationError) as raised:
+        server_services._normalize_v2_request_runtime(
+            context,
+            [
+                (name, f"first.{name}", first),
+                (name, f"second.{name}", second),
+            ],
+            missing_date_filter=False,
+        )
+
+    diagnostic = raised.value.diagnostics[0]
+    assert diagnostic.path == f"second.{name}"
+    assert f"first.{name}" in diagnostic.message
+    assert f"second.{name}" in diagnostic.message
+
+
+def test_v2_runtime_adapter_invalid_duplicate_uses_invalid_source_path():
+    from core.engine_v2.diagnostics import V2ValidationError
+    from ui import server_services
+
+    context = server_services._resolve_strategy_context(
+        [("strategy_id", True, "s06_r_trend_v02_b2")]
+    )
+    with pytest.raises(V2ValidationError) as raised:
+        server_services._normalize_v2_request_runtime(
+            context,
+            [
+                ("warmupBars", "payload.warmupBars", 1000),
+                ("warmupBars", "config.warmup_bars", "invalid"),
+            ],
+            missing_date_filter=False,
+        )
+
+    diagnostic = raised.value.diagnostics[0]
+    assert diagnostic.path == "config.warmup_bars"
+    assert diagnostic.message.startswith(
+        "s06_r_trend_v02_b2: config.warmup_bars"
+    )
+
+
+def test_v2_preview_accepts_equivalent_duplicate_warmup_sources(monkeypatch, client):
+    from ui import server_routes_run
+
+    payload = _s03_regime_er_grid_preview_payload()
+    payload["warmup_bars"] = "1000"
+    captured = []
+    monkeypatch.setattr(
+        server_routes_run,
+        "preview_grid_parameter_space",
+        lambda config: captured.append(config) or {"ok": True},
+    )
+
+    response = client.post(
+        "/api/grid/preview",
+        json={"config": payload, "strategyId": payload["strategy_id"], "warmupBars": 1000},
+    )
+
+    assert response.status_code == 200
+    assert captured[0].warmup_bars == 1000
+
+
+@pytest.mark.parametrize("warmup", [100, 5000])
+def test_v2_preview_accepts_exact_warmup_boundaries(monkeypatch, client, warmup):
+    from ui import server_routes_run
+
+    payload = _s03_regime_er_grid_preview_payload()
+    captured = []
+    monkeypatch.setattr(
+        server_routes_run,
+        "preview_grid_parameter_space",
+        lambda config: captured.append(config) or {"ok": True},
+    )
+    response = client.post(
+        "/api/grid/preview",
+        json={"config": payload, "strategyId": payload["strategy_id"], "warmupBars": warmup},
+    )
+    assert response.status_code == 200
+    assert captured[0].warmup_bars == warmup
+
+
+@pytest.mark.parametrize(
     ("name", "value", "expected_path"),
     [
         ("dateFilter", "maybe", "fixed_params.dateFilter"),
@@ -958,7 +1165,42 @@ def test_v2_runtime_adapter_rejects_active_equal_or_reversed_range():
                 ],
                 missing_date_filter=False,
             )
-        assert raised.value.diagnostics[0].path == "fixed_params.end"
+        diagnostic = raised.value.diagnostics[0]
+        assert diagnostic.path == "fixed_params.end"
+        assert diagnostic.message.startswith(
+            "s06_r_trend_v02_b2: fixed_params.end"
+        )
+
+
+def test_v2_runtime_adapter_accepts_same_day_date_only_and_timezone_input():
+    from ui import server_services
+
+    context = server_services._resolve_strategy_context(
+        [("strategy_id", True, "s06_r_trend_v02_b2")]
+    )
+    runtime = server_services._normalize_v2_request_runtime(
+        context,
+        [
+            ("dateFilter", "fixed_params.dateFilter", True),
+            ("start", "fixed_params.start", "2025-06-30"),
+            ("end", "fixed_params.end", "2025-06-30"),
+        ],
+        missing_date_filter=False,
+    )
+    assert runtime.execution_projection == {
+        "dateFilter": True,
+        "start": "2025-06-30T00:00:00Z",
+        "end": "2025-06-30T23:59:59.999999Z",
+    }
+
+    timezone_runtime = server_services._normalize_v2_request_runtime(
+        context,
+        [
+            ("start", "fixed_params.start", "2025-05-01T02:00:00+02:00"),
+        ],
+        missing_date_filter=False,
+    )
+    assert timezone_runtime.execution_projection["start"] == "2025-05-01T00:00:00Z"
 
 
 @pytest.mark.parametrize(
@@ -1286,6 +1528,238 @@ def test_v2_preview_and_direct_run_build_equal_runtime_and_grid_facts(
         assert "end" not in preview_config.fixed_params
 
 
+@pytest.mark.parametrize("optimization_mode", ["optuna", "grid"])
+def test_v2_ft_oos_derivation_uses_core_canonical_dates_once(
+    monkeypatch,
+    client,
+    tmp_path,
+    optimization_mode,
+):
+    from ui import server_routes_run, server_services
+
+    csv_path = tmp_path / f"derived_{optimization_mode}.csv"
+    csv_path.write_text("placeholder", encoding="utf-8")
+    payload = _s03_regime_er_grid_preview_payload(
+        optimization_mode=optimization_mode,
+        objectives=["net_profit_pct"],
+        grid_fast_objectives=["net_profit_pct"],
+        fixed_params={
+            "dateFilter": False,
+            "start": "2025-01-01T00:00:00Z",
+            "end": "2025-03-31T23:59:59Z",
+            "useRegime": False,
+            "useEmergencySL": False,
+        },
+    )
+    payload["postProcess"] = {"enabled": True, "ftPeriodDays": 10}
+    payload["oosTest"] = {"enabled": True, "periodDays": 7}
+
+    built = []
+    periods = []
+    complete_calls = []
+    original_builder = server_routes_run._build_optimization_config
+    original_periods = server_routes_run.calculate_period_dates
+    original_normalizer = server_services.normalize_v2_runtime_values
+
+    def capture_builder(*args, **kwargs):
+        config = original_builder(*args, **kwargs)
+        built.append(config)
+        return config
+
+    def capture_periods(*args, **kwargs):
+        result = original_periods(*args, **kwargs)
+        periods.append(result)
+        return result
+
+    def count_complete(*args, **kwargs):
+        complete_calls.append((args, kwargs))
+        return original_normalizer(*args, **kwargs)
+
+    monkeypatch.setattr(server_routes_run, "_resolve_csv_path", lambda _raw: csv_path)
+    monkeypatch.setattr(server_routes_run, "_build_optimization_config", capture_builder)
+    monkeypatch.setattr(server_routes_run, "calculate_period_dates", capture_periods)
+    monkeypatch.setattr(server_services, "normalize_v2_runtime_values", count_complete)
+    monkeypatch.setattr(server_routes_run, "run_optimization", lambda _config: ([], None))
+
+    response = client.post(
+        "/api/optimize",
+        data={
+            "strategy": "s03_reversal_v11_regime_er_b2",
+            "warmupBars": "1000",
+            "csvPath": str(csv_path),
+            "config": json.dumps(payload),
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(complete_calls) == 1
+    assert len(built) == len(periods) == 1
+    config = built[0]
+    period = periods[0]
+    assert config.fixed_params["dateFilter"] is True
+    assert config.fixed_params["start"] == "2025-01-01T00:00:00Z"
+    assert config.fixed_params["end"] == "2025-03-14T23:59:59Z"
+    assert "+00:00" not in config.fixed_params["start"]
+    assert "+00:00" not in config.fixed_params["end"]
+    assert config.is_period_days == period["is_days"] == 72
+    assert config.ft_period_days == period["ft_days"] == 10
+    assert period["oos_days"] == 7
+    assert period["ft_start"] == pd.Timestamp("2025-03-14T23:59:59Z")
+    assert period["ft_end"] == period["oos_start"] == pd.Timestamp(
+        "2025-03-24T23:59:59Z"
+    )
+    assert period["oos_end"] == pd.Timestamp("2025-03-31T23:59:59Z")
+
+
+def test_v2_ft_derived_runtime_failure_is_structured_and_stops_config_build(
+    monkeypatch,
+    client,
+    tmp_path,
+):
+    from core.engine_v2.diagnostics import V2Diagnostic
+    from core.engine_v2.runtime_contract import V2RuntimeValidationError
+    from ui import server_routes_run
+
+    csv_path = tmp_path / "derived_runtime_failure.csv"
+    csv_path.write_text("placeholder", encoding="utf-8")
+    payload = _s03_regime_er_grid_preview_payload(
+        optimization_mode="optuna",
+        objectives=["net_profit_pct"],
+        fixed_params={
+            "dateFilter": False,
+            "start": "2025-01-01T00:00:00Z",
+            "end": "2025-03-31T23:59:59Z",
+            "useRegime": False,
+            "useEmergencySL": False,
+        },
+    )
+    payload["postProcess"] = {"enabled": True, "ftPeriodDays": 10}
+
+    def fail_derived_normalization(
+        _name,
+        _value,
+        *,
+        strategy_id,
+        path,
+        user_boundary,
+    ):
+        assert user_boundary is False
+        raise V2RuntimeValidationError(
+            V2Diagnostic(
+                severity="error",
+                code="V2_INVALID_RUNTIME_VALUE",
+                strategy_id=strategy_id,
+                path=path,
+                variant=None,
+                message=f"{strategy_id}: {path} could not be normalized.",
+            )
+        )
+
+    monkeypatch.setattr(server_routes_run, "_resolve_csv_path", lambda _raw: csv_path)
+    monkeypatch.setattr(
+        server_routes_run,
+        "normalize_v2_runtime_field_value",
+        fail_derived_normalization,
+    )
+    monkeypatch.setattr(
+        server_routes_run,
+        "_build_optimization_config",
+        lambda *_args, **_kwargs: pytest.fail(
+            "optimization config must not be built after runtime validation fails"
+        ),
+    )
+    monkeypatch.setattr(
+        server_routes_run,
+        "run_optimization",
+        lambda *_args, **_kwargs: pytest.fail(
+            "optimization must not run after runtime validation fails"
+        ),
+    )
+
+    response = client.post(
+        "/api/optimize",
+        data={
+            "strategy": "s03_reversal_v11_regime_er_b2",
+            "warmupBars": "1000",
+            "csvPath": str(csv_path),
+            "config": json.dumps(payload),
+        },
+    )
+
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"] == (
+        "s03_reversal_v11_regime_er_b2: fixed_params.end could not be normalized."
+    )
+    assert body["diagnostics"] == [
+        {
+            "severity": "error",
+            "code": "V2_INVALID_RUNTIME_VALUE",
+            "strategy_id": "s03_reversal_v11_regime_er_b2",
+            "path": "fixed_params.end",
+            "variant": None,
+            "message": (
+                "s03_reversal_v11_regime_er_b2: fixed_params.end could not be "
+                "normalized."
+            ),
+        }
+    ]
+
+
+def test_v1_ft_derivation_keeps_legacy_isoformat_representation(
+    monkeypatch,
+    client,
+    tmp_path,
+):
+    from ui import server_routes_run, server_services
+
+    csv_path = tmp_path / "derived_v1.csv"
+    csv_path.write_text("placeholder", encoding="utf-8")
+    payload = _grid_sidebar_config()
+    payload.update(
+        optimization_mode="optuna",
+        objectives=["net_profit_pct"],
+        primary_objective="net_profit_pct",
+        fixed_params={
+            "dateFilter": False,
+            "start": "2025-01-01T00:00:00Z",
+            "end": "2025-03-31T23:59:59Z",
+        },
+        postProcess={"enabled": True, "ftPeriodDays": 10},
+    )
+    built = []
+    original_builder = server_routes_run._build_optimization_config
+
+    def capture_builder(*args, **kwargs):
+        config = original_builder(*args, **kwargs)
+        built.append(config)
+        return config
+
+    monkeypatch.setattr(server_routes_run, "_resolve_csv_path", lambda _raw: csv_path)
+    monkeypatch.setattr(server_routes_run, "_build_optimization_config", capture_builder)
+    monkeypatch.setattr(server_routes_run, "run_optimization", lambda _config: ([], None))
+    monkeypatch.setattr(
+        server_services,
+        "normalize_v2_runtime_values",
+        lambda *_args, **_kwargs: pytest.fail("V1 must bypass V2 normalization"),
+    )
+
+    response = client.post(
+        "/api/optimize",
+        data={
+            "strategy": "s03_reversal_v10",
+            "warmupBars": "1000",
+            "csvPath": str(csv_path),
+            "config": json.dumps(payload),
+        },
+    )
+
+    assert response.status_code == 200
+    assert built[0].fixed_params["dateFilter"] is True
+    assert built[0].fixed_params["start"] == "2025-01-01T00:00:00Z"
+    assert built[0].fixed_params["end"].endswith("+00:00")
+
+
 @pytest.mark.parametrize("endpoint", ["/api/backtest", "/api/backtest/trades"])
 def test_v2_backtest_and_trade_download_share_canonical_runtime_projection(
     monkeypatch,
@@ -1360,6 +1834,135 @@ def test_v2_backtest_and_trade_download_share_canonical_runtime_projection(
     ]
 
 
+def test_v2_backtest_date_only_range_reaches_final_day_strategy_execution(
+    monkeypatch,
+    client,
+    tmp_path,
+):
+    import strategies
+    from ui import server_services
+
+    csv_path = tmp_path / "date_only_backtest.csv"
+    csv_path.write_text("placeholder", encoding="utf-8")
+    index = pd.date_range(
+        "2025-06-01T00:00:00Z",
+        "2025-06-30T23:45:00Z",
+        freq="15min",
+    )
+    frame = pd.DataFrame(
+        {
+            "Open": 1.0,
+            "High": 1.0,
+            "Low": 1.0,
+            "Close": 1.0,
+            "Volume": 1.0,
+        },
+        index=index,
+    )
+    captured = {}
+
+    class DummyResult:
+        trades = []
+
+        def to_dict(self):
+            return {"ok": True}
+
+    class DummyStrategy:
+        @staticmethod
+        def run(df, params, trade_start_idx):
+            captured.update(
+                rows=len(df),
+                first=df.index[trade_start_idx],
+                last=df.index[-1],
+                params=deepcopy(params),
+            )
+            return DummyResult()
+
+    original_get_strategy = strategies.get_strategy
+    monkeypatch.setattr(
+        strategies,
+        "get_strategy",
+        lambda strategy_id: DummyStrategy
+        if strategy_id == "s06_r_trend_v02_b2"
+        else original_get_strategy(strategy_id),
+    )
+    monkeypatch.setattr(server_services, "_resolve_csv_path", lambda _raw: csv_path)
+    monkeypatch.setattr(server_services, "load_data", lambda _source: frame)
+
+    response = client.post(
+        "/api/backtest",
+        data={
+            "strategy": "s06_r_trend_v02_b2",
+            "warmupBars": "100",
+            "csvPath": str(csv_path),
+            "payload": json.dumps(
+                {
+                    "dateFilter": True,
+                    "start": "2025-06-01",
+                    "end": "2025-06-30",
+                }
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["rows"] == 2_880
+    assert captured["first"] == index[0]
+    assert captured["last"] == index[-1]
+    assert captured["params"]["end"] == "2025-06-30T23:59:59.999999Z"
+
+
+def test_v1_backtest_branch_uses_explicit_runtime_locals(monkeypatch, client, tmp_path):
+    import strategies
+    from ui import server_services
+
+    csv_path = tmp_path / "v1_runtime_locals.csv"
+    csv_path.write_text("placeholder", encoding="utf-8")
+    index = pd.date_range("2025-06-01T00:00:00Z", periods=2, freq="15min")
+    frame = pd.DataFrame(
+        {
+            "Open": 1.0,
+            "High": 1.0,
+            "Low": 1.0,
+            "Close": 1.0,
+            "Volume": 1.0,
+        },
+        index=index,
+    )
+
+    class DummyResult:
+        trades = []
+
+        def to_dict(self):
+            return {"ok": True}
+
+    class DummyStrategy:
+        @staticmethod
+        def run(_df, _params, _trade_start_idx):
+            return DummyResult()
+
+    original_get_strategy = strategies.get_strategy
+    monkeypatch.setattr(
+        strategies,
+        "get_strategy",
+        lambda strategy_id: DummyStrategy
+        if strategy_id == "s03_reversal_v10"
+        else original_get_strategy(strategy_id),
+    )
+    monkeypatch.setattr(server_services, "_resolve_csv_path", lambda _raw: csv_path)
+    monkeypatch.setattr(server_services, "load_data", lambda _source: frame)
+
+    response = client.post(
+        "/api/backtest",
+        data={
+            "strategy": "s03_reversal_v10",
+            "csvPath": str(csv_path),
+            "payload": "{}",
+        },
+    )
+    assert response.status_code == 200
+
+
 def test_tz64a_request_runtime_row_digests_and_identity_pins():
     from core.grid_v2 import build_grid_v2_plan
     from ui import server_services
@@ -1414,6 +2017,19 @@ def test_tz64a_request_runtime_row_digests_and_identity_pins():
         {"fixed_params": {"dateFilter": "0"}},
         warmup_members=[],
     )
+    date_only_payload, _date_only_runtime = (
+        server_services._normalize_v2_optimizer_payload(
+            context,
+            {
+                "fixed_params": {
+                    "dateFilter": True,
+                    "start": "2025-06-01",
+                    "end": "2025-06-30",
+                }
+            },
+            warmup_members=[],
+        )
+    )
     assert blank_payload["fixed_params"] == {
         "dateFilter": False,
         "start": None,
@@ -1425,6 +2041,11 @@ def test_tz64a_request_runtime_row_digests_and_identity_pins():
         "end": "2025-11-20T00:00:00Z",
     }
     assert alias_payload["fixed_params"] == {"dateFilter": False}
+    assert date_only_payload["fixed_params"] == {
+        "dateFilter": True,
+        "start": "2025-06-01T00:00:00Z",
+        "end": "2025-06-30T23:59:59.999999Z",
+    }
     assert blank_runtime.values["warmupBars"] == dated_runtime.values["warmupBars"] == 1000
 
     cases = [
@@ -1450,6 +2071,18 @@ def test_tz64a_request_runtime_row_digests_and_identity_pins():
             dated_payload["fixed_params"],
             "54a7709b31efc592bf6d329d45b7a0dd2bab38a78d6a7bdf1673d89f1829e19d",
         ),
+        (
+            {
+                "dateFilter": True,
+                "start": "2025-06-01",
+                "end": "2025-06-30",
+            },
+            "b1900647b0afefb3f8f11b5150426ef04c4dc8164221f51eb260e19f1c46339c",
+        ),
+        (
+            date_only_payload["fixed_params"],
+            "9faf81224522a95727fb39961e3a7ea9da010c3dc4655e99ce84be11edd24e68",
+        ),
     ]
     for base_params, expected_row_digest in cases:
         plan = build_grid_v2_plan(config, base_params=base_params)
@@ -1462,6 +2095,27 @@ def test_tz64a_request_runtime_row_digests_and_identity_pins():
         assert plan.plan_fingerprint == (
             "0f8d001c380df5ee95d34ca4e25910c674e20e9e8f34886a1bd2f1c261f019b2"
         )
+
+    from core.param_identity import create_display_param_id
+
+    trading_params = {"maType": "EMA", "maLength": 50}
+    raw_display_id = create_display_param_id(
+        trading_params,
+        fixed_params={
+            "dateFilter": True,
+            "start": "2025-06-01",
+            "end": "2025-06-30",
+            "warmupBars": 1000,
+        },
+    )
+    canonical_display_id = create_display_param_id(
+        trading_params,
+        fixed_params={
+            **date_only_payload["fixed_params"],
+            "warmupBars": 5000,
+        },
+    )
+    assert raw_display_id == canonical_display_id
 
 
 def test_s03_regime_er_grid_metadata_hides_internal_variants(client):

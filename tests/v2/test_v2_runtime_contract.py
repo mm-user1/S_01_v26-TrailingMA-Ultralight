@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import copy
 
+import pandas as pd
 import pytest
 
+from core.backtest_engine import align_date_bounds, prepare_dataset_with_warmup
 from core.engine_v2.runtime_contract import (
     V2_REBASABLE_DATE_PARAM_NAMES,
     V2_RESERVED_RUNTIME_PARAM_NAMES,
     V2_RUNTIME_CONTRACT_VERSION,
     V2RuntimeValidationError,
+    normalize_v2_runtime_field_value,
     normalize_v2_runtime_values,
     runtime_contract_payload,
     validate_v2_runtime_declarations,
@@ -38,6 +41,12 @@ def test_runtime_contract_version_names_and_rebasable_dates_are_stable():
     assert [field["name"] for field in payload["fields"]] == list(
         V2_RESERVED_RUNTIME_PARAM_NAMES
     )
+
+
+def test_scalar_runtime_normalizer_is_exported_through_v2_facade():
+    from core.engine_v2 import normalize_v2_runtime_field_value as facade_normalizer
+
+    assert facade_normalizer is normalize_v2_runtime_field_value
 
 
 @pytest.mark.parametrize(
@@ -90,6 +99,150 @@ def test_runtime_bounds_are_canonical_utc_and_ordered_when_active():
         normalize_v2_runtime_values(
             {"dateFilter": True, "start": "2025-01-02", "end": "2025-01-01"}
         )
+
+
+def test_runtime_date_only_bounds_use_start_and_inclusive_end_of_utc_day():
+    values = normalize_v2_runtime_values(
+        {
+            "dateFilter": True,
+            "start": "2025-06-30",
+            "end": "2025-06-30",
+        }
+    )
+    assert values["start"] == "2025-06-30T00:00:00Z"
+    assert values["end"] == "2025-06-30T23:59:59.999999Z"
+
+    assert normalize_v2_runtime_field_value(
+        "end", "2025-06-30T23:59:59.999999Z"
+    ) == values["end"]
+
+
+def test_runtime_date_only_reversed_range_and_non_date_only_equal_instants_fail():
+    with pytest.raises(V2RuntimeValidationError, match="end must be later"):
+        normalize_v2_runtime_values(
+            {
+                "dateFilter": True,
+                "start": "2025-07-01",
+                "end": "2025-06-30",
+            }
+        )
+
+    with pytest.raises(V2RuntimeValidationError, match="end must be later"):
+        normalize_v2_runtime_values(
+            {
+                "dateFilter": True,
+                "start": "2025-06-30T12:00:00Z",
+                "end": "2025-06-30T12:00:00+00:00",
+            }
+        )
+
+
+def test_date_only_canonical_bounds_preserve_legacy_15_minute_alignment():
+    index = pd.date_range(
+        "2025-06-01T00:00:00Z",
+        "2025-06-30T23:45:00Z",
+        freq="15min",
+    )
+    frame = pd.DataFrame({"value": range(len(index))}, index=index)
+    legacy_start, legacy_end = align_date_bounds(
+        index, "2025-06-01", "2025-06-30"
+    )
+    runtime = normalize_v2_runtime_values(
+        {
+            "dateFilter": True,
+            "start": "2025-06-01",
+            "end": "2025-06-30",
+        }
+    )
+    canonical_start, canonical_end = align_date_bounds(
+        index, runtime["start"], runtime["end"]
+    )
+    legacy_frame, _ = prepare_dataset_with_warmup(
+        frame, legacy_start, legacy_end, 0
+    )
+    canonical_frame, _ = prepare_dataset_with_warmup(
+        frame, canonical_start, canonical_end, 0
+    )
+
+    assert legacy_end == index[-1]
+    assert canonical_end == pd.Timestamp("2025-06-30T23:59:59.999999Z")
+    assert len(legacy_frame) == len(canonical_frame) == 2_880
+    assert legacy_frame.index[-1] == canonical_frame.index[-1] == index[-1]
+
+    same_day = normalize_v2_runtime_values(
+        {
+            "dateFilter": True,
+            "start": "2025-06-30",
+            "end": "2025-06-30",
+        }
+    )
+    same_start, same_end = align_date_bounds(
+        index, same_day["start"], same_day["end"]
+    )
+    same_frame, _ = prepare_dataset_with_warmup(frame, same_start, same_end, 0)
+    assert len(same_frame) == 96
+    assert same_frame.index[-1] == index[-1]
+
+
+def test_grid_and_optuna_preparation_share_canonical_date_only_window(monkeypatch):
+    from core import grid_engine, optuna_engine
+    from core.optuna_engine import OptimizationConfig, OptunaConfig, OptunaOptimizer
+    import strategies
+
+    index = pd.date_range(
+        "2025-06-01T00:00:00Z",
+        "2025-06-30T23:45:00Z",
+        freq="15min",
+    )
+    frame = pd.DataFrame(
+        {
+            "Open": 1.0,
+            "High": 1.0,
+            "Low": 1.0,
+            "Close": 1.0,
+            "Volume": 1.0,
+        },
+        index=index,
+    )
+    runtime = normalize_v2_runtime_values(
+        {
+            "dateFilter": True,
+            "start": "2025-06-01",
+            "end": "2025-06-30",
+        }
+    )
+    config = OptimizationConfig(
+        csv_file="synthetic.csv",
+        strategy_id="s06_r_trend_v02_b2",
+        enabled_params={},
+        param_ranges={},
+        param_types={},
+        fixed_params={
+            "dateFilter": runtime["dateFilter"],
+            "start": runtime["start"],
+            "end": runtime["end"],
+        },
+        warmup_bars=0,
+    )
+
+    monkeypatch.setattr(grid_engine, "load_data", lambda _source: frame)
+    grid_frame, grid_trade_start, grid_start, grid_end = (
+        grid_engine._prepare_grid_dataframe(config)
+    )
+
+    class DummyStrategy:
+        pass
+
+    monkeypatch.setattr(optuna_engine, "load_data", lambda _source: frame)
+    monkeypatch.setattr(strategies, "get_strategy", lambda _strategy_id: DummyStrategy)
+    optimizer = OptunaOptimizer(config, OptunaConfig())
+    optimizer._prepare_data_and_strategy()
+
+    assert grid_start == optimizer.df.index[0] == index[0]
+    assert grid_end == pd.Timestamp("2025-06-30T23:59:59.999999Z")
+    assert grid_frame.index[-1] == optimizer.df.index[-1] == index[-1]
+    assert grid_trade_start == optimizer.trade_start_idx == 0
+    assert len(grid_frame) == len(optimizer.df) == 2_880
 
 
 @pytest.mark.parametrize("value", [100, 1000, 5000])
