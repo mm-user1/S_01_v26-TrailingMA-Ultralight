@@ -565,6 +565,20 @@ backend advertises capability via `get_backend_metadata()` (normalized by
 - Forms generated dynamically from `config.json`
 - Strategy dropdown auto-populated from discovered strategies
 - No hardcoded parameters in frontend
+- Direct Start-page Backtest, trade download, Optuna/Grid/WFA, Queue-item
+  creation, and automatic Grid Preview require a successfully rendered config
+  whose accepted request ID matches the selected strategy. A new or failed
+  config load clears only strategy-generated fields, strategy information, and
+  Preview state; CSV selection, date/Warmup, database, budget, WFA, Queue, and
+  Preset controls are preserved. Obsolete config successes and failures are
+  ignored. Persisted Queue execution remains independent of editable-form
+  readiness.
+- Config-load failures reuse the backend's concise `error` text. Warning-only
+  configs remain ready and may log `validation_warnings` to the console;
+  informational diagnostics are not promoted into user-facing warnings. TZ64C
+  intentionally does not add diagnostic panels, contract-default seeding,
+  Preset/runtime precedence, a centralized JavaScript runtime-name fallback,
+  or blank-End-Time semantics.
 
 ### Backend Architecture (server split)
 

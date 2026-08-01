@@ -260,6 +260,18 @@ V2 profile returns structured HTTP 422 there and HTTP 400 on Phase-A run
 surfaces; an unknown config resource returns structured JSON 404. V1 config and
 runtime shapes remain unchanged.
 
+The Start page accepts a strategy config only after the response for the exact
+selected strategy has rendered successfully. While a config is loading or
+after it fails, direct Backtest/trade download, Optuna/Grid/WFA, Queue-item
+creation, and automatic Grid Preview are blocked. Starting a load clears stale
+strategy-generated fields, strategy information, and Preview state while
+preserving global CSV, date/Warmup, database, budget, WFA, Queue, and Preset
+controls. Late responses for an obsolete selection are ignored. Persisted
+Queue execution does not depend on editable-form readiness. The client reuses
+the concise backend `error` without reimplementing V2 validation; warning-only
+configs remain usable, warnings may be logged, and `info` is not promoted to a
+warning.
+
 Queue is a supported generic V1/V2 JSON transport and does not own a second
 runtime schema or strategy-specific normalization layer. Optimize/WFA launch
 performs the authoritative runtime validation. A missing legacy Queue

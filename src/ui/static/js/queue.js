@@ -1712,7 +1712,10 @@ async function ensureQueueItemStrategyLoaded(item) {
     select.value = strategyId;
   }
   window.currentStrategyId = strategyId;
-  await loadStrategyConfig(strategyId);
+  const loaded = await loadStrategyConfig(strategyId);
+  if (!loaded || !isCurrentStrategyConfigReady()) {
+    throw new Error(STRATEGY_CONFIG_NOT_READY_MESSAGE);
+  }
 }
 
 async function loadQueueItemIntoForm(itemId, options = {}) {
@@ -2024,6 +2027,11 @@ function collectQueueItem() {
 
   if (!window.currentStrategyId) {
     showQueueError('Please select a strategy before adding to queue.');
+    return null;
+  }
+
+  if (!isCurrentStrategyConfigReady()) {
+    showQueueError(STRATEGY_CONFIG_NOT_READY_MESSAGE);
     return null;
   }
 

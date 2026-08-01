@@ -263,6 +263,15 @@ Start Page (index.html)
   -> active .db file (SQLite)
 ```
 
+Direct form actions and automatic Grid Preview require the selected strategy's
+configuration to have loaded and rendered for that exact selection. Starting a
+new load, or a current load failure, removes stale generated strategy fields,
+strategy information, and Preview state without resetting global data/runtime,
+database, budget, WFA, Queue, or Preset controls. Late responses for obsolete
+strategy selections are ignored. Persisted Queue execution remains independent
+of this editable-form readiness gate, and config failures display the concise
+backend error rather than duplicating backend validation in JavaScript.
+
 #### Results Viewing Flow
 ```
 Results Page (results.html)

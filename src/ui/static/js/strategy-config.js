@@ -5,7 +5,52 @@
 
 window.currentStrategyId = null;
 window.currentStrategyConfig = null;
+window.currentStrategyConfigId = null;
+const STRATEGY_CONFIG_NOT_READY_MESSAGE =
+  'Strategy configuration is not ready. Select another strategy or reload the page.';
 const DYNAMIC_BACKTEST_GLOBAL_PARAM_NAMES = new Set(['dateFilter', 'start', 'end', 'warmupBars']);
+
+function isCurrentStrategyConfigReady() {
+  return Boolean(
+    window.currentStrategyId
+    && window.currentStrategyConfigId === window.currentStrategyId
+    && window.currentStrategyConfig
+    && typeof window.currentStrategyConfig === 'object'
+    && window.currentStrategyConfig.parameters
+    && typeof window.currentStrategyConfig.parameters === 'object'
+  );
+}
+
+function clearStrategyGeneratedState() {
+  window.currentStrategyConfig = null;
+  window.currentStrategyConfigId = null;
+
+  const backtestContainer = document.getElementById('backtestParamsContent');
+  const optimizerContainer = document.getElementById('optimizerParamsContainer');
+  const gridModesContainer = document.getElementById('gridEnabledModes');
+  const gridV2ManualAllocation = document.getElementById('gridV2ManualAllocation');
+  if (backtestContainer) backtestContainer.innerHTML = '';
+  if (optimizerContainer) optimizerContainer.innerHTML = '';
+  if (gridModesContainer) {
+    gridModesContainer.innerHTML = '';
+    delete gridModesContainer.dataset.profileKey;
+  }
+  if (gridV2ManualAllocation) gridV2ManualAllocation.innerHTML = '';
+
+  const info = document.getElementById('strategyInfo');
+  if (info) info.style.display = 'none';
+  ['strategyName', 'strategyVersion', 'strategyDescription', 'strategyParamCount'].forEach((id) => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = '';
+  });
+
+  if (typeof resetGridPreviewState === 'function') {
+    resetGridPreviewState();
+  } else {
+    window.lastGridPreview = null;
+    window.lastGridPreviewConfigKey = null;
+  }
+}
 
 function shouldRenderDynamicBacktestParam(paramName, paramDef = {}) {
   void paramDef;
@@ -52,6 +97,7 @@ async function handleStrategyChange() {
   window.currentStrategyId = select?.value || null;
 
   if (!window.currentStrategyId) {
+    clearStrategyGeneratedState();
     return;
   }
 
@@ -59,43 +105,53 @@ async function handleStrategyChange() {
 }
 
 async function loadStrategyConfig(strategyId) {
+  const requestedStrategyId = String(strategyId || '').trim();
+  let provisionalConfig = null;
+  clearStrategyGeneratedState();
+
   try {
-    const config = await fetchStrategyConfig(strategyId);
+    const config = await fetchStrategyConfig(requestedStrategyId);
+    if (requestedStrategyId !== window.currentStrategyId) {
+      return false;
+    }
+    if (!config || typeof config !== 'object' || !config.parameters || typeof config.parameters !== 'object') {
+      throw new Error('Invalid strategy configuration.');
+    }
+
+    provisionalConfig = config;
     window.currentStrategyConfig = config;
+    updateStrategyInfo(config);
+    generateBacktestForm(config);
+    generateOptimizerForm(config);
 
-    try {
-      updateStrategyInfo(config);
-    } catch (err) {
-      console.warn('Failed to update strategy info:', err);
+    if (requestedStrategyId !== window.currentStrategyId) {
+      if (window.currentStrategyConfig === provisionalConfig) {
+        clearStrategyGeneratedState();
+      }
+      return false;
     }
 
-    try {
-      generateBacktestForm(config);
-    } catch (err) {
-      console.error('Failed to generate backtest form:', err);
-      alert('Error generating backtest form. Please refresh the page.');
-      return;
-    }
+    window.currentStrategyConfigId = requestedStrategyId;
 
-    try {
-      generateOptimizerForm(config);
-    } catch (err) {
-      console.error('Failed to generate optimizer form:', err);
-      alert('Error generating optimizer form. Please refresh the page.');
-      return;
-    }
+    const warnings = Array.isArray(config.validation_warnings) ? config.validation_warnings : [];
+    warnings.forEach((warning) => console.warn('Strategy configuration warning:', warning));
 
     console.log(`Loaded strategy: ${config.name}`);
     if (typeof syncOptimizerModeUI === 'function') {
       syncOptimizerModeUI();
     }
+    return true;
   } catch (error) {
-    console.error('Failed to load strategy config:', error);
-    if (!window.currentStrategyConfig || !window.currentStrategyConfig.parameters) {
-      alert(`Error loading strategy configuration: ${error.message}\n\nPlease check browser console for details.`);
-    } else {
-      console.warn('Non-critical error during strategy load, but forms populated successfully');
+    if (requestedStrategyId !== window.currentStrategyId) {
+      if (provisionalConfig && window.currentStrategyConfig === provisionalConfig) {
+        clearStrategyGeneratedState();
+      }
+      return false;
     }
+    clearStrategyGeneratedState();
+    console.error('Failed to load strategy config:', error);
+    alert(error?.message || 'Failed to load strategy configuration.');
+    return false;
   }
 }
 

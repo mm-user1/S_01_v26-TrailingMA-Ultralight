@@ -2037,6 +2037,12 @@ async function executeBacktestRun({ event = null, downloadTrades = false } = {})
     return;
   }
 
+  if (!isCurrentStrategyConfigReady()) {
+    errorEl.textContent = STRATEGY_CONFIG_NOT_READY_MESSAGE;
+    errorEl.style.display = 'block';
+    return;
+  }
+
   const combinations = [{}];
   if (!combinations.length) {
     errorEl.textContent = 'No parameter combinations to run.';
@@ -2247,6 +2253,21 @@ function setGridPreviewError(message) {
   }
 }
 
+function resetGridPreviewState() {
+  gridPreviewSeq += 1;
+  window.lastGridPreview = null;
+  window.lastGridPreviewConfigKey = null;
+  const errorEl = document.getElementById('gridPreviewError');
+  const summary = document.getElementById('gridPreviewSummary');
+  const rowsEl = document.getElementById('gridPreviewRows');
+  if (summary) summary.textContent = '';
+  if (rowsEl) rowsEl.innerHTML = '';
+  if (errorEl) {
+    errorEl.textContent = '';
+    errorEl.style.display = 'none';
+  }
+}
+
 function scheduleGridPreviewUpdate() {
   if (getOptimizerMode() !== 'grid') return;
   if (gridPreviewTimer) {
@@ -2258,6 +2279,7 @@ function scheduleGridPreviewUpdate() {
 async function updateGridPreview() {
   if (getOptimizerMode() !== 'grid') return;
   if (typeof fetchGridPreviewRequest !== 'function') return;
+  if (!isCurrentStrategyConfigReady()) return;
   const seq = ++gridPreviewSeq;
   try {
     const state = gatherFormState();
@@ -2350,6 +2372,7 @@ function syncGridObjectiveAndConstraintUi() {
 }
 
 function syncOptimizerModeUI() {
+  if (!window.currentStrategyConfig) return;
   const mode = getOptimizerMode();
   const isGrid = mode === 'grid';
   const gridSettings = document.getElementById('gridSettings');
@@ -2447,6 +2470,13 @@ async function submitOptimization(event) {
 
   if (!window.currentStrategyId) {
     optimizerResultsEl.textContent = 'Please select a strategy before running optimization.';
+    optimizerResultsEl.classList.remove('ready');
+    optimizerResultsEl.style.display = 'block';
+    return;
+  }
+
+  if (!isCurrentStrategyConfigReady()) {
+    optimizerResultsEl.textContent = STRATEGY_CONFIG_NOT_READY_MESSAGE;
     optimizerResultsEl.classList.remove('ready');
     optimizerResultsEl.style.display = 'block';
     return;

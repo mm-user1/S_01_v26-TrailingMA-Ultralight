@@ -125,6 +125,193 @@ def test_grid_start_page_label_and_marker_are_compact():
     assert "optunaSection.style.display = gridRows.length ? 'none' : ''" in analytics_js
 
 
+def _javascript_function_source(source: str, signature: str, next_signature: str) -> str:
+    start = source.index(signature)
+    end = source.index(next_signature, start)
+    return source[start:end]
+
+
+def test_strategy_readiness_uses_captured_requested_identity_and_clears_stale_state():
+    repo_root = Path(__file__).parent.parent
+    source = (repo_root / "src" / "ui" / "static" / "js" / "strategy-config.js").read_text(
+        encoding="utf-8"
+    )
+    load_source = _javascript_function_source(
+        source,
+        "async function loadStrategyConfig(strategyId)",
+        "function updateStrategyInfo(config)",
+    )
+
+    assert "window.currentStrategyConfigId = null" in source
+    assert "function isCurrentStrategyConfigReady()" in source
+    assert "window.currentStrategyConfigId === window.currentStrategyId" in source
+    readiness_source = _javascript_function_source(
+        source,
+        "function isCurrentStrategyConfigReady()",
+        "function clearStrategyGeneratedState()",
+    )
+    assert "config.id" not in readiness_source
+    assert "const requestedStrategyId = String(strategyId || '').trim()" in load_source
+    assert "window.currentStrategyConfigId = requestedStrategyId" in load_source
+    provisional_config = load_source.index("window.currentStrategyConfig = config")
+    optimizer_render = load_source.index("generateOptimizerForm(config)")
+    accepted_identity = load_source.index("window.currentStrategyConfigId = requestedStrategyId")
+    assert provisional_config < optimizer_render < accepted_identity
+    assert "window.currentStrategyConfig === provisionalConfig" in load_source
+    assert "clearStrategyGeneratedState()" in load_source
+
+
+def test_strategy_readiness_reset_targets_generated_fields_and_preview_only():
+    repo_root = Path(__file__).parent.parent
+    source = (repo_root / "src" / "ui" / "static" / "js" / "strategy-config.js").read_text(
+        encoding="utf-8"
+    )
+    reset_source = _javascript_function_source(
+        source,
+        "function clearStrategyGeneratedState()",
+        "function shouldRenderDynamicBacktestParam",
+    )
+
+    for element_id in (
+        "backtestParamsContent",
+        "optimizerParamsContainer",
+        "strategyInfo",
+        "strategyName",
+        "strategyVersion",
+        "strategyDescription",
+        "strategyParamCount",
+        "gridEnabledModes",
+        "gridV2ManualAllocation",
+    ):
+        assert element_id in reset_source
+    assert "delete gridModesContainer.dataset.profileKey" in reset_source
+    assert "resetGridPreviewState()" in reset_source
+    for preserved_id in (
+        "dateFilter",
+        "startDate",
+        "startTime",
+        "endDate",
+        "endTime",
+        "warmupBars",
+        "csvDirectory",
+        "dbTarget",
+        "gridBudget",
+        "gridSeed",
+        "gridV2PlanningPolicy",
+        "gridAllocAuto",
+        "gridFastPrimaryObjective",
+        "wfIsPeriodDays",
+    ):
+        assert f"getElementById('{preserved_id}')" not in reset_source
+
+
+def test_optimizer_mode_sync_waits_for_strategy_config_before_grid_availability_check():
+    repo_root = Path(__file__).parent.parent
+    source = (repo_root / "src" / "ui" / "static" / "js" / "ui-handlers.js").read_text(
+        encoding="utf-8"
+    )
+    sync_source = _javascript_function_source(
+        source,
+        "function syncOptimizerModeUI()",
+        "async function submitOptimization",
+    )
+
+    assert sync_source.index("if (!window.currentStrategyConfig) return;") < sync_source.index(
+        "const gridMeta = getEnabledGridMetadata()"
+    )
+
+
+def test_form_action_readiness_guards_precede_request_building_and_wfa_dispatch():
+    repo_root = Path(__file__).parent.parent
+    ui_source = (repo_root / "src" / "ui" / "static" / "js" / "ui-handlers.js").read_text(
+        encoding="utf-8"
+    )
+    queue_source = (repo_root / "src" / "ui" / "static" / "js" / "queue.js").read_text(
+        encoding="utf-8"
+    )
+
+    backtest = _javascript_function_source(
+        ui_source,
+        "async function executeBacktestRun(",
+        "async function runBacktest(event)",
+    )
+    preview = _javascript_function_source(
+        ui_source,
+        "async function updateGridPreview()",
+        "function syncGridParameterOptions()",
+    )
+    submit = ui_source[ui_source.index("async function submitOptimization(event)") :]
+    collect = _javascript_function_source(
+        queue_source,
+        "function collectQueueItem()",
+        "function addToQueue(item)",
+    )
+    walkforward = _javascript_function_source(
+        ui_source,
+        "async function runWalkForward(",
+        "async function triggerDownloadFromResponse(",
+    )
+
+    assert backtest.index("if (!isCurrentStrategyConfigReady())") < backtest.index(
+        "runBacktestRequest(formData)"
+    )
+    assert preview.index("if (!isCurrentStrategyConfigReady()) return") < preview.index(
+        "gatherFormState()"
+    )
+    assert collect.index("if (!isCurrentStrategyConfigReady())") < collect.index(
+        "buildCurrentOptimizerConfig"
+    )
+    assert submit.index("await runQueue()") < submit.index("if (!isCurrentStrategyConfigReady())")
+    assert submit.index("if (!isCurrentStrategyConfigReady())") < submit.index("if (wfEnabled)")
+    assert "isCurrentStrategyConfigReady" not in walkforward
+    assert "STRATEGY_CONFIG_NOT_READY_MESSAGE" in backtest
+    assert "STRATEGY_CONFIG_NOT_READY_MESSAGE" in submit
+    assert "STRATEGY_CONFIG_NOT_READY_MESSAGE" in collect
+
+
+def test_queue_form_load_requires_readiness_but_persisted_queue_execution_does_not():
+    repo_root = Path(__file__).parent.parent
+    queue_source = (repo_root / "src" / "ui" / "static" / "js" / "queue.js").read_text(
+        encoding="utf-8"
+    )
+    ensure = _javascript_function_source(
+        queue_source,
+        "async function ensureQueueItemStrategyLoaded(item)",
+        "async function loadQueueItemIntoForm(",
+    )
+    run_queue = queue_source[queue_source.index("async function runQueue()") :]
+
+    assert "const loaded = await loadStrategyConfig(strategyId)" in ensure
+    assert "!loaded || !isCurrentStrategyConfigReady()" in ensure
+    assert "isCurrentStrategyConfigReady" not in run_queue
+
+
+def test_strategy_config_api_reuses_shared_error_reader_without_magic_use_count():
+    repo_root = Path(__file__).parent.parent
+    api_source = (repo_root / "src" / "ui" / "static" / "js" / "api.js").read_text(
+        encoding="utf-8"
+    )
+    api_test_source = (repo_root / "tests" / "js" / "test_api_error_message.js").read_text(
+        encoding="utf-8"
+    )
+    fetch_config = _javascript_function_source(
+        api_source,
+        "async function fetchStrategyConfig(strategyId)",
+        "async function readApiErrorMessage(",
+    )
+
+    assert "await readApiErrorMessage(" in fetch_config
+    assert "Server returned ${response.status}" not in fetch_config
+    assert "helperUses.length" not in api_test_source
+    for name in (
+        "fetchStrategyConfig",
+        "runBacktestRequest",
+        "downloadBacktestTradesRequest",
+        "runOptimizationRequest",
+    ):
+        assert name in api_test_source
+
+
 @contextmanager
 def _temporary_active_db(label: str):
     previous_db = get_active_db_name()

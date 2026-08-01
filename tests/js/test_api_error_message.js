@@ -31,7 +31,7 @@ const context = {
 };
 vm.createContext(context);
 vm.runInContext(
-  `${source}\nthis.__apiTest = {readApiErrorMessage, runBacktestRequest, downloadBacktestTradesRequest, runOptimizationRequest};`,
+  `${source}\nthis.__apiTest = {fetchStrategyConfig, readApiErrorMessage, runBacktestRequest, downloadBacktestTradesRequest, runOptimizationRequest};`,
   context,
 );
 
@@ -96,8 +96,49 @@ async function main() {
     assert.equal(response.reads, 1);
   }
 
-  const helperUses = source.match(/await readApiErrorMessage\(/g) || [];
-  assert.equal(helperUses.length, 3);
+  for (const body of [
+    JSON.stringify({error: 'Profile is invalid.', diagnostics: []}),
+    'Unknown strategy.',
+    '',
+  ]) {
+    const response = textResponse(body);
+    response.status = body ? 422 : 404;
+    response.statusText = 'Failure';
+    context.fetch = async () => response;
+    await assert.rejects(
+      context.__apiTest.fetchStrategyConfig('broken'),
+      (error) => error.message === (
+        body === JSON.stringify({error: 'Profile is invalid.', diagnostics: []})
+          ? 'Profile is invalid.'
+          : body || 'Failed to load strategy configuration.'
+      ),
+    );
+    assert.equal(response.reads, 1);
+  }
+
+  const successfulConfig = {name: 'Ready', parameters: {period: {type: 'int'}}};
+  context.fetch = async () => ({
+    ok: true,
+    async json() { return successfulConfig; },
+  });
+  assert.equal(
+    await context.__apiTest.fetchStrategyConfig('ready'),
+    successfulConfig,
+  );
+
+  const intendedClients = [
+    'fetchStrategyConfig',
+    'runBacktestRequest',
+    'downloadBacktestTradesRequest',
+    'runOptimizationRequest',
+  ];
+  intendedClients.forEach((name) => {
+    const start = source.indexOf(`async function ${name}(`);
+    assert.notEqual(start, -1, `${name} must exist`);
+    const nextFunction = source.indexOf('\nasync function ', start + 1);
+    const functionSource = source.slice(start, nextFunction === -1 ? source.length : nextFunction);
+    assert.match(functionSource, /await readApiErrorMessage\(/, `${name} must use the shared reader`);
+  });
 
   const resultsControllerSource = fs.readFileSync(resultsControllerPath, 'utf8');
   assert.match(

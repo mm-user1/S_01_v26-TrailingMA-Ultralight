@@ -14,7 +14,10 @@ async function fetchStrategies() {
 async function fetchStrategyConfig(strategyId) {
   const response = await fetch(`/api/strategy/${strategyId}/config`);
   if (!response.ok) {
-    throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+    throw new Error(await readApiErrorMessage(
+      response,
+      'Failed to load strategy configuration.'
+    ));
   }
   const config = await response.json();
 
