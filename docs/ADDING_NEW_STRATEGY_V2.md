@@ -219,10 +219,11 @@ strategy aliases and require one non-empty value; equal aliases agree, empty
 aliases do not override a real value, and distinct non-empty aliases fail with
 `V2_CONFLICTING_STRATEGY_ID`. Missing and unknown identities use
 `V2_MISSING_STRATEGY_ID` and `V2_UNKNOWN_STRATEGY_ID`. There is no first-strategy
-or S03 fallback. Walk-Forward uses the same strict identity rule, while its
-window runtime orchestration remains a later integration phase. A known V2
-profile with fatal declarations is nevertheless rejected before WFA dataset,
-window, worker, optimizer, state, or storage work.
+or S03 fallback. Walk-Forward uses the same strict identity rule and canonical
+V2 runtime contract. A known V2 profile with fatal declarations is rejected
+before WFA dataset, window, worker, optimizer, state, or storage work; valid V2
+windows receive canonical UTC execution boundaries while V1 representations
+remain unchanged.
 
 At these V2 user boundaries, one server adapter calls the core runtime
 normalizer once. Its complete mapping always contains all four runtime fields,

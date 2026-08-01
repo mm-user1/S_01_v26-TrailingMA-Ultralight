@@ -9,8 +9,9 @@ checks, prefix/window-start anti-repainting checks, and an opt-in
 TradingView-compatible outward tick-rounding mode for computed order levels.
 Phase 2 adds generic Grid V2 planning. Phase 2.5 integrates Grid V2 into the
 normal Grid dispatcher/storage workflow and adds a generic compiled batch
-evaluator for supported V2 execution profiles. WFA/Scout integration remains
-deferred. Phase 2.5.1 tightens dispatcher/storage behavior, runtime Grid
+evaluator for supported V2 execution profiles. The later TZ61-TZ64 sequence
+completes ordinary V2 WFA runtime integration; Scout WFA remains deferred.
+Phase 2.5.1 tightens dispatcher/storage behavior, runtime Grid
 settings, and compiled batch determinism without changing V1 runtime paths.
 Phase 2.6.2 changes the compiled Grid V2 plumbing to a generic stacked batch
 path while preserving the reference runner and grouped compiled path as
@@ -232,9 +233,10 @@ version:
 - structured server diagnostics remain authoritative JSON. The three existing
   Start-page clients that previously displayed `response.text()` now extract a
   concise non-empty `error` string while preserving legacy text failures;
-- WFA still defers date/Warmup/reserved-axis runtime integration, but known
-  fatal V2 profile declarations now fail before dataset, window, run-state,
-  worker, optimizer, or storage work;
+- ordinary WFA uses the canonical V2 date/Warmup runtime contract, validates
+  known fatal profile declarations before dataset, window, run-state, worker,
+  optimizer, or storage work, and applies canonical UTC boundaries to each V2
+  execution window while preserving V1 representations;
 - Python `DISPLAY_PARAM_ID_IGNORED_KEYS` and JavaScript
   `PARAM_ID_IGNORED_KEYS` exclude all four runtime fields. Contrary to the
   historical TZ64A implementation-report hedge, runtime representation does
