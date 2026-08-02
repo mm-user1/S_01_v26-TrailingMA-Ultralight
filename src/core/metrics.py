@@ -216,23 +216,37 @@ def _calculate_sharpe_ratio_value(
     monthly_returns: List[float],
     risk_free_rate: float = 0.02,
 ) -> Optional[float]:
-    """Calculate annualized Sharpe Ratio from monthly returns."""
+    """Calculate Merlin's monthly-return Sharpe Ratio."""
     if len(monthly_returns) < 2:
         return None
 
-    monthly_array = np.array(monthly_returns, dtype=float)
-    if monthly_array.size < 2:
+    count, avg_return, m2 = _welford_mean_m2(monthly_returns)
+    if count < 2 or not math.isfinite(avg_return) or not math.isfinite(m2):
+        return None
+    variance = m2 / count
+    if variance == 0.0:
         return None
 
-    avg_return = float(np.mean(monthly_array))
-    sd_return = float(np.std(monthly_array, ddof=0))
-
-    if sd_return == 0:
-        return None
-
+    sd_return = math.sqrt(variance)
     rfr_monthly = (risk_free_rate * 100.0) / 12.0
     sharpe = (avg_return - rfr_monthly) / sd_return
-    return sharpe
+    return sharpe if math.isfinite(sharpe) else None
+
+
+def _welford_mean_m2(values: Any) -> tuple[int, float, float]:
+    """Return count, mean, and M2 without sum-of-squares cancellation."""
+    count = 0
+    mean = 0.0
+    m2 = 0.0
+    for raw_value in values:
+        value = float(raw_value)
+        if not math.isfinite(value):
+            return count, math.nan, math.nan
+        count += 1
+        delta = value - mean
+        mean += delta / count
+        m2 += delta * (value - mean)
+    return count, mean, m2
 
 
 def _calculate_sortino_ratio_value(
@@ -323,6 +337,9 @@ def calculate_higher_moments_from_monthly_returns(
     if len(monthly_returns) < 3:
         return None, None
 
+    # TZ-07 stabilizes canonical Sharpe with Welford. DSR's existing raw
+    # third/fourth-moment policy is intentionally preserved rather than
+    # broadening this change into a redesign of DSR statistics.
     values = np.array(monthly_returns, dtype=float)
     if values.size < 3:
         return None, None
@@ -354,18 +371,16 @@ def _calculate_sqn_value(trades: List[TradeRecord]) -> Optional[float]:
     if len(trades) < 30:
         return None
 
-    trade_pnl = np.array([t.net_pnl for t in trades], dtype=float)
-    if trade_pnl.size < 30:
+    count, mean_pnl, m2 = _welford_mean_m2(t.net_pnl for t in trades)
+    if count < 30 or not math.isfinite(mean_pnl) or not math.isfinite(m2):
         return None
 
-    mean_pnl = float(np.mean(trade_pnl))
-    std_pnl = float(np.std(trade_pnl, ddof=1))
-
+    std_pnl = math.sqrt(m2 / (count - 1))
     if std_pnl == 0.0 or std_pnl < 1e-10:
         return None
 
-    sqn = math.sqrt(trade_pnl.size) * mean_pnl / std_pnl
-    return sqn
+    sqn = math.sqrt(count) * mean_pnl / std_pnl
+    return sqn if math.isfinite(sqn) else None
 
 
 # ============================================================================

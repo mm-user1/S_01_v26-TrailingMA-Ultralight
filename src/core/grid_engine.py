@@ -98,6 +98,28 @@ class GridSelectionConfig:
         return self.slow_primary_objective if self.slow_refinement_enabled else self.fast_primary_objective
 
 
+@dataclass(frozen=True)
+class FastMetricRequest:
+    """Execution-only V1 Fast metric work resolved from Grid selection."""
+
+    compute_sharpe: bool = False
+    compute_sqn: bool = False
+    compute_dsr_higher_moments: bool = False
+
+
+def resolve_fast_metric_request(
+    selection: GridSelectionConfig,
+    *,
+    needs_dsr: bool,
+) -> FastMetricRequest:
+    requested = set(selection.fast_objectives)
+    return FastMetricRequest(
+        compute_sharpe=needs_dsr or "sharpe_ratio" in requested,
+        compute_sqn="sqn" in requested,
+        compute_dsr_higher_moments=needs_dsr,
+    )
+
+
 @dataclass
 class GridSettings:
     requested_budget: int = 200_000
@@ -119,6 +141,10 @@ class GridSettings:
             "winning_trades_abs": 0.0,
             "losing_trades_abs": 0.0,
             "max_consecutive_losses_abs": 0.0,
+            "sharpe_ratio_abs": 1e-12,
+            "sharpe_ratio_rel": 1e-9,
+            "sqn_abs": 1e-12,
+            "sqn_rel": 1e-9,
         }
     )
 
@@ -2057,6 +2083,10 @@ def run_grid_optimization(
     final_objectives = selection_config.final_objectives
     final_primary_objective = selection_config.final_primary_objective
     needs_dsr = bool(getattr(config, "grid_needs_dsr", False))
+    fast_metric_request = resolve_fast_metric_request(
+        selection_config,
+        needs_dsr=needs_dsr,
+    )
 
     started = time.time()
     timings: Dict[str, float] = {}
@@ -2084,7 +2114,9 @@ def run_grid_optimization(
         fast_data,
         candidate_set.candidates,
         n_workers=int(getattr(config, "worker_processes", 1) or 1),
-        needs_dsr=needs_dsr,
+        needs_dsr=fast_metric_request.compute_dsr_higher_moments,
+        compute_sharpe=fast_metric_request.compute_sharpe,
+        compute_sqn=fast_metric_request.compute_sqn,
     )
     timings["fast_evaluation_seconds"] = time.time() - eval_started
 

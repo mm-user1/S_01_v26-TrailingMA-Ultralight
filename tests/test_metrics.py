@@ -11,6 +11,7 @@ import math
 import json
 import sys
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -27,7 +28,9 @@ from core.metrics import (  # noqa: E402
     calculate_basic,
     calculate_advanced,
     _calculate_r2_consistency,
+    _calculate_sharpe_ratio_value,
     _calculate_sqn_value,
+    _welford_mean_m2,
 )
 from strategies.s01_trailing_ma.strategy import S01Params, S01TrailingMA  # noqa: E402
 
@@ -298,6 +301,60 @@ class TestMetricsEdgeCases:
         sqn = _calculate_sqn_value(trades)
         assert sqn is not None
         assert sqn < 0
+
+
+class TestStableSharpeAndSqn:
+    def test_sharpe_welford_matches_population_oracle(self):
+        rng = np.random.default_rng(20260803)
+        monthly_returns = rng.normal(1.5, 3.0, 120).tolist()
+        expected = (
+            float(np.mean(monthly_returns)) - (0.02 * 100.0) / 12.0
+        ) / float(np.std(monthly_returns, ddof=0))
+
+        assert _calculate_sharpe_ratio_value(monthly_returns) == pytest.approx(
+            expected,
+            rel=1e-14,
+            abs=1e-14,
+        )
+
+    def test_sharpe_exact_constant_is_undefined(self):
+        assert _calculate_sharpe_ratio_value([1.25] * 24) is None
+
+    def test_sharpe_large_mean_tiny_variance_remains_finite(self):
+        monthly_returns = [1_000_000_000.0 + offset for offset in (0.0, 1e-5, -1e-5, 2e-5)]
+        count, mean, m2 = _welford_mean_m2(monthly_returns)
+        value = _calculate_sharpe_ratio_value(monthly_returns)
+
+        assert count == 4
+        assert mean > 0.0
+        assert m2 > 0.0
+        assert value is not None and math.isfinite(value)
+
+    def test_sharpe_two_month_minimum_and_negative_value(self):
+        assert _calculate_sharpe_ratio_value([1.0]) is None
+        assert _calculate_sharpe_ratio_value([-2.0, -1.0]) < 0.0
+
+    def test_sharpe_non_finite_input_is_undefined(self):
+        assert _calculate_sharpe_ratio_value([1.0, math.nan]) is None
+
+    def test_sqn_uses_exact_net_pnl_including_commissions(self):
+        net_pnls = [10.0 + index - (0.25 + 0.5) for index in range(30)]
+        trades = [
+            TradeRecord(entry_price=100.0, exit_price=110.0, size=1.0, net_pnl=value)
+            for value in net_pnls
+        ]
+        expected = math.sqrt(30) * float(np.mean(net_pnls)) / float(np.std(net_pnls, ddof=1))
+
+        assert _calculate_sqn_value(trades) == pytest.approx(expected, rel=1e-14, abs=1e-14)
+
+    def test_sqn_tiny_variance_and_non_finite_are_undefined(self):
+        tiny_variance = [TradeRecord(net_pnl=1.0 + (5e-11 if index % 2 else -5e-11)) for index in range(30)]
+        non_finite = [TradeRecord(net_pnl=float(index)) for index in range(29)] + [
+            TradeRecord(net_pnl=math.nan)
+        ]
+
+        assert _calculate_sqn_value(tiny_variance) is None
+        assert _calculate_sqn_value(non_finite) is None
 
 
 class TestR2Consistency:

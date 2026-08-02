@@ -7,6 +7,7 @@ import pytest
 
 from core.grid_engine import (
     GridSettings,
+    FastMetricRequest,
     allocate_mode_budgets,
     apply_fast_grid_dsr,
     build_grid_dsr_results,
@@ -20,6 +21,7 @@ from core.grid_engine import (
     rank_grid_candidates_by_dsr,
     rank_grid_results,
     resolve_grid_selection_config,
+    resolve_fast_metric_request,
     run_grid_optimization,
     validate_grid_config,
 )
@@ -658,8 +660,9 @@ def test_grid_selection_config_rejects_advanced_fast_and_composite_objectives(mo
         lambda strategy_id: SimpleNamespace(NUMBA_AVAILABLE=True, NUMBA_IMPORT_ERROR=None),
     )
 
-    with pytest.raises(ValueError, match="fast screening"):
-        validate_grid_config(_grid_config(grid_fast_objectives=["sharpe_ratio"]))
+    for objective in ("sharpe_ratio", "sqn"):
+        with pytest.raises(ValueError, match="fast screening"):
+            validate_grid_config(_grid_config(grid_fast_objectives=[objective]))
 
     with pytest.raises(ValueError, match="Composite Score"):
         validate_grid_config(_grid_config(grid_fast_objectives=["composite_score"]))
@@ -677,6 +680,53 @@ def test_grid_selection_config_rejects_advanced_fast_and_composite_objectives(mo
     assert selection.fast_primary_objective == "max_drawdown_pct"
     assert selection.final_objectives == ["sharpe_ratio", "ulcer_index"]
     validate_grid_config(config)
+
+
+@pytest.mark.parametrize("objective", ["sharpe_ratio", "sqn"])
+def test_internal_fast_metric_ranking_excludes_undefined_and_errors_when_all_undefined(objective):
+    undefined = _synthetic_grid_result(1, net_profit=10.0)
+    finite = _synthetic_grid_result(2, net_profit=5.0)
+    setattr(undefined, objective, None)
+    setattr(finite, objective, 1.25)
+
+    assert rank_grid_results(
+        [undefined, finite],
+        objectives=[objective],
+        primary_objective=None,
+        constraints=[],
+        stage_label="Internal Fast metric",
+    ) == [finite]
+    with pytest.raises(
+        ValueError,
+        match=f"no candidates with usable objective values for: {objective}",
+    ):
+        rank_grid_results(
+            [undefined],
+            objectives=[objective],
+            primary_objective=None,
+            constraints=[],
+            stage_label="Internal Fast metric",
+        )
+
+
+def test_fast_metric_request_separates_sharpe_and_sqn_from_dsr():
+    selection = resolve_grid_selection_config(
+        _grid_config(grid_fast_objectives=["sharpe_ratio", "sqn"])
+    )
+
+    assert resolve_fast_metric_request(selection, needs_dsr=False) == FastMetricRequest(
+        compute_sharpe=True,
+        compute_sqn=True,
+        compute_dsr_higher_moments=False,
+    )
+    dsr_selection = resolve_grid_selection_config(
+        _grid_config(grid_fast_objectives=["net_profit_pct"])
+    )
+    assert resolve_fast_metric_request(dsr_selection, needs_dsr=True) == FastMetricRequest(
+        compute_sharpe=True,
+        compute_sqn=False,
+        compute_dsr_higher_moments=True,
+    )
 
 
 def test_grid_slow_refinement_reranks_only_grid_top_candidates(monkeypatch):
@@ -712,7 +762,15 @@ def test_grid_slow_refinement_reranks_only_grid_top_candidates(monkeypatch):
             return SimpleNamespace(ma_cache_build_seconds=0.0, ma_cache_entries=0, ma_cache_estimated_mb=0.0)
 
         @staticmethod
-        def evaluate_candidates(data, candidates, *, n_workers, needs_dsr):  # noqa: ARG004
+        def evaluate_candidates(
+            data,
+            candidates,
+            *,
+            n_workers,
+            needs_dsr,
+            compute_sharpe,
+            compute_sqn,
+        ):  # noqa: ARG004
             return list(fast_results)
 
         @staticmethod
@@ -814,7 +872,15 @@ def test_fast_only_grid_preserves_pareto_metadata_after_slow_validation(monkeypa
             return SimpleNamespace(ma_cache_build_seconds=0.0, ma_cache_entries=0, ma_cache_estimated_mb=0.0)
 
         @staticmethod
-        def evaluate_candidates(data, candidates, *, n_workers, needs_dsr):  # noqa: ARG004
+        def evaluate_candidates(
+            data,
+            candidates,
+            *,
+            n_workers,
+            needs_dsr,
+            compute_sharpe,
+            compute_sqn,
+        ):  # noqa: ARG004
             return list(fast_results)
 
         @staticmethod

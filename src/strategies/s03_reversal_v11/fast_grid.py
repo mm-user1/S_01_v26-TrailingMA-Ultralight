@@ -810,11 +810,13 @@ def _s03_fast_loop_impl(
     initial_capital: float,
     commission_pct: float,
     compute_dsr: bool,
+    compute_sharpe: bool,
+    compute_sqn: bool,
     risk_free_rate: float,
-) -> Tuple[float, float, int, int, int, float, float, float, float, float, float, float, int, float, int, float, float]:
+) -> Tuple[float, float, int, int, int, float, float, float, float, float, float, float, int, float, int, float, float, float]:
     n = close_values.shape[0]
     if n == 0:
-        return (0.0, 0.0, 0, 0, 0, 0.0, 0.0, math.nan, 0.0, 0.0, 0.0, 0.0, 0, math.nan, 0, math.nan, math.nan)
+        return (0.0, 0.0, 0, 0, 0, 0.0, 0.0, math.nan, 0.0, 0.0, 0.0, 0.0, 0, math.nan, 0, math.nan, math.nan, math.nan)
 
     ma_multiplier = 1.0 + ma_offset / 100.0
     up_multiplier = 1.0 + t_band_long_pct / 100.0
@@ -852,10 +854,14 @@ def _s03_fast_loop_impl(
     month_start_equity = 0.0
     last_equity = initial_capital
     monthly_count = 0
-    monthly_sum = 0.0
+    monthly_mean = 0.0
+    monthly_m2 = 0.0
     monthly_sumsq = 0.0
     monthly_sum3 = 0.0
     monthly_sum4 = 0.0
+    sqn_count = 0
+    sqn_mean = 0.0
+    sqn_m2 = 0.0
 
     for i in range(n):
         close_val = close_values[i]
@@ -937,6 +943,11 @@ def _s03_fast_loop_impl(
                 net_pnl = gross_pnl - exit_commission - entry_commission
                 balance += net_pnl
                 total_trades += 1
+                if compute_sqn:
+                    sqn_count += 1
+                    delta = net_pnl - sqn_mean
+                    sqn_mean += delta / sqn_count
+                    sqn_m2 += delta * (net_pnl - sqn_mean)
                 if net_pnl > 0.0:
                     winning_trades += 1
                     gross_profit += net_pnl
@@ -965,6 +976,11 @@ def _s03_fast_loop_impl(
                     net_pnl = gross_pnl - exit_commission - entry_commission
                     balance += net_pnl
                     total_trades += 1
+                    if compute_sqn:
+                        sqn_count += 1
+                        delta = net_pnl - sqn_mean
+                        sqn_mean += delta / sqn_count
+                        sqn_m2 += delta * (net_pnl - sqn_mean)
                     if net_pnl > 0.0:
                         winning_trades += 1
                         gross_profit += net_pnl
@@ -990,6 +1006,11 @@ def _s03_fast_loop_impl(
                     net_pnl = gross_pnl - exit_commission - entry_commission
                     balance += net_pnl
                     total_trades += 1
+                    if compute_sqn:
+                        sqn_count += 1
+                        delta = net_pnl - sqn_mean
+                        sqn_mean += delta / sqn_count
+                        sqn_m2 += delta * (net_pnl - sqn_mean)
                     if net_pnl > 0.0:
                         winning_trades += 1
                         gross_profit += net_pnl
@@ -1063,6 +1084,11 @@ def _s03_fast_loop_impl(
             net_pnl = gross_pnl - exit_commission - entry_commission
             balance += net_pnl
             total_trades += 1
+            if compute_sqn:
+                sqn_count += 1
+                delta = net_pnl - sqn_mean
+                sqn_mean += delta / sqn_count
+                sqn_m2 += delta * (net_pnl - sqn_mean)
             if net_pnl > 0.0:
                 winning_trades += 1
                 gross_profit += net_pnl
@@ -1090,7 +1116,7 @@ def _s03_fast_loop_impl(
         equity_value = balance + unrealized
         last_equity = equity_value
 
-        if compute_dsr:
+        if compute_sharpe:
             month_key = month_ids[i]
             if current_month < 0:
                 current_month = month_key
@@ -1099,10 +1125,13 @@ def _s03_fast_loop_impl(
                 if month_start_equity > 0.0:
                     monthly_return = ((equity_value / month_start_equity) - 1.0) * 100.0
                     monthly_count += 1
-                    monthly_sum += monthly_return
-                    monthly_sumsq += monthly_return * monthly_return
-                    monthly_sum3 += monthly_return * monthly_return * monthly_return
-                    monthly_sum4 += monthly_return * monthly_return * monthly_return * monthly_return
+                    delta = monthly_return - monthly_mean
+                    monthly_mean += delta / monthly_count
+                    monthly_m2 += delta * (monthly_return - monthly_mean)
+                    if compute_dsr:
+                        monthly_sumsq += monthly_return * monthly_return
+                        monthly_sum3 += monthly_return * monthly_return * monthly_return
+                        monthly_sum4 += monthly_return * monthly_return * monthly_return * monthly_return
                 current_month = month_key
                 month_start_equity = equity_value
 
@@ -1148,26 +1177,30 @@ def _s03_fast_loop_impl(
         romad = 0.0
 
     sharpe_ratio = math.nan
+    sqn = math.nan
     dsr_skewness = math.nan
     dsr_kurtosis = math.nan
-    if compute_dsr and total_trades > 0:
+    if compute_sharpe and total_trades > 0:
         if month_start_equity > 0.0:
             monthly_return = ((last_equity / month_start_equity) - 1.0) * 100.0
             monthly_count += 1
-            monthly_sum += monthly_return
-            monthly_sumsq += monthly_return * monthly_return
-            monthly_sum3 += monthly_return * monthly_return * monthly_return
-            monthly_sum4 += monthly_return * monthly_return * monthly_return * monthly_return
+            delta = monthly_return - monthly_mean
+            monthly_mean += delta / monthly_count
+            monthly_m2 += delta * (monthly_return - monthly_mean)
+            if compute_dsr:
+                monthly_sumsq += monthly_return * monthly_return
+                monthly_sum3 += monthly_return * monthly_return * monthly_return
+                monthly_sum4 += monthly_return * monthly_return * monthly_return * monthly_return
         if monthly_count >= 2:
-            avg_return = monthly_sum / monthly_count
-            variance = (monthly_sumsq / monthly_count) - (avg_return * avg_return)
-            if variance < 0.0 and variance > -1e-12:
-                variance = 0.0
+            avg_return = monthly_mean
+            variance = monthly_m2 / monthly_count
             if variance > 0.0:
                 sd_return = math.sqrt(variance)
                 rfr_monthly = (risk_free_rate * 100.0) / 12.0
                 sharpe_ratio = (avg_return - rfr_monthly) / sd_return
-                if monthly_count >= 3:
+                if compute_dsr and monthly_count >= 3:
+                    # DSR keeps its established raw higher moments; only the
+                    # Sharpe variance is stabilized with Welford in TZ-07.
                     raw_m2 = monthly_sumsq / monthly_count
                     raw_m3 = monthly_sum3 / monthly_count
                     raw_m4 = monthly_sum4 / monthly_count
@@ -1180,6 +1213,11 @@ def _s03_fast_loop_impl(
                     )
                     dsr_skewness = central_m3 / (sd_return * sd_return * sd_return)
                     dsr_kurtosis = central_m4 / (variance * variance)
+
+    if compute_sqn and sqn_count >= 30:
+        sqn_std = math.sqrt(sqn_m2 / (sqn_count - 1))
+        if sqn_std >= 1e-10:
+            sqn = math.sqrt(sqn_count) * sqn_mean / sqn_std
 
     return (
         net_profit_pct,
@@ -1199,6 +1237,7 @@ def _s03_fast_loop_impl(
         monthly_count,
         dsr_skewness,
         dsr_kurtosis,
+        sqn,
     )
 
 
@@ -1232,6 +1271,8 @@ def _s03_fast_batch_loop_impl(
     initial_capitals: np.ndarray,
     commission_pcts: np.ndarray,
     compute_dsr: bool,
+    compute_sharpe: bool,
+    compute_sqn: bool,
     risk_free_rate: float,
     outputs: np.ndarray,
 ) -> None:
@@ -1254,6 +1295,7 @@ def _s03_fast_batch_loop_impl(
             monthly_count,
             dsr_skewness,
             dsr_kurtosis,
+            sqn,
         ) = _S03_FAST_LOOP(
             close_values,
             open_values,
@@ -1277,6 +1319,8 @@ def _s03_fast_batch_loop_impl(
             initial_capitals[idx],
             commission_pcts[idx],
             compute_dsr,
+            compute_sharpe,
+            compute_sqn,
             risk_free_rate,
         )
         outputs[idx, 0] = net_profit_pct
@@ -1296,6 +1340,7 @@ def _s03_fast_batch_loop_impl(
         outputs[idx, 14] = monthly_count
         outputs[idx, 15] = dsr_skewness
         outputs[idx, 16] = dsr_kurtosis
+        outputs[idx, 17] = sqn
 
 
 if NUMBA_AVAILABLE:
@@ -1309,6 +1354,8 @@ def _result_from_values(
     values: Sequence[Any],
     *,
     needs_dsr: bool = False,
+    compute_sharpe: bool = False,
+    compute_sqn: bool = False,
 ) -> OptimizationResult:
     (
         net_profit_pct,
@@ -1328,6 +1375,7 @@ def _result_from_values(
         dsr_track_length,
         dsr_skewness,
         dsr_kurtosis,
+        sqn,
     ) = values
     result = OptimizationResult(
         params=dict(candidate.params),
@@ -1344,6 +1392,7 @@ def _result_from_values(
         max_consecutive_losses=int(max_consecutive_losses),
         romad=float(romad),
         sharpe_ratio=None if math.isnan(float(sharpe_ratio)) else float(sharpe_ratio),
+        sqn=None if math.isnan(float(sqn)) else float(sqn),
         profit_factor=None if math.isnan(float(profit_factor)) else float(profit_factor),
         optuna_trial_number=int(candidate.candidate_id),
     )
@@ -1353,6 +1402,8 @@ def _result_from_values(
     setattr(result, "grid_mode_name", candidate.mode)
     setattr(result, "grid_generation_mode", candidate.generation_mode)
     setattr(result, "diversity_group", candidate.diversity_group)
+    setattr(result, "_fast_compute_sharpe", bool(compute_sharpe or needs_dsr))
+    setattr(result, "_fast_compute_sqn", bool(compute_sqn))
     if needs_dsr:
         setattr(result, "dsr_track_length", int(dsr_track_length))
         setattr(result, "dsr_skewness", None if math.isnan(float(dsr_skewness)) else float(dsr_skewness))
@@ -1361,7 +1412,14 @@ def _result_from_values(
     return result
 
 
-def _evaluate_one(data: FastGridData, candidate: GridCandidate, *, needs_dsr: bool = False) -> OptimizationResult:
+def _evaluate_one(
+    data: FastGridData,
+    candidate: GridCandidate,
+    *,
+    needs_dsr: bool = False,
+    compute_sharpe: bool = False,
+    compute_sqn: bool = False,
+) -> OptimizationResult:
     params = candidate.params
     _validate_emergency_params(params)
     ma_key = (_clean_ma_type(params.get("maType3")), int(params.get("maLength3")))
@@ -1391,9 +1449,17 @@ def _evaluate_one(data: FastGridData, candidate: GridCandidate, *, needs_dsr: bo
         float(params.get("initialCapital", 100.0)),
         float(params.get("commissionPct", 0.05)),
         bool(needs_dsr),
+        bool(compute_sharpe or needs_dsr),
+        bool(compute_sqn),
         0.02,
     )
-    return _result_from_values(candidate, values, needs_dsr=needs_dsr)
+    return _result_from_values(
+        candidate,
+        values,
+        needs_dsr=needs_dsr,
+        compute_sharpe=compute_sharpe,
+        compute_sqn=compute_sqn,
+    )
 
 
 def evaluate_candidates(
@@ -1402,6 +1468,8 @@ def evaluate_candidates(
     *,
     n_workers: int = 1,
     needs_dsr: bool = False,
+    compute_sharpe: bool = False,
+    compute_sqn: bool = False,
 ) -> List[OptimizationResult]:
     if not candidates:
         return []
@@ -1452,7 +1520,7 @@ def evaluate_candidates(
         initial_capitals[idx] = float(params.get("initialCapital", 100.0))
         commission_pcts[idx] = float(params.get("commissionPct", 0.05))
 
-    outputs = np.empty((count, 17), dtype=np.float64)
+    outputs = np.empty((count, 18), dtype=np.float64)
     requested_threads = max(1, int(n_workers or 1))
     previous_threads = numba.get_num_threads()
     target_threads = max(1, min(requested_threads, previous_threads))
@@ -1483,6 +1551,8 @@ def evaluate_candidates(
             initial_capitals,
             commission_pcts,
             bool(needs_dsr),
+            bool(compute_sharpe or needs_dsr),
+            bool(compute_sqn),
             0.02,
             outputs,
         )
@@ -1491,7 +1561,13 @@ def evaluate_candidates(
             numba.set_num_threads(previous_threads)
 
     return [
-        _result_from_values(candidate, outputs[idx], needs_dsr=needs_dsr)
+        _result_from_values(
+            candidate,
+            outputs[idx],
+            needs_dsr=needs_dsr,
+            compute_sharpe=compute_sharpe,
+            compute_sqn=compute_sqn,
+        )
         for idx, candidate in enumerate(candidates)
     ]
 
@@ -1508,6 +1584,7 @@ def _result_metric_dict(result: OptimizationResult) -> Dict[str, Any]:
         "profit_factor": result.profit_factor,
         "romad": result.romad,
         "sharpe_ratio": result.sharpe_ratio,
+        "sqn": result.sqn,
         "max_consecutive_losses": result.max_consecutive_losses,
     }
     if hasattr(result, "dsr_track_length"):
@@ -1532,6 +1609,32 @@ def _profit_factor_matches(fast_value: Any, slow_value: Any) -> bool:
     if math.isinf(fast_float) or math.isinf(slow_float):
         return math.isinf(fast_float) and math.isinf(slow_float) and (fast_float > 0) == (slow_float > 0)
     return abs(fast_float - slow_float) <= max(1e-6, 1e-4 * max(abs(fast_float), abs(slow_float), 1.0))
+
+
+def _optional_metric_matches(
+    fast_value: Any,
+    slow_value: Any,
+    *,
+    absolute_tolerance: float,
+    relative_tolerance: float,
+) -> Tuple[bool, float]:
+    fast_undefined = fast_value is None
+    slow_undefined = slow_value is None
+    if fast_undefined or slow_undefined:
+        return fast_undefined and slow_undefined, 0.0 if fast_undefined and slow_undefined else math.inf
+    try:
+        fast_float = float(fast_value)
+        slow_float = float(slow_value)
+    except (TypeError, ValueError):
+        return False, math.inf
+    if not math.isfinite(fast_float) or not math.isfinite(slow_float):
+        return False, math.inf
+    difference = abs(fast_float - slow_float)
+    tolerance = max(
+        absolute_tolerance,
+        relative_tolerance * max(abs(fast_float), abs(slow_float)),
+    )
+    return difference <= tolerance, difference
 
 
 def _validation_diffs(
@@ -1592,6 +1695,29 @@ def _validation_diffs(
         "slow": slow.profit_factor,
         "passed": pf_passed,
     }
+    requested_metrics = []
+    if bool(getattr(fast, "_fast_compute_sharpe", False)):
+        requested_metrics.append("sharpe_ratio")
+    if bool(getattr(fast, "_fast_compute_sqn", False)):
+        requested_metrics.append("sqn")
+    for attr in requested_metrics:
+        absolute_tolerance = float(tolerances.get(f"{attr}_abs", 1e-12))
+        relative_tolerance = float(tolerances.get(f"{attr}_rel", 1e-9))
+        passed, difference = _optional_metric_matches(
+            getattr(fast, attr, None),
+            getattr(slow, attr, None),
+            absolute_tolerance=absolute_tolerance,
+            relative_tolerance=relative_tolerance,
+        )
+        ok = ok and passed
+        diffs[attr] = {
+            "fast": getattr(fast, attr, None),
+            "slow": getattr(slow, attr, None),
+            "diff": difference,
+            "absolute_tolerance": absolute_tolerance,
+            "relative_tolerance": relative_tolerance,
+            "passed": passed,
+        }
     return ok, diffs
 
 
