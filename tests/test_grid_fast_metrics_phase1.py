@@ -192,8 +192,15 @@ def test_v1_fast_sharpe_and_sqn_are_conditional_and_match_reference(prepared_cas
     assert sqn_only.sqn is not None and math.isfinite(sqn_only.sqn)
     assert both.sharpe_ratio == sharpe_only.sharpe_ratio
     assert both.sqn == sqn_only.sqn
-    assert "sharpe_ratio" in both.fast_metrics
-    assert "sqn" in both.fast_metrics
+    projected = backend._result_metric_dict(both)
+    assert projected["sharpe_ratio"] == both.sharpe_ratio
+    assert projected["sqn"] == both.sqn
+    if case_name == "s06":
+        assert not hasattr(disabled, "fast_metrics")
+        assert not hasattr(both, "fast_metrics")
+    else:
+        assert both.fast_metrics["sharpe_ratio"] == both.sharpe_ratio
+        assert both.fast_metrics["sqn"] == both.sqn
     assert not hasattr(both, "dsr_track_length") or both.dsr_track_length is None
 
     validated = backend.validate_selected_candidates(
@@ -206,6 +213,8 @@ def test_v1_fast_sharpe_and_sqn_are_conditional_and_match_reference(prepared_cas
     assert validated.validation_status == "passed"
     assert validated.validation_diffs["sharpe_ratio"]["passed"] is True
     assert validated.validation_diffs["sqn"]["passed"] is True
+    assert validated.fast_metrics["sharpe_ratio"] == both.sharpe_ratio
+    assert validated.fast_metrics["sqn"] == both.sqn
     assert both.sharpe_ratio == pytest.approx(validated.sharpe_ratio, rel=1e-9, abs=1e-12)
     assert both.sqn == pytest.approx(validated.sqn, rel=1e-9, abs=1e-12)
 

@@ -403,6 +403,12 @@ enumeration. A fast backend typically provides:
   allocation and coverage for the Start page Grid preview.
 - `generate_candidates(...)` — emit deterministic `GridCandidate` objects via
   LHS-by-mode or full enumeration.
+- `evaluate_candidates(fast_data, candidates, *, n_workers=1, needs_dsr=False,
+  compute_sharpe=False, compute_sqn=False)` — evaluate the population. The four
+  keyword arguments are part of the V1 Fast Grid backend contract and must be
+  accepted even when the backend can use their default behavior. Sharpe may be
+  requested internally for DSR, but Sharpe and SQN remain Slow Objectives until
+  a separately reviewed phase exposes them as public Fast Objectives.
 - Optional `get_backend_metadata()` and `build_allocation(...)` hooks for
   strategy-specific mode labels and generation profiles. Full-enumeration
   backends can declare that budget, seed, and allocation controls do not apply.

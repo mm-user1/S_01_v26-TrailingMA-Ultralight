@@ -224,7 +224,7 @@ def _calculate_sharpe_ratio_value(
     if count < 2 or not math.isfinite(avg_return) or not math.isfinite(m2):
         return None
     variance = m2 / count
-    if variance == 0.0:
+    if not (variance > 0.0) or not math.isfinite(variance):
         return None
 
     sd_return = math.sqrt(variance)
@@ -375,8 +375,11 @@ def _calculate_sqn_value(trades: List[TradeRecord]) -> Optional[float]:
     if count < 30 or not math.isfinite(mean_pnl) or not math.isfinite(m2):
         return None
 
-    std_pnl = math.sqrt(m2 / (count - 1))
-    if std_pnl == 0.0 or std_pnl < 1e-10:
+    variance = m2 / (count - 1)
+    if not (variance > 0.0) or not math.isfinite(variance):
+        return None
+    std_pnl = math.sqrt(variance)
+    if std_pnl < 1e-10:
         return None
 
     sqn = math.sqrt(count) * mean_pnl / std_pnl

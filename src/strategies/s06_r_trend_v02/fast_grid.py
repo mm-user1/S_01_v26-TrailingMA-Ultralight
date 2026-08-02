@@ -424,7 +424,6 @@ class FastGridResult:
     dsr_source_rank: Optional[int] = None
     fast_compute_sharpe: bool = False
     fast_compute_sqn: bool = False
-    fast_metrics: Dict[str, Any] = field(default_factory=dict)
 
 
 def build_parameter_space(config: OptimizationConfig) -> GridParameterSpace:
@@ -1530,7 +1529,6 @@ def _result_from_values(
         fast_compute_sharpe=bool(compute_sharpe or needs_dsr),
         fast_compute_sqn=bool(compute_sqn),
     )
-    result.fast_metrics = _result_metric_dict(result)
     return result
 
 
