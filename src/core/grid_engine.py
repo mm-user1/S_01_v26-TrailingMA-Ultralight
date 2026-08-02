@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import pandas as pd
 
 from .backtest_engine import align_date_bounds, load_data, prepare_dataset_with_warmup
+from .grid_pareto import compute_grid_pareto_mask
 from .optuna_engine import (
     CONSTRAINT_OPERATORS,
     OBJECTIVE_DIRECTIONS,
@@ -930,25 +931,6 @@ def _objective_values_for_result(
     return values
 
 
-def _dominates_values(candidate: Sequence[float], other: Sequence[float], directions: Sequence[str]) -> bool:
-    better_or_equal = True
-    strictly_better = False
-    for value, other_value, direction in zip(candidate, other, directions):
-        if direction == "maximize":
-            if value < other_value:
-                better_or_equal = False
-                break
-            if value > other_value:
-                strictly_better = True
-        else:
-            if value > other_value:
-                better_or_equal = False
-                break
-            if value < other_value:
-                strictly_better = True
-    return better_or_equal and strictly_better
-
-
 def _mark_grid_pareto(results: List[OptimizationResult], mo_config: MultiObjectiveConfig) -> None:
     if not mo_config.is_multi_objective():
         for result in results:
@@ -956,21 +938,16 @@ def _mark_grid_pareto(results: List[OptimizationResult], mo_config: MultiObjecti
         return
     directions = mo_config.get_directions()
     feasible = [result for result in results if result.constraints_satisfied is not False]
-    pareto_numbers = set()
-    for idx, candidate in enumerate(feasible):
-        if not candidate.objective_values:
-            continue
-        dominated = False
-        for jdx, other in enumerate(feasible):
-            if idx == jdx or not other.objective_values:
-                continue
-            if _dominates_values(other.objective_values, candidate.objective_values, directions):
-                dominated = True
-                break
-        if not dominated:
-            pareto_numbers.add(candidate.optuna_trial_number)
+    pareto_mask = compute_grid_pareto_mask(
+        [result.objective_values for result in feasible],
+        directions,
+    )
+    if len(pareto_mask) != len(feasible):
+        raise AssertionError("Grid Pareto mask length does not match the feasible population.")
     for result in results:
-        result.is_pareto_optimal = bool(result.optuna_trial_number in pareto_numbers)
+        result.is_pareto_optimal = False
+    for result, is_pareto in zip(feasible, pareto_mask):
+        result.is_pareto_optimal = bool(is_pareto)
 
 
 def rank_grid_results(
@@ -2111,6 +2088,7 @@ def run_grid_optimization(
     )
     timings["fast_evaluation_seconds"] = time.time() - eval_started
 
+    ranking_started = time.time()
     ranked_fast = rank_grid_results(
         all_fast_results,
         objectives=fast_objectives,
@@ -2124,6 +2102,7 @@ def run_grid_optimization(
         enabled=settings.diversity_enabled,
         max_per_group=settings.diversity_max_per_group,
     )
+    timings["ranking_seconds"] = time.time() - ranking_started
     diversity_metadata["diversity_group_fields"] = normalize_diversity_group_fields(
         backend_metadata.get("diversity_group_fields")
     )

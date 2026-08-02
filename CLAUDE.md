@@ -451,8 +451,12 @@ backend advertises capability via `get_backend_metadata()` (normalized by
     (`validate_selected_candidates`); WFA OOS is also slow-authoritative.
   - Final objectives, primary objective, and constraint feasibility are stored on
     each trial; UI sorts feasible Pareto → feasible non-Pareto → infeasible. The
-    multi-objective/Pareto path is supported but can be substantially more
-    expensive than single-objective ranking (not optimized here).
+    shared Grid V1/V2 path computes exact two-objective Pareto membership in
+    `O(n log n)` time. Three or more Grid objectives remain exact through the
+    historical quadratic fallback; Optuna Pareto behavior is unchanged.
+  - Direct Grid V1 and Grid V2 summaries time full fast ranking plus diversity
+    selection as `ranking_seconds`. V1 WFA does not currently project this as a
+    per-window timing diagnostic.
 
 - **Constraints & diversity**
   - Constraints are soft feasibility/ranking rules (not candidate pruning),
@@ -463,10 +467,10 @@ backend advertises capability via `get_backend_metadata()` (normalized by
     preserved end-to-end by `normalize_diversity_group_fields`.
 
 - **Validation & ranking**
-  - Constraints, score formula, and Pareto evaluation use the shared
-    `optuna_engine` helpers — Grid results are interoperable with Optuna results
-    (same `trials` table, same display schema). DSR for Grid uses
-    `build_grid_dsr_results`.
+  - Constraints and score formula use shared `optuna_engine` helpers. Exact
+    Grid Pareto membership is owned by `grid_pareto`; Grid results remain
+    interoperable with Optuna results (same `trials` table, same display schema).
+    DSR for Grid uses `build_grid_dsr_results`.
   - Budget is parsed from compact strings (e.g. `200k`) on the UI side; backends
     use canonical integer counts.
 

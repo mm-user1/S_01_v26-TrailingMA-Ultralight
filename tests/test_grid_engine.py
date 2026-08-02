@@ -25,7 +25,12 @@ from core.grid_engine import (
 )
 from core.backtest_engine import StrategyResult
 from core.metrics import calculate_basic
-from core.optuna_engine import ConstraintSpec, OptimizationConfig, OptimizationResult
+from core.optuna_engine import (
+    ConstraintSpec,
+    MultiObjectiveConfig,
+    OptimizationConfig,
+    OptimizationResult,
+)
 from core.storage import load_study_from_db, save_grid_study_to_db
 from ui.server_services import _build_optimization_config
 from strategies.s03_reversal_v10 import fast_grid
@@ -547,6 +552,103 @@ def test_multi_objective_grid_ranks_feasible_pareto_before_non_pareto_and_infeas
     assert ranked[-1].constraints_satisfied is False
 
 
+def test_grid_pareto_marks_duplicate_vectors_and_trial_numbers_positionally():
+    import core.grid_engine as grid_engine
+
+    first = _synthetic_grid_result(1, net_profit=10.0)
+    duplicate = _synthetic_grid_result(2, net_profit=10.0)
+    dominated = _synthetic_grid_result(3, net_profit=9.0)
+    infeasible_alias = _synthetic_grid_result(1, net_profit=100.0)
+    for result, values, feasible in (
+        (first, [10.0, 1.0], True),
+        (duplicate, [10.0, 1.0], True),
+        (dominated, [9.0, 2.0], True),
+        (infeasible_alias, [100.0, 0.0], False),
+    ):
+        result.objective_values = values
+        result.constraints_satisfied = feasible
+
+    grid_engine._mark_grid_pareto(
+        [first, duplicate, dominated, infeasible_alias],
+        MultiObjectiveConfig(["net_profit_pct", "max_drawdown_pct"]),
+    )
+
+    assert [
+        result.is_pareto_optimal
+        for result in (first, duplicate, dominated, infeasible_alias)
+    ] == [True, True, False, False]
+
+
+def test_grid_pareto_missing_trial_numbers_do_not_alias():
+    import core.grid_engine as grid_engine
+
+    pareto = _synthetic_grid_result(1, net_profit=10.0)
+    dominated = _synthetic_grid_result(2, net_profit=9.0)
+    pareto.optuna_trial_number = None
+    dominated.optuna_trial_number = None
+    pareto.objective_values = [10.0, 1.0]
+    dominated.objective_values = [9.0, 2.0]
+
+    grid_engine._mark_grid_pareto(
+        [pareto, dominated],
+        MultiObjectiveConfig(["net_profit_pct", "max_drawdown_pct"]),
+    )
+
+    assert [pareto.is_pareto_optimal, dominated.is_pareto_optimal] == [True, False]
+
+
+def test_grid_pareto_asserts_mask_length_and_preserves_single_objective_tristate(monkeypatch):
+    import core.grid_engine as grid_engine
+
+    results = [
+        _synthetic_grid_result(1, net_profit=10.0),
+        _synthetic_grid_result(2, net_profit=9.0),
+    ]
+    for result in results:
+        result.objective_values = [result.net_profit_pct, result.max_drawdown_pct]
+
+    monkeypatch.setattr(
+        grid_engine,
+        "compute_grid_pareto_mask",
+        lambda values, directions: np.asarray([True], dtype=np.bool_),
+    )
+    with pytest.raises(AssertionError, match="mask length"):
+        grid_engine._mark_grid_pareto(
+            results,
+            MultiObjectiveConfig(["net_profit_pct", "max_drawdown_pct"]),
+        )
+
+    grid_engine._mark_grid_pareto(results, MultiObjectiveConfig(["net_profit_pct"]))
+    assert [result.is_pareto_optimal for result in results] == [None, None]
+
+
+def test_grid_ranking_filters_nonfinite_objectives_and_preserves_empty_error():
+    valid = _synthetic_grid_result(1, net_profit=5.0)
+    nan_result = _synthetic_grid_result(2, net_profit=math.nan)
+    infinite_result = _synthetic_grid_result(3, net_profit=math.inf)
+
+    ranked = rank_grid_results(
+        [nan_result, valid, infinite_result],
+        objectives=["net_profit_pct"],
+        primary_objective=None,
+        constraints=[],
+    )
+
+    assert ranked == [valid]
+    assert valid.is_pareto_optimal is None
+    with pytest.raises(
+        ValueError,
+        match="Test stage produced no candidates with usable objective values for: net_profit_pct",
+    ):
+        rank_grid_results(
+            [nan_result, infinite_result],
+            objectives=["net_profit_pct"],
+            primary_objective=None,
+            constraints=[],
+            stage_label="Test stage",
+        )
+
+
 def test_grid_selection_config_rejects_advanced_fast_and_composite_objectives(monkeypatch):
     import core.grid_engine as grid_engine
 
@@ -660,6 +762,28 @@ def test_grid_slow_refinement_reranks_only_grid_top_candidates(monkeypatch):
 def test_fast_only_grid_preserves_pareto_metadata_after_slow_validation(monkeypatch):
     import core.grid_engine as grid_engine
 
+    events = []
+    original_rank = grid_engine.rank_grid_results
+    original_diversity = grid_engine.apply_diversity_cap
+    original_normalize = grid_engine.normalize_diversity_group_fields
+    original_time = grid_engine.time.time
+
+    def tracked_rank(*args, **kwargs):
+        events.append("rank")
+        return original_rank(*args, **kwargs)
+
+    def tracked_diversity(*args, **kwargs):
+        events.append("diversity")
+        return original_diversity(*args, **kwargs)
+
+    def tracked_normalize(value):
+        events.append("normalize")
+        return original_normalize(value)
+
+    def tracked_time():
+        events.append("time")
+        return original_time()
+
     fast_results = [
         _synthetic_grid_result(1, net_profit=20.0, grid_rank=1),
         _synthetic_grid_result(2, net_profit=15.0, grid_rank=2),
@@ -710,6 +834,10 @@ def test_fast_only_grid_preserves_pareto_metadata_after_slow_validation(monkeypa
             return validated
 
     monkeypatch.setattr(grid_engine, "_load_backend", lambda strategy_id: FakeBackend)
+    monkeypatch.setattr(grid_engine, "rank_grid_results", tracked_rank)
+    monkeypatch.setattr(grid_engine, "apply_diversity_cap", tracked_diversity)
+    monkeypatch.setattr(grid_engine, "normalize_diversity_group_fields", tracked_normalize)
+    monkeypatch.setattr(grid_engine.time, "time", tracked_time)
     monkeypatch.setattr(
         grid_engine,
         "_prepare_grid_dataframe",
@@ -730,6 +858,15 @@ def test_fast_only_grid_preserves_pareto_metadata_after_slow_validation(monkeypa
     assert [item.is_pareto_optimal for item in results] == [True, True, False]
     assert [item.grid_rank for item in results] == [1, 2, 3]
     assert config.grid_summary["pareto_front_size"] == 2
+    assert config.grid_summary["grid"]["timings"]["ranking_seconds"] >= 0.0
+    ranking_event = events.index("rank")
+    assert events[ranking_event - 1:ranking_event + 4] == [
+        "time",
+        "rank",
+        "diversity",
+        "time",
+        "normalize",
+    ]
 
 
 @pytest.mark.skipif(not fast_grid.NUMBA_AVAILABLE, reason="Numba is required for fast Grid parity")

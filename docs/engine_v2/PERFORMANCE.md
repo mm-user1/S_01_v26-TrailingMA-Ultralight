@@ -516,10 +516,66 @@ Windows UI WFA rerun to close full wall-time confirmation if needed.
 Remaining performance targets:
 
 - semantic-key/ranking tie-break redesign to reduce candidate generation/setup;
-- multi-objective Pareto optimization and ranking allocations;
+- evidence-driven exact optimization for Grid studies using three or more objectives;
 - signal/dataprep stack splitting when data prep is the bottleneck;
 - strategy-side dataprep optimization;
 - WFA window parallelism.
+
+## Exact Two-Objective Grid Pareto Ranking
+
+The shared Grid V1/V2 ranking path now uses an exact `O(n log n)` numeric
+algorithm when exactly two objectives are configured. It normalizes objective
+directions out of place, sorts by the first then second objective, groups equal
+first coordinates, and compares each group minimum with the best strictly
+earlier group. This preserves strict dominance for duplicate rows, equal
+coordinates, and signed zero. Pareto flags are assigned by row position rather
+than trial number. Three or more Grid objectives remain exact through the
+historical direct-Python quadratic fallback. Optuna is unchanged.
+
+Direct V1 and V2 Grid summaries include `ranking_seconds` around full fast
+ranking and diversity selection. V1 WFA does not currently project a
+per-window ranking timing. Hard requirements are usually better expressed as
+constraints: adding correlated objectives can enlarge the Pareto front and
+increase selection cost even though the exact 2D membership stage is fast.
+
+Windows after-run environment (2026-08-02): Windows 10 build 19042,
+Intel Core i9-9900K (8 physical / 16 logical cores), Python 3.13.7, NumPy
+2.3.3. Timings below are workstation evidence, not universal guarantees.
+
+Bounded pre/post measurements used the same deterministic populations and
+timed Pareto marking only:
+
+| Shape | Rows | Front | Before | After median |
+| --- | ---: | ---: | ---: | ---: |
+| 2D adverse, all nondominated | 500 | 500 | 0.084997s | 0.000229s |
+| 2D adverse, all nondominated | 1,000 | 1,000 | 0.341413s | 0.000389s |
+| 2D adverse, all nondominated | 2,000 | 2,000 | 1.385368s | 0.000747s |
+| 2D adverse, all nondominated | 5,000 | 5,000 | 8.799478s | 0.001934s |
+| 2D independent random | 4,000 | 11 | 0.060093s | 0.001946s |
+| 2D independent random | 8,000 | 9 | 0.131720s | 0.003901s |
+| 2D independent random | 16,000 | 9 | 0.198358s | 0.008652s |
+| 2D independent random | 32,000 | 10 | 0.636846s | 0.019742s |
+
+Large after-runs used adverse all-nondominated values. Helper peak memory was
+measured with `tracemalloc` after the input array existed. Normal end-to-end
+time covers `rank_grid_results` after result construction; the separate traced
+run supplies transient-memory evidence and includes tracing overhead.
+
+| Rows | Helper | Helper peak | Front | End-to-end normal | End-to-end traced peak |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 48,480 | 0.002185s | 3.839 MB | 48,480 | 0.194801s | 14.060 MB |
+| 436,320 | 0.021383s | 34.538 MB | 436,320 | 2.020593s | 126.699 MB |
+
+On independent random large inputs the helper took 0.008800s for 48,480
+rows (front 13) and 0.107399s for 436,320 rows (front 16). The old adverse
+algorithm was deliberately not run at those sizes. A clearly labeled quadratic
+extrapolation from the measured old 5,000-row case is about 827s at 48,480 and
+67,008s (18.6h) at 436,320.
+
+The unchanged 3D fallback medians before/after were 0.005248s/0.005672s at 400
+rows, 0.024956s/0.026317s at 800, and 0.027975s/0.029233s at 1,200, with
+identical front sizes. A future 3+ optimization requires observed production
+usage and a separate exact-algorithm scope.
 
 ## Signal-Reversal Rescue After-Run
 
