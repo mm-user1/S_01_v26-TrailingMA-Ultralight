@@ -406,9 +406,9 @@ enumeration. A fast backend typically provides:
 - `evaluate_candidates(fast_data, candidates, *, n_workers=1, needs_dsr=False,
   compute_sharpe=False, compute_sqn=False)` — evaluate the population. The four
   keyword arguments are part of the V1 Fast Grid backend contract and must be
-  accepted even when the backend can use their default behavior. Sharpe may be
-  requested internally for DSR, but Sharpe and SQN remain Slow Objectives until
-  a separately reviewed phase exposes them as public Fast Objectives.
+  accepted even when the backend can use their default behavior. Sharpe and SQN
+  may be requested conditionally as public Fast Objectives; Sharpe may also be
+  requested internally for DSR.
 - Optional `get_backend_metadata()` and `build_allocation(...)` hooks for
   strategy-specific mode labels and generation profiles. Full-enumeration
   backends can declare that budget, seed, and allocation controls do not apply.
@@ -419,8 +419,9 @@ enumeration. A fast backend typically provides:
   preserved as-is through summaries and storage by
   `normalize_diversity_group_fields`.
 - A Numba inner loop that evaluates the restricted fast objective set
-  (`net_profit_pct`, `max_drawdown_pct`, `romad`, `profit_factor`, `win_rate`)
-  cheaply per candidate.
+  (`net_profit_pct`, `max_drawdown_pct`, `romad`, `profit_factor`, `win_rate`,
+  `sharpe_ratio`, `sqn`) cheaply per candidate. Sharpe and SQN remain conditional
+  so unrequested metrics add no per-candidate calculation.
 - A slow-path validator that re-runs the top-N candidates through the regular
   Python strategy using `core.optuna_engine._run_single_combination` to keep
   scoring/constraints consistent with Optuna.

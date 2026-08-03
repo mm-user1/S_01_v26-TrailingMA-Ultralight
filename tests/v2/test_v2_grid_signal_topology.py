@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import core.engine_v2.compiled_kernel_signal as compiled_signal_module
 from core.engine_v2.compiled_kernel import (
     OUTPUT_FINAL_BALANCE,
     OUTPUT_FLAGS,
@@ -27,6 +28,7 @@ from core.engine_v2.compiled_kernel import (
     OUTPUT_WINNING_TRADES,
     OUTPUT_WIN_RATE_PCT,
     OUTPUT_ZERO_SIZE_ENTRY_COUNT,
+    build_calendar_month_ids,
     compiled_batch_available,
 )
 from core.engine_v2.compiled_kernel_signal import (
@@ -474,6 +476,76 @@ def test_signal_stacked_payload_defaults_absent_exits_and_validates_shared_marke
         build_signal_stacked_execution_data([data, mismatched], [0, 1])
     with pytest.raises(ValueError, match="out-of-range"):
         build_signal_stacked_execution_data([data], [1])
+
+
+def test_signal_stacked_sharpe_requires_complete_month_ids_before_dispatch(monkeypatch):
+    _require_compiled_available()
+    data = _signal_data(
+        open_=[100.0, 101.0],
+        high=[100.0, 101.0],
+        low=[100.0, 101.0],
+        close=[100.0, 101.0],
+        long=[True, False],
+    )
+    profile = parse_execution_profile(fixture_config())
+    params = [_base_params()]
+    dispatched_month_ids = []
+
+    def fake_loop(*args):
+        dispatched_month_ids.append(args[5])
+        args[-1].fill(np.nan)
+
+    monkeypatch.setattr(compiled_signal_module, "_COMPILED_SIGNAL_STACKED_BATCH_LOOP", fake_loop)
+    empty_stacked = build_signal_stacked_execution_data([data], [0])
+
+    with pytest.raises(ValueError, match="month_ids matching the execution bars"):
+        evaluate_compiled_signal_stacked_batch(
+            stacked_data=empty_stacked,
+            profile=profile,
+            params_batch=params,
+            trade_start_idx=0,
+            compute_sharpe=True,
+        )
+    assert dispatched_month_ids == []
+
+    malformed_stacked = replace(
+        empty_stacked,
+        month_ids=np.array([2025 * 12 + 1], dtype=np.int32),
+    )
+    with pytest.raises(ValueError, match="length must be zero or match"):
+        evaluate_compiled_signal_stacked_batch(
+            stacked_data=malformed_stacked,
+            profile=profile,
+            params_batch=params,
+            trade_start_idx=0,
+            compute_sharpe=False,
+        )
+
+    evaluate_compiled_signal_stacked_batch(
+        stacked_data=empty_stacked,
+        profile=profile,
+        params_batch=params,
+        trade_start_idx=0,
+        compute_sharpe=False,
+    )
+    complete_stacked = build_signal_stacked_execution_data(
+        [data],
+        [0],
+        month_ids=build_calendar_month_ids(data.timestamps),
+    )
+    evaluate_compiled_signal_stacked_batch(
+        stacked_data=complete_stacked,
+        profile=profile,
+        params_batch=params,
+        trade_start_idx=0,
+        compute_sharpe=True,
+    )
+
+    assert len(dispatched_month_ids) == 2
+    assert dispatched_month_ids[0].size == 0
+    assert dispatched_month_ids[1].dtype == np.int32
+    assert dispatched_month_ids[1].flags.c_contiguous
+    assert dispatched_month_ids[1].size == len(data.timestamps)
 
 
 def test_signal_execution_data_preserves_datetime_index_and_tuple_timestamps_still_stack():

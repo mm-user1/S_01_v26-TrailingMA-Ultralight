@@ -100,32 +100,102 @@ def _build_wf_result(strategy_id: str):
     return result, params, param_id
 
 
-def test_grid_wfa_no_usable_sqn_error_identifies_window(monkeypatch):
+def _capture_grid_wfa_window_error(monkeypatch, message):
     engine = WalkForwardEngine(
         WFConfig(strategy_id="s03_reversal_v10", is_period_days=30, oos_period_days=10),
         {
             "optimization_mode": "grid",
-            "grid_fast_objectives": ["sqn"],
-            "objectives": ["sqn"],
+            "grid_fast_objectives": ["net_profit_pct"],
+            "objectives": ["net_profit_pct"],
         },
         {},
     )
+    source_error = ValueError(message)
     monkeypatch.setattr(
         engine,
         "_run_optuna_on_window",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ValueError("Grid fast screening produced no candidates with usable objective values for: sqn")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(source_error),
     )
     frame = pd.DataFrame(index=pd.date_range("2025-01-01", periods=2, freq="D", tz="UTC"))
 
-    with pytest.raises(ValueError, match=r"WFA window 7.*sqn.*30 completed trades"):
+    with pytest.raises(ValueError) as captured:
         engine._run_window_is_pipeline(
             frame,
             pd.Timestamp("2025-01-01T00:00:00Z"),
             pd.Timestamp("2025-01-31T00:00:00Z"),
             7,
         )
+    return source_error, captured.value
+
+
+@pytest.mark.parametrize(
+    ("ranking_error", "expected", "excluded"),
+    [
+        (
+            "Grid fast screening produced no candidates with usable objective values for: sqn",
+            (
+                "WFA window 7",
+                "Grid fast screening",
+                "for: sqn. SQN is undefined below 30 completed trades.",
+            ),
+            ("Sharpe can be undefined",),
+        ),
+        (
+            "Grid fast screening produced no candidates with usable objective values for: sharpe_ratio",
+            (
+                "WFA window 7",
+                "Grid fast screening",
+                "for: sharpe_ratio. Sharpe can be undefined",
+            ),
+            ("SQN", "30 completed trades"),
+        ),
+        (
+            "Grid V2 fast screening produced no candidates with usable objective values for: sharpe_ratio, sqn",
+            ("WFA window 7", "Grid V2 fast screening", "sharpe_ratio, sqn", "Sharpe", "30 completed trades"),
+            (),
+        ),
+        (
+            "Grid V2 slow refinement produced no candidates with usable objective values for: ulcer_index",
+            ("WFA window 7", "Grid V2 slow refinement", "for: ulcer_index."),
+            ("net_profit_pct", "Sharpe can be undefined", "SQN", "30 completed trades"),
+        ),
+        (
+            "Grid fast screening produced no candidates with usable objective values for: consistency_score",
+            ("WFA window 7", "Grid fast screening", "for: consistency_score."),
+            ("Sharpe can be undefined", "SQN", "30 completed trades"),
+        ),
+        (
+            "Grid fast screening produced no candidates with usable objective values for: sqn.",
+            ("for: sqn. SQN is undefined below 30 completed trades.",),
+            ("sqn..",),
+        ),
+    ],
+)
+def test_grid_wfa_no_usable_objective_error_preserves_ranking_context(
+    monkeypatch,
+    ranking_error,
+    expected,
+    excluded,
+):
+    source_error, wrapped_error = _capture_grid_wfa_window_error(monkeypatch, ranking_error)
+    message = str(wrapped_error)
+
+    assert wrapped_error.__cause__ is source_error
+    assert message.endswith((".", "!", "?"))
+    for text in expected:
+        assert text in message
+    for text in excluded:
+        assert text not in message
+
+
+def test_grid_wfa_unrelated_value_error_is_reraised_unchanged(monkeypatch):
+    source_error, reraised_error = _capture_grid_wfa_window_error(
+        monkeypatch,
+        "Grid candidate construction failed",
+    )
+
+    assert reraised_error is source_error
+    assert reraised_error.__cause__ is None
 
 
 def test_param_id_generation_s01():

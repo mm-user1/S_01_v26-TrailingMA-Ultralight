@@ -222,6 +222,15 @@ def evaluate_compiled_signal_stacked_batch(
 
     if not _base.compiled_batch_available():
         raise RuntimeError(_base.compiled_unavailable_reason() or REFERENCE_UNAVAILABLE_REASON)
+    metric_month_ids = _base._validated_month_ids(
+        stacked_data.month_ids,
+        len(stacked_data.timestamp_ns),
+    )
+    _base._validate_sharpe_month_ids(
+        metric_month_ids,
+        len(stacked_data.timestamp_ns),
+        compute_sharpe,
+    )
     if packed_config_arrays is None:
         if not params_batch:
             return CompiledBatchOutput(
@@ -259,7 +268,7 @@ def evaluate_compiled_signal_stacked_batch(
             stacked_data.low,
             stacked_data.close,
             stacked_data.timestamp_ns,
-            stacked_data.month_ids,
+            metric_month_ids,
             stacked_data.long_entries,
             stacked_data.short_entries,
             stacked_data.long_exits,

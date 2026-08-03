@@ -5,6 +5,7 @@ import hashlib
 import json
 import uuid
 import logging
+import re
 from copy import deepcopy
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from ui.server import app
 from core.backtest_engine import TradeRecord
+from core.grid_engine import GRID_SUPPORTED_FAST_OBJECTIVES
 from core.metrics import _calculate_r2_consistency
 from core.walkforward_engine import OOSStitchedResult, WFConfig, WFResult, WindowResult
 from core.storage import (
@@ -130,6 +132,36 @@ def test_grid_start_page_label_and_marker_are_compact():
     assert results_html.index('id="optuna-settings-section"') > results_html.index("Status &amp; Controls")
     assert "setElementVisible('optuna-settings-section', gridRows.length === 0)" in results_tables_js
     assert "optunaSection.style.display = gridRows.length ? 'none' : ''" in analytics_js
+
+
+def test_common_fast_objectives_match_javascript_and_start_page_controls():
+    repo_root = Path(__file__).parent.parent
+    index_html = (repo_root / "src" / "ui" / "templates" / "index.html").read_text(encoding="utf-8")
+    ui_handlers_js = (repo_root / "src" / "ui" / "static" / "js" / "ui-handlers.js").read_text(
+        encoding="utf-8"
+    )
+
+    declaration = re.search(
+        r"const\s+GRID_SUPPORTED_OBJECTIVES\s*=\s*new Set\(\[(.*?)\]\);",
+        ui_handlers_js,
+        flags=re.DOTALL,
+    )
+    assert declaration is not None
+    javascript_objectives = set(re.findall(r"['\"]([a-z0-9_]+)['\"]", declaration.group(1)))
+
+    control_objectives = []
+    for tag in re.findall(r"<input\b[^>]*>", index_html, flags=re.IGNORECASE):
+        class_attribute = re.search(r"class=['\"]([^'\"]*)['\"]", tag, flags=re.IGNORECASE)
+        if class_attribute is None or "grid-fast-objective-checkbox" not in class_attribute.group(1).split():
+            continue
+        objective_attribute = re.search(r"data-objective=['\"]([^'\"]+)['\"]", tag, flags=re.IGNORECASE)
+        assert objective_attribute is not None
+        control_objectives.append(objective_attribute.group(1))
+
+    python_objectives = set(GRID_SUPPORTED_FAST_OBJECTIVES)
+    assert python_objectives <= javascript_objectives
+    for objective in python_objectives:
+        assert control_objectives.count(objective) == 1
 
 
 def _javascript_function_source(source: str, signature: str, next_signature: str) -> str:

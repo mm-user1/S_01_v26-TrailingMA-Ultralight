@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import core.engine_v2.compiled_kernel as compiled_kernel_module
 from core.engine_v2.compiled_kernel import (
     OUTPUT_COLUMN_COUNT,
     OUTPUT_FINAL_BALANCE,
@@ -172,6 +173,135 @@ def test_calendar_month_ids_are_contiguous_int32_and_preserve_transitions():
     assert actual.dtype == np.int32
     assert actual.flags.c_contiguous
     assert actual.tolist() == [2024 * 12 + 12, 2025 * 12 + 1, 2025 * 12 + 1, 2025 * 12 + 2]
+
+
+def test_grouped_compiled_sharpe_requires_complete_month_ids_before_dispatch(monkeypatch):
+    data = _data(
+        open_=[100.0, 101.0],
+        high=[101.0, 102.0],
+        low=[99.0, 100.0],
+        close=[100.5, 101.5],
+    )
+    profile = parse_execution_profile(load_config())
+    dispatched_month_ids = []
+
+    def fake_loop(*args):
+        dispatched_month_ids.append(args[5])
+        args[-1].fill(np.nan)
+
+    monkeypatch.setattr(compiled_kernel_module, "_COMPILED_BATCH_LOOP", fake_loop)
+    empty = np.empty(0, dtype=np.int32)
+
+    with pytest.raises(ValueError, match="month_ids matching the execution bars"):
+        evaluate_compiled_batch(
+            data=data,
+            profile=profile,
+            params_batch=[_edge_params()],
+            trade_start_idx=0,
+            compute_sharpe=True,
+            month_ids=empty,
+        )
+    assert dispatched_month_ids == []
+
+    with pytest.raises(ValueError, match="length must be zero or match"):
+        evaluate_compiled_batch(
+            data=data,
+            profile=profile,
+            params_batch=[_edge_params()],
+            trade_start_idx=0,
+            compute_sharpe=False,
+            month_ids=np.array([2025 * 12 + 1], dtype=np.int32),
+        )
+
+    evaluate_compiled_batch(
+        data=data,
+        profile=profile,
+        params_batch=[_edge_params()],
+        trade_start_idx=0,
+        compute_sharpe=False,
+        month_ids=empty,
+    )
+    complete = build_calendar_month_ids(data.timestamps)
+    evaluate_compiled_batch(
+        data=data,
+        profile=profile,
+        params_batch=[_edge_params()],
+        trade_start_idx=0,
+        compute_sharpe=True,
+        month_ids=complete,
+    )
+
+    assert len(dispatched_month_ids) == 2
+    assert dispatched_month_ids[0].size == 0
+    assert dispatched_month_ids[1].dtype == np.int32
+    assert dispatched_month_ids[1].flags.c_contiguous
+    assert dispatched_month_ids[1].size == len(data.timestamps)
+
+
+def test_position_stacked_sharpe_requires_complete_month_ids_before_dispatch(monkeypatch):
+    data = _data(
+        open_=[100.0, 101.0],
+        high=[101.0, 102.0],
+        low=[99.0, 100.0],
+        close=[100.5, 101.5],
+    )
+    profile = parse_execution_profile(load_config())
+    params = [_edge_params()]
+    dispatched_month_ids = []
+
+    def fake_loop(*args):
+        dispatched_month_ids.append(args[5])
+        args[-1].fill(np.nan)
+
+    monkeypatch.setattr(compiled_kernel_module, "_COMPILED_STACKED_BATCH_LOOP", fake_loop)
+    empty_stacked = build_stacked_execution_data([data], [0])
+
+    with pytest.raises(ValueError, match="month_ids matching the execution bars"):
+        evaluate_compiled_stacked_batch(
+            stacked_data=empty_stacked,
+            profile=profile,
+            params_batch=params,
+            trade_start_idx=0,
+            compute_sharpe=True,
+        )
+    assert dispatched_month_ids == []
+
+    malformed_stacked = replace(
+        empty_stacked,
+        month_ids=np.array([2025 * 12 + 1], dtype=np.int32),
+    )
+    with pytest.raises(ValueError, match="length must be zero or match"):
+        evaluate_compiled_stacked_batch(
+            stacked_data=malformed_stacked,
+            profile=profile,
+            params_batch=params,
+            trade_start_idx=0,
+            compute_sharpe=False,
+        )
+
+    evaluate_compiled_stacked_batch(
+        stacked_data=empty_stacked,
+        profile=profile,
+        params_batch=params,
+        trade_start_idx=0,
+        compute_sharpe=False,
+    )
+    complete_stacked = build_stacked_execution_data(
+        [data],
+        [0],
+        month_ids=build_calendar_month_ids(data.timestamps),
+    )
+    evaluate_compiled_stacked_batch(
+        stacked_data=complete_stacked,
+        profile=profile,
+        params_batch=params,
+        trade_start_idx=0,
+        compute_sharpe=True,
+    )
+
+    assert len(dispatched_month_ids) == 2
+    assert dispatched_month_ids[0].size == 0
+    assert dispatched_month_ids[1].size == len(data.timestamps)
 
 
 def test_position_cache_estimate_counts_fixed_output_and_optional_month_ids(prepared_data, hooks):

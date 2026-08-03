@@ -164,14 +164,15 @@ def evaluate_compiled_batch(
 
     if not compiled_batch_available():
         raise RuntimeError(compiled_unavailable_reason() or REFERENCE_UNAVAILABLE_REASON)
-    if not params_batch:
-        return CompiledBatchOutput(outputs=np.empty((0, OUTPUT_COLUMN_COUNT), dtype=np.float64))
-
-    packed = _pack_config_arrays(profile, params_batch, trade_start_idx)
     metric_month_ids = _validated_month_ids(
         build_calendar_month_ids(data.timestamps) if compute_sharpe and month_ids is None else month_ids,
         len(data.timestamps),
     )
+    _validate_sharpe_month_ids(metric_month_ids, len(data.timestamps), compute_sharpe)
+    if not params_batch:
+        return CompiledBatchOutput(outputs=np.empty((0, OUTPUT_COLUMN_COUNT), dtype=np.float64))
+
+    packed = _pack_config_arrays(profile, params_batch, trade_start_idx)
     outputs = np.empty((len(params_batch), OUTPUT_COLUMN_COUNT), dtype=np.float64)
     worker_count = _validated_worker_count(n_workers)
     previous_threads = numba.get_num_threads()
@@ -322,6 +323,15 @@ def evaluate_compiled_stacked_batch(
 
     if not compiled_batch_available():
         raise RuntimeError(compiled_unavailable_reason() or REFERENCE_UNAVAILABLE_REASON)
+    metric_month_ids = _validated_month_ids(
+        stacked_data.month_ids,
+        len(stacked_data.timestamp_ns),
+    )
+    _validate_sharpe_month_ids(
+        metric_month_ids,
+        len(stacked_data.timestamp_ns),
+        compute_sharpe,
+    )
     if packed_config_arrays is None:
         if not params_batch:
             return CompiledBatchOutput(
@@ -359,7 +369,7 @@ def evaluate_compiled_stacked_batch(
             stacked_data.low,
             stacked_data.close,
             stacked_data.timestamp_ns,
-            stacked_data.month_ids,
+            metric_month_ids,
             stacked_data.long_entries,
             stacked_data.short_entries,
             stacked_data.atr,
@@ -431,6 +441,17 @@ def _validated_month_ids(values: Any, expected_length: int) -> np.ndarray:
             "Compiled Grid V2 month_ids length must be zero or match the execution bars."
         )
     return array
+
+
+def _validate_sharpe_month_ids(
+    month_ids: np.ndarray,
+    expected_length: int,
+    compute_sharpe: bool,
+) -> None:
+    if compute_sharpe and month_ids.size != int(expected_length):
+        raise ValueError(
+            "Compiled Grid V2 requires month_ids matching the execution bars when Sharpe is requested."
+        )
 
 
 def _validated_worker_count(value: Any) -> int:

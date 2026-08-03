@@ -442,11 +442,12 @@ backend advertises capability via `get_backend_metadata()` (normalized by
 - **Fast / slow refinement**
   - Fast pass uses the strategy's Numba backend to screen candidates against a
     restricted "fast" objective set (`net_profit_pct`, `max_drawdown_pct`,
-    `romad`, `profit_factor`, `win_rate`).
+    `romad`, `profit_factor`, `win_rate`, `sharpe_ratio`, `sqn`). Sharpe and SQN
+    are calculated only when requested.
   - Optional slow refinement re-runs the top-N fast candidates through the full
-    Python strategy with the broader slow objective set (adds `sharpe_ratio`,
-    `sortino_ratio`, `sqn`, `ulcer_index`, `consistency_score`). Slow Objectives
-    operate only on the selected slow-validated top candidates.
+    Python strategy with the broader slow objective set (adds `sortino_ratio`,
+    `ulcer_index`, `consistency_score`). Slow Objectives operate only on the
+    selected slow-validated top candidates.
   - Selected fast candidates are always slow-validated against the real strategy
     (`validate_selected_candidates`); WFA OOS is also slow-authoritative.
   - Final objectives, primary objective, and constraint feasibility are stored on
