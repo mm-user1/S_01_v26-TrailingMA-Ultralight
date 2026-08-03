@@ -21,6 +21,8 @@ from core.engine_v2.compiled_kernel import (
     OUTPUT_NET_PROFIT_PCT,
     OUTPUT_PROFIT_FACTOR,
     OUTPUT_ROMAD,
+    OUTPUT_SHARPE_RATIO,
+    OUTPUT_SQN,
     OUTPUT_TOTAL_TRADES,
     OUTPUT_WINNING_TRADES,
     OUTPUT_WIN_RATE_PCT,
@@ -152,6 +154,8 @@ def _assert_rows_equal(compiled_row, reference_row):
     _assert_float_equal(compiled_row.gross_profit, reference_row.gross_profit)
     _assert_float_equal(compiled_row.gross_loss, reference_row.gross_loss)
     _assert_float_equal(compiled_row.final_balance, reference_row.final_balance)
+    _assert_float_equal(compiled_row.sharpe_ratio, reference_row.sharpe_ratio)
+    _assert_float_equal(compiled_row.sqn, reference_row.sqn)
 
 
 def _assert_rows_exact(left, right):

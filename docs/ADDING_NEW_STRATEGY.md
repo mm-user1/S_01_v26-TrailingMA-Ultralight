@@ -456,3 +456,19 @@ See `src/strategies/s04_stochrsi/` for a complete working example:
 - Optimization includes parameters via config-driven schemas
 - Core layers stay strategy-agnostic
 - Adding new strategies requires only config + strategy module (no UI/core edits)
+
+## Conditional Fast Grid metrics
+
+V1 `fast_grid.py` evaluators accept keyword-only `compute_sharpe=False` and
+`compute_sqn=False` flags. Implementations must leave the corresponding result
+field `None` when disabled. Sharpe uses Merlin's calendar-month mark-to-market
+returns, a fixed 2% annual risk-free rate divided by 12, population variance,
+and no `sqrt(12)`. SQN uses exact net trade PnL, sample variance, and is
+undefined below 30 completed trades or for non-finite/near-zero dispersion.
+Both accumulators use stable Welford updates and constant per-candidate memory.
+
+Sharpe and SQN are Fast Objectives, but not Fast Constraints. The Start page
+shows seven common Fast controls and accepts at most six simultaneously.
+Sortino, Ulcer Index, and Consistency remain Slow-only. Non-finite selected
+objectives remove the candidate from ranking rather than falling back to zero
+or Net Profit.

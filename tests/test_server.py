@@ -74,6 +74,13 @@ def test_grid_start_page_label_and_marker_are_compact():
     assert 'id="optuna-settings-section"' in results_html
     assert 'id="gridFastObjectivesSection"' in index_html
     assert 'class="grid-fast-objective-checkbox"' in index_html
+    assert index_html.count('class="grid-fast-objective-checkbox"') == 7
+    assert 'data-objective="sharpe_ratio"' in index_html
+    assert 'data-objective="sqn"' in index_html
+    assert "Select 1-6 objectives." in index_html
+    assert "const GRID_MAX_FAST_OBJECTIVES = 6" in ui_handlers_js
+    assert "'sharpe_ratio'" in ui_handlers_js
+    assert "'sqn'" in ui_handlers_js
     assert 'id="gridSlowRefinementEnabled"' in index_html
     assert 'class="grid-slow-objective-checkbox"' in index_html
     assert 'id="gridProfileModesSection"' in index_html
@@ -934,6 +941,75 @@ def test_run_surfaces_require_strategy_before_work(client, endpoint, data, json_
     diagnostic = _v2_runtime_diagnostic(response)
     assert diagnostic["code"] == "V2_MISSING_STRATEGY_ID"
     assert diagnostic["path"] == "strategy_id"
+
+
+@pytest.mark.parametrize("endpoint", ["/api/optimize", "/api/walkforward"])
+@pytest.mark.parametrize("strategy_id", ["s03_reversal_v10", "s03_reversal_v11_regime_er_b2"])
+def test_grid_api_enforces_six_fast_objective_boundary(
+    client,
+    monkeypatch,
+    tmp_path,
+    endpoint,
+    strategy_id,
+):
+    from ui import server_routes_run
+
+    csv_path = tmp_path / "objective_boundary.csv"
+    csv_path.write_text("placeholder", encoding="utf-8")
+    payload = _s03_regime_er_grid_preview_payload(
+        strategy_id=strategy_id,
+        optimization_mode="grid",
+    )
+    seven = [
+        "net_profit_pct",
+        "max_drawdown_pct",
+        "romad",
+        "profit_factor",
+        "win_rate",
+        "sharpe_ratio",
+        "sqn",
+    ]
+    payload.update(
+        objectives=seven,
+        primary_objective="sharpe_ratio",
+        grid_fast_objectives=seven,
+        grid_fast_primary_objective="sharpe_ratio",
+    )
+    monkeypatch.setattr(server_routes_run, "_resolve_csv_path", lambda _raw: csv_path)
+    monkeypatch.setattr(
+        server_routes_run,
+        "_build_optimization_config",
+        lambda *_args, **_kwargs: pytest.fail("seven objectives must fail before config construction"),
+    )
+
+    rejected = client.post(
+        endpoint,
+        data={"strategy": strategy_id, "csvPath": str(csv_path), "config": json.dumps(payload)},
+    )
+
+    assert rejected.status_code == 400
+    assert "Maximum 6 objectives allowed" in rejected.get_data(as_text=True)
+
+    accepted_objectives = seven[:4] + ["sharpe_ratio", "sqn"]
+    payload.update(
+        objectives=accepted_objectives,
+        primary_objective="sqn",
+        grid_fast_objectives=accepted_objectives,
+        grid_fast_primary_objective="sqn",
+    )
+    monkeypatch.setattr(
+        server_routes_run,
+        "_build_optimization_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("six-objective boundary accepted")),
+    )
+
+    accepted = client.post(
+        endpoint,
+        data={"strategy": strategy_id, "csvPath": str(csv_path), "config": json.dumps(payload)},
+    )
+
+    assert accepted.status_code == 400
+    assert "six-objective boundary accepted" in accepted.get_data(as_text=True)
 
 
 def test_grid_preview_strategy_aliases_agree_and_conflict(client):

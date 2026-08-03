@@ -835,9 +835,21 @@ class WalkForwardEngine:
                 )
 
         self._last_grid_summary = None
-        optimization_payload = self._run_optuna_on_window(
-            df, optimization_start, optimization_end
-        )
+        try:
+            optimization_payload = self._run_optuna_on_window(
+                df, optimization_start, optimization_end
+            )
+        except ValueError as exc:
+            if is_grid_mode and "produced no candidates with usable objective values" in str(exc):
+                objectives = self.base_config_template.get("grid_fast_objectives") or self.base_config_template.get(
+                    "objectives", []
+                )
+                objective_text = ", ".join(str(item) for item in objectives) or "the selected objectives"
+                raise ValueError(
+                    f"WFA window {window_id} has no Grid candidates with usable objective values "
+                    f"for: {objective_text}. Short windows may leave SQN undefined below 30 completed trades."
+                ) from exc
+            raise
         if len(optimization_payload) == 3:
             optimization_results, optimization_all_results, grid_summary = optimization_payload
         else:

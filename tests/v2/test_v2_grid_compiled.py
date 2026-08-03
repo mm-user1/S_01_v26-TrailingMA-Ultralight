@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 import math
 import os
 
@@ -9,6 +10,7 @@ import pandas as pd
 import pytest
 
 from core.engine_v2.compiled_kernel import (
+    OUTPUT_COLUMN_COUNT,
     OUTPUT_FINAL_BALANCE,
     OUTPUT_GROSS_LOSS,
     OUTPUT_GROSS_PROFIT,
@@ -18,6 +20,8 @@ from core.engine_v2.compiled_kernel import (
     OUTPUT_NET_PROFIT_PCT,
     OUTPUT_PROFIT_FACTOR,
     OUTPUT_ROMAD,
+    OUTPUT_SHARPE_RATIO,
+    OUTPUT_SQN,
     OUTPUT_TOTAL_TRADES,
     OUTPUT_WINNING_TRADES,
     OUTPUT_WIN_RATE_PCT,
@@ -25,6 +29,7 @@ from core.engine_v2.compiled_kernel import (
     _timestamp_ns,
     _timestamps_ns,
     _pack_config_arrays,
+    build_calendar_month_ids,
     build_stacked_execution_data,
     compiled_batch_available,
     evaluate_compiled_batch,
@@ -35,12 +40,15 @@ from core.engine_v2.contracts import Signals
 from core.engine_v2.kernel import ExecutionData
 from core.engine_v2.profile import parse_execution_profile
 from core.engine_v2.runner import run_v2_strategy
+from core.grid_engine import _grid_v2_result_from_row
+from core.metrics import _calculate_monthly_returns
 from core.grid_v2 import (
     GridV2Settings,
     GridV2StrategyHooks,
     _pack_table_config_arrays,
     build_grid_v2_plan,
     deterministic_candidate_subset_indices,
+    estimate_grid_v2_cache,
     execute_grid_v2_candidates,
 )
 from strategies.s06_r_trend_v02_b2 import strategy as s06_b2_strategy
@@ -139,6 +147,64 @@ def _assert_rows_equal(compiled_row, reference_row):
     _assert_float_equal(compiled_row.gross_profit, reference_row.gross_profit)
     _assert_float_equal(compiled_row.gross_loss, reference_row.gross_loss)
     _assert_float_equal(compiled_row.final_balance, reference_row.final_balance)
+    _assert_float_equal(compiled_row.sharpe_ratio, reference_row.sharpe_ratio)
+    _assert_float_equal(compiled_row.sqn, reference_row.sqn)
+
+
+def test_compiled_output_contract_appends_conditional_metrics():
+    assert OUTPUT_SHARPE_RATIO == 21
+    assert OUTPUT_SQN == 22
+    assert OUTPUT_COLUMN_COUNT == 23
+
+
+def test_calendar_month_ids_are_contiguous_int32_and_preserve_transitions():
+    index = pd.DatetimeIndex(
+        [
+            "2024-12-31T23:30:00Z",
+            "2025-01-01T00:00:00Z",
+            "2025-01-31T23:30:00Z",
+            "2025-02-01T00:00:00Z",
+        ]
+    )
+
+    actual = build_calendar_month_ids(index)
+
+    assert actual.dtype == np.int32
+    assert actual.flags.c_contiguous
+    assert actual.tolist() == [2024 * 12 + 12, 2025 * 12 + 1, 2025 * 12 + 1, 2025 * 12 + 2]
+
+
+def test_position_cache_estimate_counts_fixed_output_and_optional_month_ids(prepared_data, hooks):
+    df, trade_start_idx = prepared_data
+    plan = build_grid_v2_plan(
+        _config_with_rounding("none"),
+        GridV2Settings(
+            enabled_variants=("bracket",),
+            enabled_axes=("stopX",),
+            prefer_compiled=True,
+            top_n=0,
+        ),
+        base_params=merged_reference_params("reference_b_trend_bracket"),
+    )
+    indices = (0, 1, 2)
+
+    disabled = estimate_grid_v2_cache(plan, df, trade_start_idx, hooks, indices)
+    sharpe = estimate_grid_v2_cache(
+        plan,
+        df,
+        trade_start_idx,
+        hooks,
+        indices,
+        compute_sharpe=True,
+    )
+
+    assert disabled.output_column_count == 23
+    assert disabled.bytes_per_output_candidate == 23 * 8
+    assert disabled.estimated_output_mb * 1024 * 1024 == len(indices) * 23 * 8
+    assert disabled.month_id_nbytes == 0
+    assert sharpe.month_id_nbytes == len(df) * 4
+    assert sharpe.bytes_per_shared_market_bar == disabled.bytes_per_shared_market_bar + 4
+    assert (sharpe.estimated_shared_market_mb - disabled.estimated_shared_market_mb) * 1024 * 1024 == pytest.approx(len(df) * 4)
 
 
 def _config_with_rounding(price_rounding: str) -> dict:
@@ -279,6 +345,75 @@ def test_compiled_grid_v2_worker_count_is_deterministic(prepared_data, hooks):
     assert many_workers.metadata["compiled_workers"] == 2
     for left, right in zip(one_worker.rows, many_workers.rows):
         _assert_rows_equal(left, right)
+
+
+@pytest.mark.parametrize(
+    ("compute_sharpe", "compute_sqn"),
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+def test_position_fast_metrics_are_request_gated_and_match_reference(
+    prepared_data,
+    hooks,
+    compute_sharpe,
+    compute_sqn,
+):
+    df, trade_start_idx = prepared_data
+    base_params = merged_reference_params("reference_b_trend_bracket")
+    common = dict(
+        enabled_variants=("bracket",),
+        enabled_axes=("stopX", "stopRR"),
+        top_n=0,
+    )
+    compiled_plan = build_grid_v2_plan(
+        _config_with_rounding("none"),
+        GridV2Settings(**common, prefer_compiled=True, compiled_workers=2),
+        base_params=base_params,
+    )
+    reference_plan = build_grid_v2_plan(
+        _config_with_rounding("none"),
+        GridV2Settings(**common, prefer_compiled=False),
+        base_params=base_params,
+    )
+    indices = (0, 1, 5)
+
+    compiled = execute_grid_v2_candidates(
+        compiled_plan,
+        df,
+        trade_start_idx,
+        hooks,
+        indices,
+        compute_sharpe=compute_sharpe,
+        compute_sqn=compute_sqn,
+    )
+    reference = execute_grid_v2_candidates(
+        reference_plan,
+        df,
+        trade_start_idx,
+        hooks,
+        indices,
+        compute_sharpe=compute_sharpe,
+        compute_sqn=compute_sqn,
+    )
+
+    assert compiled.metadata["compute_sharpe"] is compute_sharpe
+    assert compiled.metadata["compute_sqn"] is compute_sqn
+    assert compiled.metadata["month_id_nbytes"] == (len(df) * 4 if compute_sharpe else 0)
+    assert compiled.cache_estimate.month_id_nbytes == (len(df) * 4 if compute_sharpe else 0)
+    for compiled_row, reference_row in zip(compiled.rows, reference.rows):
+        _assert_rows_equal(compiled_row, reference_row)
+        assert math.isfinite(compiled_row.sharpe_ratio) is compute_sharpe
+        assert math.isfinite(compiled_row.sqn) is compute_sqn
+    if not compute_sharpe:
+        assert compiled.rows[0].sharpe_ratio is compiled.rows[1].sharpe_ratio
+        assert reference.rows[0].sharpe_ratio is reference.rows[1].sharpe_ratio
+    if not compute_sqn:
+        assert compiled.rows[0].sqn is compiled.rows[1].sqn
+        assert reference.rows[0].sqn is reference.rows[1].sqn
+    materialized = _grid_v2_result_from_row(compiled.rows[0], metric_tier="compiled_fast")
+    assert (math.isfinite(materialized.sharpe_ratio) if compute_sharpe else materialized.sharpe_ratio is None)
+    assert (math.isfinite(materialized.sqn) if compute_sqn else materialized.sqn is None)
+    assert materialized.fast_metrics["sharpe_ratio"] == materialized.sharpe_ratio
+    assert materialized.fast_metrics["sqn"] == materialized.sqn
 
 
 def test_sampled_position_grid_compiled_rows_match_reference(prepared_data, hooks):
@@ -449,6 +584,109 @@ def _edge_params(**overrides):
     )
     params.update(overrides)
     return params
+
+
+def test_empty_compiled_result_initializes_appended_metric_columns():
+    data = _data(open_=[], high=[], low=[], close=[])
+    profile = parse_execution_profile(load_config())
+
+    values = evaluate_compiled_batch(
+        data=data,
+        profile=profile,
+        params_batch=[_edge_params()],
+        trade_start_idx=0,
+        compute_sharpe=True,
+        compute_sqn=True,
+    ).outputs[0]
+
+    assert values.shape == (23,)
+    assert math.isnan(values[OUTPUT_SHARPE_RATIO])
+    assert math.isnan(values[OUTPUT_SQN])
+
+
+@pytest.mark.parametrize(("trade_count", "expect_defined"), [(29, False), (30, True)])
+def test_intrabar_target_exits_update_sqn_once_at_29_30_boundary(trade_count, expect_defined):
+    length = trade_count * 2
+    long_entries = [index % 2 == 0 for index in range(length)]
+    rolling_low = [
+        97.0 - float((index // 2) % 3) if index % 2 == 0 else 99.0
+        for index in range(length)
+    ]
+    data = _data(
+        open_=[100.0] * length,
+        high=[100.0 if index % 2 == 0 else 110.0 for index in range(length)],
+        low=[rolling_low[index] if index % 2 == 0 else 99.0 for index in range(length)],
+        close=[100.0 if index % 2 == 0 else 105.0 for index in range(length)],
+        long=long_entries,
+        rolling_low=rolling_low,
+    )
+    profile = parse_execution_profile(load_config())
+    params = _edge_params(stopRR=1.0)
+
+    compiled = evaluate_compiled_batch(
+        data=data,
+        profile=profile,
+        params_batch=[params],
+        trade_start_idx=0,
+        compute_sqn=True,
+    ).outputs[0]
+    reference = run_v2_strategy(
+        data=data,
+        profile=profile,
+        params=params,
+        trade_start_idx=0,
+    ).strategy_result
+
+    assert int(compiled[OUTPUT_TOTAL_TRADES]) == reference.total_trades == trade_count
+    if expect_defined:
+        assert math.isfinite(compiled[OUTPUT_SQN])
+        _assert_float_equal(compiled[OUTPUT_SQN], reference.sqn)
+    else:
+        assert math.isnan(compiled[OUTPUT_SQN])
+        assert reference.sqn is None
+
+
+def test_sharpe_preserves_final_bar_month_transition_zero_partial_month():
+    data = _data(
+        open_=[100.0, 100.0, 105.0],
+        high=[100.0, 101.0, 106.0],
+        low=[97.0, 99.0, 104.0],
+        close=[100.0, 101.0, 105.0],
+        long=[True, False, False],
+        rolling_low=[97.0, 99.0, 104.0],
+    )
+    data = replace(
+        data,
+        timestamps=(
+            pd.Timestamp("2025-01-31T23:30:00Z"),
+            pd.Timestamp("2025-02-01T00:00:00Z"),
+            pd.Timestamp("2025-03-01T00:00:00Z"),
+        ),
+    )
+    profile = parse_execution_profile(load_config())
+    params = _edge_params(stopRR=10.0)
+
+    compiled = evaluate_compiled_batch(
+        data=data,
+        profile=profile,
+        params_batch=[params],
+        trade_start_idx=0,
+        compute_sharpe=True,
+    ).outputs[0]
+    reference = run_v2_strategy(
+        data=data,
+        profile=profile,
+        params=params,
+        trade_start_idx=0,
+    ).strategy_result
+    monthly_returns = _calculate_monthly_returns(
+        reference.equity_curve,
+        pd.DatetimeIndex(reference.timestamps),
+    )
+
+    assert len(monthly_returns) == 3
+    assert monthly_returns[-1] == 0.0
+    _assert_float_equal(compiled[OUTPUT_SHARPE_RATIO], reference.sharpe_ratio)
 
 
 def _assert_compiled_matches_direct_reference(data: ExecutionData, params: dict):

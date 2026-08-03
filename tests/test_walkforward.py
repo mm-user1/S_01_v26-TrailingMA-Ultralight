@@ -100,6 +100,34 @@ def _build_wf_result(strategy_id: str):
     return result, params, param_id
 
 
+def test_grid_wfa_no_usable_sqn_error_identifies_window(monkeypatch):
+    engine = WalkForwardEngine(
+        WFConfig(strategy_id="s03_reversal_v10", is_period_days=30, oos_period_days=10),
+        {
+            "optimization_mode": "grid",
+            "grid_fast_objectives": ["sqn"],
+            "objectives": ["sqn"],
+        },
+        {},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_run_optuna_on_window",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("Grid fast screening produced no candidates with usable objective values for: sqn")
+        ),
+    )
+    frame = pd.DataFrame(index=pd.date_range("2025-01-01", periods=2, freq="D", tz="UTC"))
+
+    with pytest.raises(ValueError, match=r"WFA window 7.*sqn.*30 completed trades"):
+        engine._run_window_is_pipeline(
+            frame,
+            pd.Timestamp("2025-01-01T00:00:00Z"),
+            pd.Timestamp("2025-01-31T00:00:00Z"),
+            7,
+        )
+
+
 def test_param_id_generation_s01():
     engine = WalkForwardEngine(WFConfig(strategy_id="s01_trailing_ma"), {}, {})
     params = {"maType": "EMA", "maLength": 45, "closeCountLong": 7}

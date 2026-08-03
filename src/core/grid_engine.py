@@ -52,6 +52,8 @@ GRID_SUPPORTED_FAST_OBJECTIVES = {
     "romad",
     "profit_factor",
     "win_rate",
+    "sharpe_ratio",
+    "sqn",
 }
 GRID_SUPPORTED_OBJECTIVES = GRID_SUPPORTED_FAST_OBJECTIVES
 GRID_SUPPORTED_SLOW_OBJECTIVES = GRID_SUPPORTED_FAST_OBJECTIVES | {
@@ -1437,6 +1439,8 @@ def _grid_v2_result_from_row(
     diversity_group_field: str = "grid_mode_name",
 ) -> OptimizationResult:
     profit_factor = float(row.profit_factor)
+    sharpe_ratio = _finite_metric_or_none(getattr(row, "sharpe_ratio", None))
+    sqn = _finite_metric_or_none(getattr(row, "sqn", None))
     result = OptimizationResult(
         params=row.params,
         net_profit_pct=float(row.net_profit_pct),
@@ -1451,6 +1455,8 @@ def _grid_v2_result_from_row(
         gross_loss=float(row.gross_loss),
         max_consecutive_losses=int(row.max_consecutive_losses),
         romad=float(row.romad),
+        sharpe_ratio=sharpe_ratio,
+        sqn=sqn,
         profit_factor=None if math.isnan(profit_factor) else profit_factor,
         optuna_trial_number=int(row.candidate_id),
     )
@@ -1484,10 +1490,19 @@ def _grid_v2_result_from_row(
             "gross_profit": row.gross_profit,
             "gross_loss": row.gross_loss,
             "max_consecutive_losses": row.max_consecutive_losses,
+            "sharpe_ratio": sharpe_ratio,
+            "sqn": sqn,
         },
     )
     setattr(result, "validation_status", row.status)
     return result
+
+
+def _finite_metric_or_none(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    numeric = float(value)
+    return numeric if math.isfinite(numeric) else None
 
 
 def _grid_v2_slow_result(
@@ -1658,6 +1673,7 @@ def _run_grid_v2_optimization(
     settings = _grid_v2_settings_from_config(config)
     constraints = _build_constraint_specs(getattr(config, "constraints", []) or [])
     selection_config = resolve_grid_selection_config(config)
+    fast_metric_request = resolve_fast_metric_request(selection_config, needs_dsr=False)
     _validate_objective_set(
         stage="V2 fast screening",
         objectives=selection_config.fast_objectives,
@@ -1732,6 +1748,8 @@ def _run_grid_v2_optimization(
         df,
         trade_start_idx,
         hooks,
+        compute_sharpe=fast_metric_request.compute_sharpe,
+        compute_sqn=fast_metric_request.compute_sqn,
     )
     timings["fast_evaluation_seconds"] = time.time() - eval_started
     for key in (

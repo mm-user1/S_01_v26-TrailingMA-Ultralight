@@ -67,6 +67,12 @@ function sourceItem(id = 'q1') {
     index: 1,
     label: '#1',
     sources: [{type: 'path', path: 'C:\\data\\sample.csv'}],
+    strategyId: 's03_reversal_v11_regime_er_b2',
+    config: {
+      optimization_mode: 'grid',
+      grid_fast_objectives: ['sharpe_ratio', 'sqn', 'net_profit_pct'],
+      grid_fast_primary_objective: 'sqn',
+    },
   };
 }
 
@@ -125,6 +131,14 @@ async function main() {
   fetchOutcomes = [{items: [], nextIndex: 1, runtime: {active: false, updatedAt: 0}}];
   await context.__queueTest.ensureQueueStateLoaded();
   assert.equal(context.__queueTest.loadQueue().items[0].id, 'legacy');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.__queueTest.loadQueue().items[0].config)),
+    {
+      optimization_mode: 'grid',
+      grid_fast_objectives: ['sharpe_ratio', 'sqn', 'net_profit_pct'],
+      grid_fast_primary_objective: 'sqn',
+    },
+  );
   assert.equal(saveCalls, 1, 'valid legacy state must still migrate after a successful empty GET');
   assert.equal(storage.size, 0);
   assert.equal(storageRemovals, 2);

@@ -29,6 +29,8 @@ from .compiled_kernel import (
     OUTPUT_PROFIT_FACTOR,
     OUTPUT_REJECTED_FILL_COUNT,
     OUTPUT_ROMAD,
+    OUTPUT_SHARPE_RATIO,
+    OUTPUT_SQN,
     OUTPUT_TOTAL_TRADES,
     OUTPUT_WINNING_TRADES,
     OUTPUT_WIN_RATE_PCT,
@@ -55,6 +57,7 @@ class SignalStackedExecutionData:
     low: np.ndarray
     close: np.ndarray
     timestamp_ns: np.ndarray
+    month_ids: np.ndarray
     long_entries: np.ndarray
     short_entries: np.ndarray
     long_exits: np.ndarray
@@ -77,6 +80,7 @@ class SignalStackedExecutionData:
             + self.low.nbytes
             + self.close.nbytes
             + self.timestamp_ns.nbytes
+            + self.month_ids.nbytes
         )
 
     @property
@@ -118,6 +122,8 @@ _SIGNAL_CONFIG_ARRAY_DTYPES: Mapping[str, Any] = {
 def build_signal_stacked_execution_data(
     data_rows: Sequence[ExecutionData],
     data_index: Sequence[int],
+    *,
+    month_ids: np.ndarray | None = None,
 ) -> SignalStackedExecutionData:
     """Build and validate a stacked compiled payload for signal-only profiles."""
 
@@ -131,6 +137,7 @@ def build_signal_stacked_execution_data(
     low_values = _base._contiguous_1d(first.low, "low", np.float64)
     close_values = _base._contiguous_1d(first.close, "close", np.float64)
     timestamp_ns = _base._timestamps_ns(first.timestamps)
+    metric_month_ids = _base._validated_month_ids(month_ids, len(timestamp_ns))
 
     long_entry_rows: list[np.ndarray] = []
     short_entry_rows: list[np.ndarray] = []
@@ -191,6 +198,7 @@ def build_signal_stacked_execution_data(
         low=low_values,
         close=close_values,
         timestamp_ns=timestamp_ns,
+        month_ids=metric_month_ids,
         long_entries=np.ascontiguousarray(np.stack(long_entry_rows, axis=0), dtype=np.bool_),
         short_entries=np.ascontiguousarray(np.stack(short_entry_rows, axis=0), dtype=np.bool_),
         long_exits=np.ascontiguousarray(np.stack(long_exit_rows, axis=0), dtype=np.bool_),
@@ -207,6 +215,8 @@ def evaluate_compiled_signal_stacked_batch(
     trade_start_idx: int,
     n_workers: int = 1,
     packed_config_arrays: Mapping[str, np.ndarray] | None = None,
+    compute_sharpe: bool = False,
+    compute_sqn: bool = False,
 ) -> CompiledBatchOutput:
     """Evaluate one stacked signal-reversal compiled batch."""
 
@@ -249,6 +259,7 @@ def evaluate_compiled_signal_stacked_batch(
             stacked_data.low,
             stacked_data.close,
             stacked_data.timestamp_ns,
+            stacked_data.month_ids,
             stacked_data.long_entries,
             stacked_data.short_entries,
             stacked_data.long_exits,
@@ -269,6 +280,8 @@ def evaluate_compiled_signal_stacked_batch(
             packed["use_date_filter"],
             packed["strict_boundary"],
             packed["boundary_none"],
+            bool(compute_sharpe),
+            bool(compute_sqn),
             outputs,
         )
     finally:
@@ -372,6 +385,7 @@ def _signal_stacked_batch_loop_impl(
     low_values: np.ndarray,
     close_values: np.ndarray,
     timestamp_ns: np.ndarray,
+    month_ids: np.ndarray,
     long_entries: np.ndarray,
     short_entries: np.ndarray,
     long_exits: np.ndarray,
@@ -392,6 +406,8 @@ def _signal_stacked_batch_loop_impl(
     use_date_filter_values: np.ndarray,
     strict_boundary_values: np.ndarray,
     boundary_none_values: np.ndarray,
+    compute_sharpe: bool,
+    compute_sqn: bool,
     outputs: np.ndarray,
 ) -> None:
     for index in numba.prange(outputs.shape[0]):
@@ -403,6 +419,7 @@ def _signal_stacked_batch_loop_impl(
             low_values,
             close_values,
             timestamp_ns,
+            month_ids,
             long_entries[row],
             short_entries[row],
             long_exits[row],
@@ -422,6 +439,8 @@ def _signal_stacked_batch_loop_impl(
             use_date_filter_values,
             strict_boundary_values,
             boundary_none_values,
+            compute_sharpe,
+            compute_sqn,
             outputs,
         )
 
@@ -433,6 +452,7 @@ def _compiled_signal_loop_one(
     low_values: np.ndarray,
     close_values: np.ndarray,
     timestamp_ns: np.ndarray,
+    month_ids: np.ndarray,
     long_entries: np.ndarray,
     short_entries: np.ndarray,
     long_exits: np.ndarray,
@@ -452,6 +472,8 @@ def _compiled_signal_loop_one(
     use_date_filter_values: np.ndarray,
     strict_boundary_values: np.ndarray,
     boundary_none_values: np.ndarray,
+    compute_sharpe: bool,
+    compute_sqn: bool,
     outputs: np.ndarray,
 ) -> None:
     n = close_values.shape[0]
@@ -501,6 +523,16 @@ def _compiled_signal_loop_one(
     consecutive_losses = 0
     max_consecutive_losses = 0
 
+    current_month = -1
+    month_start_equity = 0.0
+    last_equity = initial_capital
+    monthly_count = 0
+    monthly_mean = 0.0
+    monthly_m2 = 0.0
+    sqn_count = 0
+    sqn_mean = 0.0
+    sqn_m2 = 0.0
+
     zero_size_entry_count = 0
     flags = 0
     max_notional = 0.0
@@ -525,6 +557,11 @@ def _compiled_signal_loop_one(
                 balance_delta = gross_pnl - exit_commission
                 balance += balance_delta
                 total_trades += 1
+                if compute_sqn:
+                    sqn_count += 1
+                    sqn_delta = net_pnl - sqn_mean
+                    sqn_mean += sqn_delta / sqn_count
+                    sqn_m2 += sqn_delta * (net_pnl - sqn_mean)
                 if net_pnl > 0.0:
                     winning_trades += 1
                     gross_profit += net_pnl
@@ -584,6 +621,11 @@ def _compiled_signal_loop_one(
                 net_pnl = gross_pnl - entry_commission - exit_commission
                 balance += gross_pnl - exit_commission
                 total_trades += 1
+                if compute_sqn:
+                    sqn_count += 1
+                    sqn_delta = net_pnl - sqn_mean
+                    sqn_mean += sqn_delta / sqn_count
+                    sqn_m2 += sqn_delta * (net_pnl - sqn_mean)
                 if net_pnl > 0.0:
                     winning_trades += 1
                     gross_profit += net_pnl
@@ -671,6 +713,11 @@ def _compiled_signal_loop_one(
                 net_pnl = gross_pnl - entry_commission - exit_commission
                 balance += gross_pnl - exit_commission
                 total_trades += 1
+                if compute_sqn:
+                    sqn_count += 1
+                    sqn_delta = net_pnl - sqn_mean
+                    sqn_mean += sqn_delta / sqn_count
+                    sqn_m2 += sqn_delta * (net_pnl - sqn_mean)
                 if net_pnl > 0.0:
                     winning_trades += 1
                     gross_profit += net_pnl
@@ -689,6 +736,28 @@ def _compiled_signal_loop_one(
                 emergency_stop = math.nan
                 emergency_fill_index = -1
                 emergency_counter = 0
+
+        if compute_sharpe:
+            unrealized = 0.0
+            if position > 0:
+                unrealized = (close - entry_price) * size
+            elif position < 0:
+                unrealized = (entry_price - close) * size
+            equity_value = balance + unrealized
+            last_equity = equity_value
+            month_key = month_ids[i]
+            if current_month < 0:
+                current_month = month_key
+                month_start_equity = equity_value
+            elif month_key != current_month:
+                if month_start_equity > 0.0:
+                    monthly_return = ((equity_value / month_start_equity) - 1.0) * 100.0
+                    monthly_count += 1
+                    monthly_delta = monthly_return - monthly_mean
+                    monthly_mean += monthly_delta / monthly_count
+                    monthly_m2 += monthly_delta * (monthly_return - monthly_mean)
+                current_month = month_key
+                month_start_equity = equity_value
 
         if balance >= running_peak:
             if i > last_drawdown_boundary + 1 and current_drawdown > max_drawdown:
@@ -719,6 +788,33 @@ def _compiled_signal_loop_one(
     else:
         romad = net_profit_pct / abs(max_drawdown)
 
+    sharpe_ratio = math.nan
+    if compute_sharpe and total_trades > 0:
+        if month_start_equity > 0.0:
+            monthly_return = ((last_equity / month_start_equity) - 1.0) * 100.0
+            monthly_count += 1
+            monthly_delta = monthly_return - monthly_mean
+            monthly_mean += monthly_delta / monthly_count
+            monthly_m2 += monthly_delta * (monthly_return - monthly_mean)
+        if monthly_count >= 2:
+            monthly_variance = monthly_m2 / monthly_count
+            if monthly_variance > 0.0 and math.isfinite(monthly_variance):
+                sharpe_ratio = (monthly_mean - (0.02 * 100.0) / 12.0) / math.sqrt(
+                    monthly_variance
+                )
+                if not math.isfinite(sharpe_ratio):
+                    sharpe_ratio = math.nan
+
+    sqn = math.nan
+    if compute_sqn and sqn_count >= 30:
+        sqn_variance = sqn_m2 / (sqn_count - 1)
+        if sqn_variance > 0.0 and math.isfinite(sqn_variance):
+            sqn_std = math.sqrt(sqn_variance)
+            if sqn_std >= 1e-10:
+                sqn = math.sqrt(sqn_count) * sqn_mean / sqn_std
+                if not math.isfinite(sqn):
+                    sqn = math.nan
+
     outputs[candidate_index, OUTPUT_NET_PROFIT_PCT] = net_profit_pct
     outputs[candidate_index, OUTPUT_MAX_DRAWDOWN_PCT] = max_drawdown
     outputs[candidate_index, OUTPUT_TOTAL_TRADES] = total_trades
@@ -740,6 +836,8 @@ def _compiled_signal_loop_one(
     outputs[candidate_index, OUTPUT_MAX_REQUIRED_LEVERAGE] = 0.0
     outputs[candidate_index, OUTPUT_MAX_NOTIONAL] = max_notional
     outputs[candidate_index, OUTPUT_FLAGS] = flags
+    outputs[candidate_index, OUTPUT_SHARPE_RATIO] = sharpe_ratio
+    outputs[candidate_index, OUTPUT_SQN] = sqn
 
 
 if numba is not None:

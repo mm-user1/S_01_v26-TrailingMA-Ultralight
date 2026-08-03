@@ -713,3 +713,34 @@ cache, full V2 enumeration, or per-row diagnostic logging.
 Do not edit historical baseline rows to make later performance changes look
 better. Add a new measured row for each phase and keep the command and
 environment metadata attached.
+
+## TZ-07-2 conditional Sharpe/SQN measurement (2026-08-03)
+
+Windows 10, Python 3.13.7, NumPy 2.3.3, Numba 0.65.1; one warmup plus three
+measured runs, four compiled workers, isolated task-local Numba cache. The
+fixed output grew from 21 to 23 float64 columns (16 bytes per candidate) even
+when optional metrics are disabled. Month IDs add one shared contiguous int32
+value per bar only when Sharpe is requested.
+
+| Family / plan | Candidates | Bars | Disabled median evaluation | Sharpe+SQN median | Delta | Disabled / enabled stack bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| position/bracket S06 full | 48,480 | 6,857 | 5.7765s | 5.7630s | -0.23% | 55,849,628 / 55,877,056 |
+| signal-reversal sampled | 4,096 | 18,521 | 11.2532s | 11.1815s | -0.64% | 304,942,568 / 305,016,652 |
+
+S06's 23-column output was 8,920,320 bytes and its optional month IDs were
+27,428 bytes. The sampled signal output was 753,664 bytes and month IDs were
+74,084 bytes. Both stayed in one chunk under the 512 MB limit. These small
+negative deltas are measurement noise; the evidence establishes no measurable
+disabled-path regression and no total-evaluation penalty from enabling both
+metrics on these warmed runs, not a universal speedup claim.
+
+The empirical gate found usable SQN for 38,032/48,480 S06 four-month rows
+(78.45%), 11,035/48,480 S06 two-month rows (22.76%), 3,943/4,096 signal
+twelve-month rows (96.26%), and 2,683/4,096 signal three-month rows (65.50%).
+Top-50 compiled/reference Sharpe and SQN differences were exactly zero in all
+four cases. Canonical Top-50 Sharpe month counts were respectively 6, 4, 14,
+and 5 (configured inclusive trading-calendar counts 5, 3, 13, and 4 because
+warmup months participate); minimum monthly standard deviations were 0.496,
+1.384, 11.012, and 1.232 percentage points, safely above the `1e-12` review
+threshold. Non-finite selected objectives are removed from ranking, so these
+percentages are operationally relevant for short WFA windows.

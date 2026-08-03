@@ -44,11 +44,14 @@ from core.engine_v2.compiled_kernel import (
     OUTPUT_PROFIT_FACTOR,
     OUTPUT_REJECTED_FILL_COUNT,
     OUTPUT_ROMAD,
+    OUTPUT_SHARPE_RATIO,
+    OUTPUT_SQN,
     OUTPUT_TOTAL_TRADES,
     OUTPUT_WINNING_TRADES,
     OUTPUT_WIN_RATE_PCT,
     OUTPUT_ZERO_SIZE_ENTRY_COUNT,
     OUTPUT_COLUMN_COUNT,
+    build_calendar_month_ids,
     ROUNDING_TICK_OUTWARD_CODE,
     build_stacked_execution_data,
     compiled_batch_available,
@@ -610,6 +613,7 @@ class GridV2CacheEstimate:
     output_column_count: int = OUTPUT_COLUMN_COUNT
     bytes_per_output_candidate: int = OUTPUT_COLUMN_COUNT * np.dtype(np.float64).itemsize
     bytes_per_shared_market_bar: int = 5 * np.dtype(np.float64).itemsize
+    month_id_nbytes: int = 0
 
 
 @dataclass
@@ -618,6 +622,9 @@ class GridV2CacheStats:
     signal_misses: int = 0
     dataprep_hits: int = 0
     dataprep_misses: int = 0
+
+
+_UNDEFINED_METRIC = float("nan")
 
 
 @dataclass(frozen=True, slots=True)
@@ -642,6 +649,8 @@ class GridV2ResultRow:
     max_consecutive_losses: int
     final_balance: float
     guardrail_summary: Mapping[str, Any]
+    sharpe_ratio: float = _UNDEFINED_METRIC
+    sqn: float = _UNDEFINED_METRIC
     backend_kind: str = REFERENCE_BATCH_KIND
     status: str = "ok"
     error: str | None = None
@@ -1833,6 +1842,8 @@ def estimate_grid_v2_cache(
     trade_start_idx: int,
     hooks: GridV2StrategyHooks | Any,
     candidate_indices: Sequence[int] | None = None,
+    *,
+    compute_sharpe: bool = False,
 ) -> GridV2CacheEstimate:
     """Estimate local cache memory for a planned run."""
 
@@ -1841,7 +1852,12 @@ def estimate_grid_v2_cache(
     n_bars = int(len(df))
     context = _cache_key_context(df, trade_start_idx, hooks)
     cache_keys = _candidate_cache_keys(plan, context, hooks, selected_indices)
-    return _estimate_grid_v2_cache_from_keys(plan, n_bars, cache_keys)
+    return _estimate_grid_v2_cache_from_keys(
+        plan,
+        n_bars,
+        cache_keys,
+        compute_sharpe=compute_sharpe,
+    )
 
 
 def _candidate_cache_keys(
@@ -1877,6 +1893,8 @@ def _estimate_grid_v2_cache_from_keys(
     plan: GridV2Plan,
     n_bars: int,
     cache_keys: Sequence[_CandidateCacheKeys],
+    *,
+    compute_sharpe: bool = False,
 ) -> GridV2CacheEstimate:
     topology = _grid_v2_execution_topology(plan)
     signal_combo_count = len({item.signal_key for item in cache_keys})
@@ -1891,11 +1909,14 @@ def _estimate_grid_v2_cache_from_keys(
     output_candidate_count = len(cache_keys)
     bytes_per_output_candidate = int(OUTPUT_COLUMN_COUNT * np.dtype(np.float64).itemsize)
     bytes_per_shared_market_bar = int(
-        4 * np.dtype(np.float64).itemsize + np.dtype(np.int64).itemsize
+        4 * np.dtype(np.float64).itemsize
+        + np.dtype(np.int64).itemsize
+        + (np.dtype(np.int32).itemsize if compute_sharpe else 0)
     )
     estimated_signal_bytes = physical_signal_stack_rows * bytes_per_signal_combo
     estimated_dataprep_bytes = physical_dataprep_stack_rows * bytes_per_dataprep_combo
     estimated_output_bytes = output_candidate_count * bytes_per_output_candidate
+    month_id_nbytes = n_bars * np.dtype(np.int32).itemsize if compute_sharpe else 0
     estimated_shared_market_bytes = n_bars * bytes_per_shared_market_bar
     estimated_total_bytes = (
         estimated_signal_bytes
@@ -1924,6 +1945,7 @@ def _estimate_grid_v2_cache_from_keys(
         output_column_count=OUTPUT_COLUMN_COUNT,
         bytes_per_output_candidate=bytes_per_output_candidate,
         bytes_per_shared_market_bar=bytes_per_shared_market_bar,
+        month_id_nbytes=month_id_nbytes,
     )
 
 
@@ -1955,6 +1977,7 @@ def _signal_chunk_estimated_mb(
     *,
     signal_row_count: int,
     candidate_count: int,
+    compute_sharpe: bool = False,
 ) -> float:
     worker_multiplier = max(1, int(plan.settings.worker_multiplier))
     signal_bytes = (
@@ -1965,7 +1988,9 @@ def _signal_chunk_estimated_mb(
     )
     output_bytes = int(candidate_count) * OUTPUT_COLUMN_COUNT * np.dtype(np.float64).itemsize
     shared_market_bytes = int(n_bars) * (
-        4 * np.dtype(np.float64).itemsize + np.dtype(np.int64).itemsize
+        4 * np.dtype(np.float64).itemsize
+        + np.dtype(np.int64).itemsize
+        + (np.dtype(np.int32).itemsize if compute_sharpe else 0)
     )
     return ((signal_bytes + output_bytes + shared_market_bytes) * worker_multiplier) / _BYTES_PER_MB
 
@@ -1974,9 +1999,21 @@ def _signal_cache_key_chunks(
     plan: GridV2Plan,
     n_bars: int,
     cache_keys: Sequence[_CandidateCacheKeys],
+    *,
+    compute_sharpe: bool = False,
 ) -> tuple[_CacheKeyChunk, ...]:
     if not cache_keys:
-        return (_CacheKeyChunk((), _estimate_grid_v2_cache_from_keys(plan, n_bars, ())),)
+        return (
+            _CacheKeyChunk(
+                (),
+                _estimate_grid_v2_cache_from_keys(
+                    plan,
+                    n_bars,
+                    (),
+                    compute_sharpe=compute_sharpe,
+                ),
+            ),
+        )
 
     chunks: list[_CacheKeyChunk] = []
     current: list[_CandidateCacheKeys] = []
@@ -1991,13 +2028,19 @@ def _signal_cache_key_chunks(
             n_bars,
             signal_row_count=next_data_key_count,
             candidate_count=next_candidate_count,
+            compute_sharpe=compute_sharpe,
         )
         if current and next_estimated_mb > limit_mb:
             chunk_records = tuple(current)
             chunks.append(
                 _CacheKeyChunk(
                     chunk_records,
-                    _estimate_grid_v2_cache_from_keys(plan, n_bars, chunk_records),
+                    _estimate_grid_v2_cache_from_keys(
+                        plan,
+                        n_bars,
+                        chunk_records,
+                        compute_sharpe=compute_sharpe,
+                    ),
                 )
             )
             current = []
@@ -2010,9 +2053,15 @@ def _signal_cache_key_chunks(
             n_bars,
             signal_row_count=len(current_data_keys),
             candidate_count=len(current),
+            compute_sharpe=compute_sharpe,
         )
         if single_chunk_mb > limit_mb:
-            chunk_estimate = _estimate_grid_v2_cache_from_keys(plan, n_bars, tuple(current))
+            chunk_estimate = _estimate_grid_v2_cache_from_keys(
+                plan,
+                n_bars,
+                tuple(current),
+                compute_sharpe=compute_sharpe,
+            )
             _raise_cache_estimate_error(chunk_estimate)
 
     if current:
@@ -2020,7 +2069,12 @@ def _signal_cache_key_chunks(
         chunks.append(
             _CacheKeyChunk(
                 chunk_records,
-                _estimate_grid_v2_cache_from_keys(plan, n_bars, chunk_records),
+                _estimate_grid_v2_cache_from_keys(
+                    plan,
+                    n_bars,
+                    chunk_records,
+                    compute_sharpe=compute_sharpe,
+                ),
             )
         )
     return tuple(chunks)
@@ -2067,6 +2121,9 @@ def execute_grid_v2_candidates(
     trade_start_idx: int,
     hooks: GridV2StrategyHooks | Any,
     candidate_indices: Sequence[int] | None = None,
+    *,
+    compute_sharpe: bool = False,
+    compute_sqn: bool = False,
 ) -> GridV2RunResult:
     """Execute planned candidates through the selected V2 batch backend."""
 
@@ -2077,11 +2134,28 @@ def execute_grid_v2_candidates(
     cache_keys = _candidate_cache_keys(plan, context, hooks, selected_indices)
     cache_key_build_seconds = time.time() - cache_key_started
     topology = _grid_v2_execution_topology(plan)
-    estimate = _estimate_grid_v2_cache_from_keys(plan, int(len(df)), cache_keys)
+    month_ids = (
+        build_calendar_month_ids(df.index)
+        if compute_sharpe
+        else np.empty(0, dtype=np.int32)
+    )
+    if month_ids.size not in {0, int(len(df))}:
+        raise ValueError("Grid V2 month_ids length must match the execution dataframe.")
+    estimate = _estimate_grid_v2_cache_from_keys(
+        plan,
+        int(len(df)),
+        cache_keys,
+        compute_sharpe=compute_sharpe,
+    )
     if estimate.estimated_total_mb > estimate.max_signal_cache_mb and topology != "signal_reversal":
         _raise_cache_estimate_error(estimate)
     chunks = (
-        _signal_cache_key_chunks(plan, int(len(df)), cache_keys)
+        _signal_cache_key_chunks(
+            plan,
+            int(len(df)),
+            cache_keys,
+            compute_sharpe=compute_sharpe,
+        )
         if topology == "signal_reversal" and estimate.estimated_total_mb > estimate.max_signal_cache_mb
         else (_CacheKeyChunk(cache_keys, estimate),)
     )
@@ -2180,6 +2254,7 @@ def execute_grid_v2_candidates(
                     stacked_data = build_signal_stacked_execution_data(
                         [dataprep_cache[key] for key in data_keys],
                         data_index,
+                        month_ids=month_ids,
                     )
                     stack_build_seconds += time.time() - stack_started
                     compiled_started = time.time()
@@ -2198,6 +2273,8 @@ def execute_grid_v2_candidates(
                         params_batch=params_batch,
                         trade_start_idx=trade_start_idx,
                         n_workers=plan.settings.compiled_workers,
+                        compute_sharpe=compute_sharpe,
+                        compute_sqn=compute_sqn,
                     )
                     compiled_batch_seconds += time.time() - compiled_started
                 else:
@@ -2205,6 +2282,7 @@ def execute_grid_v2_candidates(
                     stacked_data = build_stacked_execution_data(
                         [dataprep_cache[key] for key in data_keys],
                         data_index,
+                        month_ids=month_ids,
                     )
                     stack_build_seconds += time.time() - stack_started
                     compiled_started = time.time()
@@ -2234,6 +2312,8 @@ def execute_grid_v2_candidates(
                         trade_start_idx=trade_start_idx,
                         n_workers=plan.settings.compiled_workers,
                         packed_config_arrays=packed_config_arrays,
+                        compute_sharpe=compute_sharpe,
+                        compute_sqn=compute_sqn,
                     )
                     compiled_batch_seconds += time.time() - compiled_started
                 compiled_execution_mode = batch.execution_mode
@@ -2248,7 +2328,14 @@ def execute_grid_v2_candidates(
                     signal_stack_rows_peak = max(signal_stack_rows_peak, int(stacked_data.row_count))
                 for output_index, (candidate_index, values) in enumerate(zip(compiled_indices, batch.outputs)):
                     params = row_params_batch[output_index] if row_params_batch is not None else None
-                    rows.append(_row_from_compiled_output(plan, candidate_index, values, params=params))
+                    rows.append(
+                        _row_from_compiled_output(
+                            plan,
+                            candidate_index,
+                            values,
+                            params=params,
+                        )
+                    )
             else:
                 compiled_execution_mode = "stacked"
         else:
@@ -2266,7 +2353,16 @@ def execute_grid_v2_candidates(
                     except Exception as exc:
                         rows.append(_error_row(plan, candidate_index, exc))
                         continue
-                    rows.append(_row_from_run(plan, candidate_index, run, params=params))
+                    rows.append(
+                        _row_from_run(
+                            plan,
+                            candidate_index,
+                            run,
+                            params=params,
+                            compute_sharpe=compute_sharpe,
+                            compute_sqn=compute_sqn,
+                        )
+                    )
 
         if topology == "signal_reversal":
             dataprep_cache.clear()
@@ -2317,6 +2413,9 @@ def execute_grid_v2_candidates(
             "executed_candidate_count": len(rows),
             "slow_enrich_selected": bool(plan.settings.slow_enrich_selected),
             "compiled_workers": int(plan.settings.compiled_workers),
+            "compute_sharpe": bool(compute_sharpe),
+            "compute_sqn": bool(compute_sqn),
+            "month_id_nbytes": int(month_ids.nbytes),
             "evaluation_seconds": evaluation_seconds,
             "candidates_per_second": (len(rows) / evaluation_seconds) if evaluation_seconds > 0.0 else None,
             "cache_key_build_seconds": cache_key_build_seconds,
@@ -2342,11 +2441,22 @@ def run_grid_v2(
     settings: GridV2Settings | None = None,
     base_params: Mapping[str, Any] | None = None,
     candidate_indices: Sequence[int] | None = None,
+    *,
+    compute_sharpe: bool = False,
+    compute_sqn: bool = False,
 ) -> GridV2RunResult:
     """Build and execute a Grid V2 plan."""
 
     plan = build_grid_v2_plan(config, settings=settings, base_params=base_params)
-    return execute_grid_v2_candidates(plan, df, trade_start_idx, hooks, candidate_indices)
+    return execute_grid_v2_candidates(
+        plan,
+        df,
+        trade_start_idx,
+        hooks,
+        candidate_indices,
+        compute_sharpe=compute_sharpe,
+        compute_sqn=compute_sqn,
+    )
 
 
 def deterministic_candidate_subset_indices(
@@ -3950,6 +4060,8 @@ def _row_from_run(
     run: V2RunResult,
     *,
     params: Mapping[str, Any] | None = None,
+    compute_sharpe: bool = False,
+    compute_sqn: bool = False,
 ) -> GridV2ResultRow:
     table = plan.candidate_table
     params = params or table.params_for_index(candidate_index)
@@ -3981,6 +4093,12 @@ def _row_from_run(
         max_consecutive_losses=_max_consecutive_losses(result.trades),
         final_balance=core.final_balance,
         guardrail_summary=_guardrail_mapping(run.guardrail_summary),
+        sharpe_ratio=(
+            _internal_metric_value(result.sharpe_ratio)
+            if compute_sharpe
+            else _UNDEFINED_METRIC
+        ),
+        sqn=_internal_metric_value(result.sqn) if compute_sqn else _UNDEFINED_METRIC,
         backend_kind=REFERENCE_BATCH_KIND,
     )
 
@@ -4034,6 +4152,8 @@ def _row_from_compiled_output(
         max_consecutive_losses=int(values[OUTPUT_MAX_CONSECUTIVE_LOSSES]),
         final_balance=float(values[OUTPUT_FINAL_BALANCE]),
         guardrail_summary=guardrail_summary,
+        sharpe_ratio=_internal_metric_value(values[OUTPUT_SHARPE_RATIO]),
+        sqn=_internal_metric_value(values[OUTPUT_SQN]),
         backend_kind=COMPILED_BATCH_KIND,
     )
 
@@ -4061,9 +4181,18 @@ def _error_row(plan: GridV2Plan, candidate_index: int, exc: Exception) -> GridV2
         max_consecutive_losses=0,
         final_balance=float("nan"),
         guardrail_summary={},
+        sharpe_ratio=_UNDEFINED_METRIC,
+        sqn=_UNDEFINED_METRIC,
         status="error",
         error=str(exc),
     )
+
+
+def _internal_metric_value(value: Any) -> float:
+    if value is None:
+        return _UNDEFINED_METRIC
+    numeric = float(value)
+    return numeric if math.isfinite(numeric) else _UNDEFINED_METRIC
 
 
 def _max_consecutive_losses(trades: Sequence[Any]) -> int:

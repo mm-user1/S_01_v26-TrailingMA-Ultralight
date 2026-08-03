@@ -726,3 +726,17 @@ validation. Preset runtime integration remains deferred and uncertified.
 | S06 Grid backend (full enumeration) | `src/strategies/s06_r_trend_v02/fast_grid.py` |
 | config.json example | `src/strategies/s04_stochrsi/config.json` |
 | Test baseline | `data/baseline/` |
+
+### Conditional Fast Grid Sharpe and SQN
+
+V1 and V2 Grid expose seven common Fast Objective controls: Net Profit, Max
+Drawdown, RoMaD, Profit Factor, Win Rate, Sharpe, and SQN. At most six may be
+selected in one request. Sharpe and SQN are computed only when requested;
+selecting either does not enable DSR. V1 DSR may reuse the conditional Sharpe
+stream, while V2 Grid DSR remains unavailable. Sortino, Ulcer Index, and
+Consistency remain Slow-only, and Fast Constraints are unchanged.
+
+Grid drops a candidate when any selected objective is non-finite. SQN is
+undefined below 30 completed trades, so short direct-Grid or WFA windows can
+lose much of their rankable population; a WFA window with no usable candidate
+fails with its window number and selected objective context.

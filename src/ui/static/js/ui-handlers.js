@@ -37,8 +37,11 @@ const GRID_SUPPORTED_OBJECTIVES = new Set([
   'max_drawdown_pct',
   'romad',
   'profit_factor',
-  'win_rate'
+  'win_rate',
+  'sharpe_ratio',
+  'sqn'
 ]);
+const GRID_MAX_FAST_OBJECTIVES = 6;
 const GRID_SUPPORTED_SLOW_OBJECTIVES = new Set([
   ...GRID_SUPPORTED_OBJECTIVES,
   'sharpe_ratio',
@@ -1002,6 +1005,19 @@ function collectGridObjectiveSelection(kind = 'fast') {
   return { objectives, primary_objective: primary };
 }
 
+function enforceGridFastObjectiveLimit(changedCheckbox) {
+  if (!changedCheckbox?.checked || !changedCheckbox.classList?.contains('grid-fast-objective-checkbox')) {
+    return true;
+  }
+  const selectedCount = getGridObjectiveElements('fast')
+    .filter((checkbox) => checkbox.checked && !checkbox.disabled)
+    .length;
+  if (selectedCount <= GRID_MAX_FAST_OBJECTIVES) return true;
+  changedCheckbox.checked = false;
+  alert(`Select no more than ${GRID_MAX_FAST_OBJECTIVES} Grid fast objectives.`);
+  return false;
+}
+
 function updateGridObjectiveSelection(kind = 'fast') {
   const checkboxes = getGridObjectiveElements(kind);
   if (!checkboxes.length) return;
@@ -1272,6 +1288,9 @@ function validateOptimizerForm(config) {
     const fastSelection = collectGridObjectiveSelection('fast');
     if (!fastSelection.objectives.length) {
       errors.push('Select at least one Grid fast objective.');
+    }
+    if (fastSelection.objectives.length > GRID_MAX_FAST_OBJECTIVES) {
+      errors.push(`Select no more than ${GRID_MAX_FAST_OBJECTIVES} Grid fast objectives.`);
     }
     fastSelection.objectives.forEach((objective) => {
       if (!GRID_SUPPORTED_OBJECTIVES.has(objective)) {
@@ -2994,6 +3013,7 @@ function bindGridControls() {
     if (!checkbox || checkbox.dataset.gridObjectiveBound === '1') return;
     checkbox.dataset.gridObjectiveBound = '1';
     checkbox.addEventListener('change', () => {
+      enforceGridFastObjectiveLimit(checkbox);
       syncGridObjectiveUi();
       scheduleGridPreviewUpdate();
     });

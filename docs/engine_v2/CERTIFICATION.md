@@ -570,3 +570,22 @@ and the V2 compiled Grid test is intentionally separate.
 No slippage, Bar Magnifier, lower-timeframe reconstruction, Scout WFA,
 Grid-WFA integration, V2 population DSR, or V1 runtime migration is certified
 by this registry.
+
+## Conditional Fast-metric certification (TZ-07-2)
+
+Both certified compiled execution families conditionally produce exact
+reference-authoritative Sharpe and SQN. All four position/bracket and all three
+signal-reversal completed-trade sites update the SQN Welford state once. The
+fixed output matrix preserves offsets 0..20 and appends `sharpe_ratio=21`,
+`sqn=22`, for 23 float64 columns. Disabled and undefined matrix values are
+NaN; row objects share one NaN sentinel and public results project them to
+`None`.
+
+The request flags are excluded from candidate order, semantic identity, plan
+identity, fingerprints, sampling, and trading behavior. The S06 certified full
+population remains 48,480 and retains semantic digest
+`fc55d174e835e7196ae5fcf21427d318dc364241f6b10560aa32545e6910a08f`
+and plan fingerprint
+`0f8d001c380df5ee95d34ca4e25910c674e20e9e8f34886a1bd2f1c261f019b2`.
+Two-objective Pareto acceleration and the unchanged quadratic 3+ objective
+fallback both apply to these metrics.

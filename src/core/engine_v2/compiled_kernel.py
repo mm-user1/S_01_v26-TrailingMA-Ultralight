@@ -58,7 +58,9 @@ OUTPUT_NO_CAPITAL_HALT = 17
 OUTPUT_MAX_REQUIRED_LEVERAGE = 18
 OUTPUT_MAX_NOTIONAL = 19
 OUTPUT_FLAGS = 20
-OUTPUT_COLUMN_COUNT = 21
+OUTPUT_SHARPE_RATIO = 21
+OUTPUT_SQN = 22
+OUTPUT_COLUMN_COUNT = 23
 
 GUARDRAIL_FLAG_REJECTED_FILL = 2
 GUARDRAIL_FLAG_INVALID_STOP_DISTANCE = 4
@@ -83,6 +85,7 @@ class StackedExecutionData:
     low: np.ndarray
     close: np.ndarray
     timestamp_ns: np.ndarray
+    month_ids: np.ndarray
     long_entries: np.ndarray
     short_entries: np.ndarray
     atr: np.ndarray
@@ -108,6 +111,7 @@ class StackedExecutionData:
             + self.low.nbytes
             + self.close.nbytes
             + self.timestamp_ns.nbytes
+            + self.month_ids.nbytes
         )
 
     @property
@@ -152,6 +156,9 @@ def evaluate_compiled_batch(
     params_batch: Sequence[Mapping[str, Any]],
     trade_start_idx: int,
     n_workers: int = 1,
+    compute_sharpe: bool = False,
+    compute_sqn: bool = False,
+    month_ids: np.ndarray | None = None,
 ) -> CompiledBatchOutput:
     """Evaluate one batch of candidates sharing the same ``ExecutionData``."""
 
@@ -161,6 +168,10 @@ def evaluate_compiled_batch(
         return CompiledBatchOutput(outputs=np.empty((0, OUTPUT_COLUMN_COUNT), dtype=np.float64))
 
     packed = _pack_config_arrays(profile, params_batch, trade_start_idx)
+    metric_month_ids = _validated_month_ids(
+        build_calendar_month_ids(data.timestamps) if compute_sharpe and month_ids is None else month_ids,
+        len(data.timestamps),
+    )
     outputs = np.empty((len(params_batch), OUTPUT_COLUMN_COUNT), dtype=np.float64)
     worker_count = _validated_worker_count(n_workers)
     previous_threads = numba.get_num_threads()
@@ -174,6 +185,7 @@ def evaluate_compiled_batch(
             np.asarray(data.low, dtype=np.float64),
             np.asarray(data.close, dtype=np.float64),
             _timestamps_ns(data.timestamps),
+            metric_month_ids,
             np.asarray(data.signals.long_entries, dtype=np.bool_),
             np.asarray(data.signals.short_entries, dtype=np.bool_),
             np.asarray(data.atr, dtype=np.float64),
@@ -204,6 +216,8 @@ def evaluate_compiled_batch(
             packed["boundary_none"],
             packed["report_margin"],
             packed["rounding_code"],
+            bool(compute_sharpe),
+            bool(compute_sqn),
             outputs,
         )
     finally:
@@ -215,6 +229,8 @@ def evaluate_compiled_batch(
 def build_stacked_execution_data(
     data_rows: Sequence[ExecutionData],
     data_index: Sequence[int],
+    *,
+    month_ids: np.ndarray | None = None,
 ) -> StackedExecutionData:
     """Build and validate a stacked compiled payload from execution-data rows."""
 
@@ -228,6 +244,7 @@ def build_stacked_execution_data(
     low_values = _contiguous_1d(first.low, "low", np.float64)
     close_values = _contiguous_1d(first.close, "close", np.float64)
     timestamp_ns = _timestamps_ns(first.timestamps)
+    metric_month_ids = _validated_month_ids(month_ids, len(timestamp_ns))
 
     long_rows: list[np.ndarray] = []
     short_rows: list[np.ndarray] = []
@@ -278,6 +295,7 @@ def build_stacked_execution_data(
         low=low_values,
         close=close_values,
         timestamp_ns=timestamp_ns,
+        month_ids=metric_month_ids,
         long_entries=np.ascontiguousarray(np.stack(long_rows, axis=0), dtype=np.bool_),
         short_entries=np.ascontiguousarray(np.stack(short_rows, axis=0), dtype=np.bool_),
         atr=np.ascontiguousarray(np.stack(atr_rows, axis=0), dtype=np.float64),
@@ -297,6 +315,8 @@ def evaluate_compiled_stacked_batch(
     trade_start_idx: int,
     n_workers: int = 1,
     packed_config_arrays: Mapping[str, np.ndarray] | None = None,
+    compute_sharpe: bool = False,
+    compute_sqn: bool = False,
 ) -> CompiledBatchOutput:
     """Evaluate one stacked compiled batch with per-candidate data row indices."""
 
@@ -339,6 +359,7 @@ def evaluate_compiled_stacked_batch(
             stacked_data.low,
             stacked_data.close,
             stacked_data.timestamp_ns,
+            stacked_data.month_ids,
             stacked_data.long_entries,
             stacked_data.short_entries,
             stacked_data.atr,
@@ -370,6 +391,8 @@ def evaluate_compiled_stacked_batch(
             packed["boundary_none"],
             packed["report_margin"],
             packed["rounding_code"],
+            bool(compute_sharpe),
+            bool(compute_sqn),
             outputs,
         )
     finally:
@@ -383,6 +406,31 @@ def _contiguous_1d(values: Any, name: str, dtype: Any) -> np.ndarray:
     if array.ndim != 1:
         raise ValueError(f"{name} must be a 1D array for stacked compiled execution.")
     return np.ascontiguousarray(array, dtype=dtype)
+
+
+def build_calendar_month_ids(values: Sequence[Any]) -> np.ndarray:
+    """Return contiguous UTC calendar-month ids for one execution dataset."""
+
+    index = pd.DatetimeIndex(values)
+    if index.hasnans:
+        raise ValueError("Compiled Grid V2 timestamps cannot contain NaT values.")
+    if index.tz is not None:
+        index = index.tz_convert("UTC")
+    return np.ascontiguousarray(
+        np.asarray(index.year * 12 + index.month, dtype=np.int32),
+        dtype=np.int32,
+    )
+
+
+def _validated_month_ids(values: Any, expected_length: int) -> np.ndarray:
+    if values is None:
+        return np.empty(0, dtype=np.int32)
+    array = _contiguous_1d(values, "month_ids", np.int32)
+    if array.size not in {0, int(expected_length)}:
+        raise ValueError(
+            "Compiled Grid V2 month_ids length must be zero or match the execution bars."
+        )
+    return array
 
 
 def _validated_worker_count(value: Any) -> int:
@@ -800,6 +848,8 @@ def _write_empty_result(outputs: np.ndarray, index: int, initial_capital: float)
     outputs[index, OUTPUT_MAX_REQUIRED_LEVERAGE] = 0.0
     outputs[index, OUTPUT_MAX_NOTIONAL] = 0.0
     outputs[index, OUTPUT_FLAGS] = 0.0
+    outputs[index, OUTPUT_SHARPE_RATIO] = math.nan
+    outputs[index, OUTPUT_SQN] = math.nan
 
 
 @_compiled_target
@@ -810,6 +860,7 @@ def _compiled_loop_one(
     low_values: np.ndarray,
     close_values: np.ndarray,
     timestamp_ns: np.ndarray,
+    month_ids: np.ndarray,
     long_signals: np.ndarray,
     short_signals: np.ndarray,
     atr_values: np.ndarray,
@@ -840,6 +891,8 @@ def _compiled_loop_one(
     boundary_none_values: np.ndarray,
     report_margin_values: np.ndarray,
     rounding_code_values: np.ndarray,
+    compute_sharpe: bool,
+    compute_sqn: bool,
     outputs: np.ndarray,
 ) -> None:
     n = close_values.shape[0]
@@ -907,6 +960,16 @@ def _compiled_loop_one(
     consecutive_losses = 0
     max_consecutive_losses = 0
 
+    current_month = -1
+    month_start_equity = 0.0
+    last_equity = initial_capital
+    monthly_count = 0
+    monthly_mean = 0.0
+    monthly_m2 = 0.0
+    sqn_count = 0
+    sqn_mean = 0.0
+    sqn_m2 = 0.0
+
     invalid_stop_distance_count = 0
     zero_size_entry_count = 0
     rejected_fill_count = 0
@@ -933,6 +996,11 @@ def _compiled_loop_one(
             net_pnl = gross_pnl - entry_commission - exit_commission
             balance += gross_pnl - exit_commission
             total_trades += 1
+            if compute_sqn:
+                sqn_count += 1
+                sqn_delta = net_pnl - sqn_mean
+                sqn_mean += sqn_delta / sqn_count
+                sqn_m2 += sqn_delta * (net_pnl - sqn_mean)
             if net_pnl > 0.0:
                 winning_trades += 1
                 gross_profit += net_pnl
@@ -1015,6 +1083,11 @@ def _compiled_loop_one(
             net_pnl = gross_pnl - entry_commission - exit_commission
             balance += gross_pnl - exit_commission
             total_trades += 1
+            if compute_sqn:
+                sqn_count += 1
+                sqn_delta = net_pnl - sqn_mean
+                sqn_mean += sqn_delta / sqn_count
+                sqn_m2 += sqn_delta * (net_pnl - sqn_mean)
             if net_pnl > 0.0:
                 winning_trades += 1
                 gross_profit += net_pnl
@@ -1071,6 +1144,11 @@ def _compiled_loop_one(
                     net_pnl = gross_pnl - entry_commission - exit_commission
                     balance += gross_pnl - exit_commission
                     total_trades += 1
+                    if compute_sqn:
+                        sqn_count += 1
+                        sqn_delta = net_pnl - sqn_mean
+                        sqn_mean += sqn_delta / sqn_count
+                        sqn_m2 += sqn_delta * (net_pnl - sqn_mean)
                     if net_pnl > 0.0:
                         winning_trades += 1
                         gross_profit += net_pnl
@@ -1125,6 +1203,11 @@ def _compiled_loop_one(
                 net_pnl = gross_pnl - entry_commission - exit_commission
                 balance += gross_pnl - exit_commission
                 total_trades += 1
+                if compute_sqn:
+                    sqn_count += 1
+                    sqn_delta = net_pnl - sqn_mean
+                    sqn_mean += sqn_delta / sqn_count
+                    sqn_m2 += sqn_delta * (net_pnl - sqn_mean)
                 if net_pnl > 0.0:
                     winning_trades += 1
                     gross_profit += net_pnl
@@ -1201,6 +1284,28 @@ def _compiled_loop_one(
                         pending_target = target
                     pending_size = order_size
 
+        if compute_sharpe:
+            unrealized = 0.0
+            if position > 0:
+                unrealized = (close - entry_price) * size
+            elif position < 0:
+                unrealized = (entry_price - close) * size
+            equity_value = balance + unrealized
+            last_equity = equity_value
+            month_key = month_ids[i]
+            if current_month < 0:
+                current_month = month_key
+                month_start_equity = equity_value
+            elif month_key != current_month:
+                if month_start_equity > 0.0:
+                    monthly_return = ((equity_value / month_start_equity) - 1.0) * 100.0
+                    monthly_count += 1
+                    monthly_delta = monthly_return - monthly_mean
+                    monthly_mean += monthly_delta / monthly_count
+                    monthly_m2 += monthly_delta * (monthly_return - monthly_mean)
+                current_month = month_key
+                month_start_equity = equity_value
+
         if balance >= running_peak:
             if i > last_drawdown_boundary + 1 and current_drawdown > max_drawdown:
                 max_drawdown = current_drawdown
@@ -1232,6 +1337,33 @@ def _compiled_loop_one(
     else:
         romad = net_profit_pct / abs(max_drawdown)
 
+    sharpe_ratio = math.nan
+    if compute_sharpe and total_trades > 0:
+        if month_start_equity > 0.0:
+            monthly_return = ((last_equity / month_start_equity) - 1.0) * 100.0
+            monthly_count += 1
+            monthly_delta = monthly_return - monthly_mean
+            monthly_mean += monthly_delta / monthly_count
+            monthly_m2 += monthly_delta * (monthly_return - monthly_mean)
+        if monthly_count >= 2:
+            monthly_variance = monthly_m2 / monthly_count
+            if monthly_variance > 0.0 and math.isfinite(monthly_variance):
+                sharpe_ratio = (monthly_mean - (0.02 * 100.0) / 12.0) / math.sqrt(
+                    monthly_variance
+                )
+                if not math.isfinite(sharpe_ratio):
+                    sharpe_ratio = math.nan
+
+    sqn = math.nan
+    if compute_sqn and sqn_count >= 30:
+        sqn_variance = sqn_m2 / (sqn_count - 1)
+        if sqn_variance > 0.0 and math.isfinite(sqn_variance):
+            sqn_std = math.sqrt(sqn_variance)
+            if sqn_std >= 1e-10:
+                sqn = math.sqrt(sqn_count) * sqn_mean / sqn_std
+                if not math.isfinite(sqn):
+                    sqn = math.nan
+
     outputs[candidate_index, OUTPUT_NET_PROFIT_PCT] = net_profit_pct
     outputs[candidate_index, OUTPUT_MAX_DRAWDOWN_PCT] = max_drawdown
     outputs[candidate_index, OUTPUT_TOTAL_TRADES] = total_trades
@@ -1253,6 +1385,8 @@ def _compiled_loop_one(
     outputs[candidate_index, OUTPUT_MAX_REQUIRED_LEVERAGE] = max_required_leverage
     outputs[candidate_index, OUTPUT_MAX_NOTIONAL] = max_notional
     outputs[candidate_index, OUTPUT_FLAGS] = flags
+    outputs[candidate_index, OUTPUT_SHARPE_RATIO] = sharpe_ratio
+    outputs[candidate_index, OUTPUT_SQN] = sqn
 
 
 def _batch_loop_impl(
@@ -1261,6 +1395,7 @@ def _batch_loop_impl(
     low_values: np.ndarray,
     close_values: np.ndarray,
     timestamp_ns: np.ndarray,
+    month_ids: np.ndarray,
     long_signals: np.ndarray,
     short_signals: np.ndarray,
     atr_values: np.ndarray,
@@ -1291,6 +1426,8 @@ def _batch_loop_impl(
     boundary_none_values: np.ndarray,
     report_margin_values: np.ndarray,
     rounding_code_values: np.ndarray,
+    compute_sharpe: bool,
+    compute_sqn: bool,
     outputs: np.ndarray,
 ) -> None:
     for index in numba.prange(outputs.shape[0]):
@@ -1301,6 +1438,7 @@ def _batch_loop_impl(
             low_values,
             close_values,
             timestamp_ns,
+            month_ids,
             long_signals,
             short_signals,
             atr_values,
@@ -1331,6 +1469,8 @@ def _batch_loop_impl(
             boundary_none_values,
             report_margin_values,
             rounding_code_values,
+            compute_sharpe,
+            compute_sqn,
             outputs,
         )
 
@@ -1341,6 +1481,7 @@ def _stacked_batch_loop_impl(
     low_values: np.ndarray,
     close_values: np.ndarray,
     timestamp_ns: np.ndarray,
+    month_ids: np.ndarray,
     long_entries: np.ndarray,
     short_entries: np.ndarray,
     atr_values: np.ndarray,
@@ -1372,6 +1513,8 @@ def _stacked_batch_loop_impl(
     boundary_none_values: np.ndarray,
     report_margin_values: np.ndarray,
     rounding_code_values: np.ndarray,
+    compute_sharpe: bool,
+    compute_sqn: bool,
     outputs: np.ndarray,
 ) -> None:
     for index in numba.prange(outputs.shape[0]):
@@ -1383,6 +1526,7 @@ def _stacked_batch_loop_impl(
             low_values,
             close_values,
             timestamp_ns,
+            month_ids,
             long_entries[row],
             short_entries[row],
             atr_values[row],
@@ -1413,6 +1557,8 @@ def _stacked_batch_loop_impl(
             boundary_none_values,
             report_margin_values,
             rounding_code_values,
+            compute_sharpe,
+            compute_sqn,
             outputs,
         )
 
@@ -1445,11 +1591,14 @@ __all__ = [
     "OUTPUT_PROFIT_FACTOR",
     "OUTPUT_REJECTED_FILL_COUNT",
     "OUTPUT_ROMAD",
+    "OUTPUT_SHARPE_RATIO",
+    "OUTPUT_SQN",
     "OUTPUT_TOTAL_TRADES",
     "OUTPUT_WINNING_TRADES",
     "OUTPUT_WIN_RATE_PCT",
     "OUTPUT_ZERO_SIZE_ENTRY_COUNT",
     "StackedExecutionData",
+    "build_calendar_month_ids",
     "build_stacked_execution_data",
     "compiled_batch_available",
     "compiled_unavailable_reason",

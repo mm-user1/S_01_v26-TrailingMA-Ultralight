@@ -6,6 +6,8 @@ import pandas as pd
 import pytest
 
 from core.grid_engine import (
+    GRID_SUPPORTED_FAST_OBJECTIVES,
+    GRID_V2_SUPPORTED_FAST_OBJECTIVES,
     GridSettings,
     FastMetricRequest,
     allocate_mode_budgets,
@@ -36,6 +38,12 @@ from core.optuna_engine import (
 from core.storage import load_study_from_db, save_grid_study_to_db
 from ui.server_services import _build_optimization_config
 from strategies.s03_reversal_v10 import fast_grid
+
+
+def test_grid_fast_objective_allowlists_include_conditional_sharpe_and_sqn():
+    for objective in ("sharpe_ratio", "sqn"):
+        assert objective in GRID_SUPPORTED_FAST_OBJECTIVES
+        assert objective in GRID_V2_SUPPORTED_FAST_OBJECTIVES
 
 
 def _grid_config(**overrides):
@@ -651,7 +659,7 @@ def test_grid_ranking_filters_nonfinite_objectives_and_preserves_empty_error():
         )
 
 
-def test_grid_selection_config_rejects_advanced_fast_and_composite_objectives(monkeypatch):
+def test_grid_selection_config_accepts_conditional_fast_metrics_and_rejects_composite(monkeypatch):
     import core.grid_engine as grid_engine
 
     monkeypatch.setattr(
@@ -661,8 +669,7 @@ def test_grid_selection_config_rejects_advanced_fast_and_composite_objectives(mo
     )
 
     for objective in ("sharpe_ratio", "sqn"):
-        with pytest.raises(ValueError, match="fast screening"):
-            validate_grid_config(_grid_config(grid_fast_objectives=[objective]))
+        validate_grid_config(_grid_config(grid_fast_objectives=[objective]))
 
     with pytest.raises(ValueError, match="Composite Score"):
         validate_grid_config(_grid_config(grid_fast_objectives=["composite_score"]))

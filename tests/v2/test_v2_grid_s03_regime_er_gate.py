@@ -346,6 +346,8 @@ def _assert_rows_equal(compiled_row, reference_row):
     _assert_float_equal(compiled_row.gross_profit, reference_row.gross_profit)
     _assert_float_equal(compiled_row.gross_loss, reference_row.gross_loss)
     _assert_float_equal(compiled_row.final_balance, reference_row.final_balance)
+    _assert_float_equal(compiled_row.sharpe_ratio, reference_row.sharpe_ratio)
+    _assert_float_equal(compiled_row.sqn, reference_row.sqn)
 
 
 @pytest.mark.skipif(JIT_DISABLED, reason="compiled Grid V2 parity requires Numba JIT")
@@ -387,6 +389,60 @@ def test_compiled_grid_v2_subset_matches_reference_backend(
     assert len(compiled.rows) == len(reference.rows) == len(indices)
     for compiled_row, reference_row in zip(compiled.rows, reference.rows):
         _assert_rows_equal(compiled_row, reference_row)
+
+
+@pytest.mark.skipif(JIT_DISABLED, reason="compiled Grid V2 parity requires Numba JIT")
+@pytest.mark.parametrize(
+    ("compute_sharpe", "compute_sqn"),
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+def test_signal_fast_metrics_are_request_gated_and_match_reference(
+    prepared_data,
+    hooks,
+    compute_sharpe,
+    compute_sqn,
+):
+    if not compiled_batch_available():
+        pytest.skip("Compiled Grid V2 unavailable in this process; rerun in a fresh JIT-on process")
+    df, trade_start_idx = prepared_data
+    common = dict(enabled_axes=("regimeErLength",), top_n=0)
+    base_params = merged_reference_params(REFERENCE_A)
+    compiled_plan = build_grid_v2_plan(
+        load_config(),
+        GridV2Settings(**common, prefer_compiled=True, compiled_workers=2),
+        base_params=base_params,
+    )
+    reference_plan = build_grid_v2_plan(
+        load_config(),
+        GridV2Settings(**common, prefer_compiled=False),
+        base_params=base_params,
+    )
+    indices = (0, 1, 2)
+
+    compiled = execute_grid_v2_candidates(
+        compiled_plan,
+        df,
+        trade_start_idx,
+        hooks,
+        indices,
+        compute_sharpe=compute_sharpe,
+        compute_sqn=compute_sqn,
+    )
+    reference = execute_grid_v2_candidates(
+        reference_plan,
+        df,
+        trade_start_idx,
+        hooks,
+        indices,
+        compute_sharpe=compute_sharpe,
+        compute_sqn=compute_sqn,
+    )
+
+    assert compiled.metadata["month_id_nbytes"] == (len(df) * 4 if compute_sharpe else 0)
+    for compiled_row, reference_row in zip(compiled.rows, reference.rows):
+        _assert_rows_equal(compiled_row, reference_row)
+        assert math.isfinite(compiled_row.sharpe_ratio) is compute_sharpe
+        assert math.isfinite(compiled_row.sqn) is compute_sqn
 
 
 def test_selected_candidates_match_public_v2_runner(prepared_data, hooks):
