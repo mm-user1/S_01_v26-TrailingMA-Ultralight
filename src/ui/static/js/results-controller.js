@@ -782,8 +782,11 @@ async function applyStudyPayload(data) {
   ResultsState.wfa = {
     optimizerMode: config.optimization_mode || 'optuna',
     postProcess: postProcessConfig,
+    periodUnit: configWfa.period_unit === 'months' ? 'months' : 'days',
     isPeriodDays: study.is_period_days ?? configWfa.is_period_days ?? config.is_period_days ?? null,
     oosPeriodDays: configWfa.oos_period_days ?? config.oos_period_days ?? null,
+    isPeriodMonths: configWfa.is_period_months ?? null,
+    oosPeriodMonths: configWfa.oos_period_months ?? null,
     storeTopNTrials: configWfa.store_top_n_trials ?? null,
     adaptiveMode: adaptiveModeRaw === undefined || adaptiveModeRaw === null
       ? null

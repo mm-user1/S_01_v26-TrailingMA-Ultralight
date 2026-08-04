@@ -662,6 +662,49 @@ def test_save_wfa_study_with_trials():
     assert study.get("stitched_oos_point_count") == 2
 
 
+def test_calendar_month_wfa_storage_uses_null_day_column_and_exact_config():
+    wf_result = _build_dummy_wfa_result()
+    wf_result.config = WFConfig(
+        strategy_id="s01_trailing_ma",
+        period_unit="months",
+        is_period_days=None,
+        oos_period_days=None,
+        is_period_months=2,
+        oos_period_months=1,
+    )
+    expected_boundaries = (
+        wf_result.windows[0].is_start,
+        wf_result.windows[0].is_end,
+        wf_result.windows[0].oos_start,
+        wf_result.windows[0].oos_end,
+    )
+    wfa_config = {
+        "period_unit": "months",
+        "is_period_months": 2,
+        "oos_period_months": 1,
+        "adaptive_mode": False,
+    }
+
+    study_id = save_wfa_study_to_db(
+        wf_result=wf_result,
+        config={"wfa": wfa_config},
+        csv_file_path="",
+        start_time=0.0,
+        score_config=None,
+    )
+    loaded = load_study_from_db(study_id)
+
+    assert loaded["study"]["is_period_days"] is None
+    assert loaded["study"]["config_json"]["wfa"] == wfa_config
+    window = loaded["windows"][0]
+    assert (
+        pd.Timestamp(window["is_start_ts"]),
+        pd.Timestamp(window["is_end_ts"]),
+        pd.Timestamp(window["oos_start_ts"]),
+        pd.Timestamp(window["oos_end_ts"]),
+    ) == expected_boundaries
+
+
 def test_save_wfa_grid_dsr_replay_fields_and_candidate_metrics():
     wf_result = _build_dummy_wfa_result()
     wf_result.strategy_id = "s03_reversal_v10"

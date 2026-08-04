@@ -1096,14 +1096,21 @@
 
               <div id="wfSettings" style="display: none; margin-top: 20px;">
                 <div class="form-group" style="margin-bottom: 12px;">
-                  <label style="min-width: 150px;">In-Sample (days):</label>
-                  <input type="number" id="wfIsPeriodDays" value="90" min="30" max="3650" style="width: 100px;" />
+                  <label>
+                    <input type="checkbox" id="wfCalendarMonths" onchange="toggleWfaCalendarMonths()" />
+                    Calendar Months
+                  </label>
+                </div>
+
+                <div class="form-group" style="margin-bottom: 12px;">
+                  <label id="wfIsPeriodLabel" style="min-width: 150px;">In-Sample (days):</label>
+                  <input type="number" id="wfIsPeriodDays" value="90" min="30" max="3650" data-month-max="120" style="width: 100px;" />
                   <span style="font-size: 12px; color: #666; margin-left: 10px;">(Optimization window length)</span>
                 </div>
 
                 <div class="form-group" style="margin-bottom: 12px;">
-                  <label style="min-width: 150px;">Out-of-Sample (days):</label>
-                  <input type="number" id="wfOosPeriodDays" value="30" min="15" max="3650" style="width: 100px;" />
+                  <label id="wfOosPeriodLabel" style="min-width: 150px;">Out-of-Sample (days):</label>
+                  <input type="number" id="wfOosPeriodDays" value="30" min="15" max="3650" data-month-max="120" style="width: 100px;" />
                   <span style="font-size: 12px; color: #666; margin-left: 10px;">(Testing window length)</span>
                 </div>
 

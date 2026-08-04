@@ -45,6 +45,10 @@ from core.post_process import (
     run_stress_test,
 )
 from core.testing import run_period_test_for_trials, select_oos_source_candidates
+from core.walkforward_engine import (
+    resolve_calendar_wfa_anchor,
+    validate_wfa_period_settings,
+)
 from core.storage import (
     delete_manual_test,
     delete_study,
@@ -426,6 +430,70 @@ def register_routes(app):
                 )
             except V2ValidationError as exc:
                 return _validation_error_response(exc)
+        else:
+            config_raw = data.get("config")
+            if not config_raw:
+                return jsonify({"error": "Missing optimization config."}), HTTPStatus.BAD_REQUEST
+
+            try:
+                config_payload = json.loads(config_raw)
+            except json.JSONDecodeError:
+                return jsonify({"error": "Invalid optimization config JSON."}), HTTPStatus.BAD_REQUEST
+
+        adaptive_raw = data.get("wf_adaptive_mode", False)
+        if isinstance(adaptive_raw, str):
+            adaptive_mode = adaptive_raw.strip().lower() in {"true", "1", "yes", "on"}
+        else:
+            adaptive_mode = bool(adaptive_raw)
+
+        try:
+            period_unit, is_period_months, oos_period_months = validate_wfa_period_settings(
+                data.get("wf_period_unit"),
+                is_period_months=data.get("wf_is_period_months"),
+                oos_period_months=data.get("wf_oos_period_months"),
+                adaptive_mode=adaptive_mode,
+            )
+            if period_unit == "months":
+                resolve_calendar_wfa_anchor(
+                    config_payload.get("fixed_params"),
+                    strategy_id=strategy_id,
+                )
+                is_period_days = None
+                oos_period_days = None
+            else:
+                try:
+                    is_period_days = int(data.get("wf_is_period_days", 90))
+                    oos_period_days = int(data.get("wf_oos_period_days", 30))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Invalid Walk-Forward parameters.") from exc
+                is_period_days = max(1, min(3650, is_period_days))
+                oos_period_days = max(1, min(3650, oos_period_days))
+        except V2ValidationError as exc:
+            return _validation_error_response(exc)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+
+        wfa_period_values = {"period_unit": period_unit}
+        if period_unit == "months":
+            wfa_period_values.update(
+                {
+                    "is_period_months": is_period_months,
+                    "oos_period_months": oos_period_months,
+                }
+            )
+            wf_config_period_values = {
+                **wfa_period_values,
+                "is_period_days": None,
+                "oos_period_days": None,
+            }
+        else:
+            wfa_period_values.update(
+                {
+                    "is_period_days": is_period_days,
+                    "oos_period_days": oos_period_days,
+                }
+            )
+            wf_config_period_values = dict(wfa_period_values)
 
         run_id = _resolve_request_run_id(data)
         _clear_cancelled_run(run_id)
@@ -453,16 +521,6 @@ def register_routes(app):
             return jsonify({"error": message}), HTTPStatus.BAD_REQUEST
         except OSError:
             return jsonify({"error": "Failed to access CSV file."}), HTTPStatus.BAD_REQUEST
-
-        if not strategy_context.is_v2:
-            config_raw = data.get("config")
-            if not config_raw:
-                return jsonify({"error": "Missing optimization config."}), HTTPStatus.BAD_REQUEST
-
-            try:
-                config_payload = json.loads(config_raw)
-            except json.JSONDecodeError:
-                return jsonify({"error": "Invalid optimization config JSON."}), HTTPStatus.BAD_REQUEST
 
         post_process_payload = config_payload.get("postProcess")
         if not isinstance(post_process_payload, dict):
@@ -703,21 +761,6 @@ def register_routes(app):
                 "slow_primary_objective": getattr(optimization_config, "grid_slow_primary_objective", None),
             }
 
-        try:
-            is_period_days = int(data.get("wf_is_period_days", 90))
-            oos_period_days = int(data.get("wf_oos_period_days", 30))
-        except (TypeError, ValueError):
-            return jsonify({"error": "Invalid Walk-Forward parameters."}), HTTPStatus.BAD_REQUEST
-
-        is_period_days = max(1, min(3650, is_period_days))
-        oos_period_days = max(1, min(3650, oos_period_days))
-
-        adaptive_raw = data.get("wf_adaptive_mode", False)
-        if isinstance(adaptive_raw, str):
-            adaptive_mode = adaptive_raw.strip().lower() in {"true", "1", "yes", "on"}
-        else:
-            adaptive_mode = bool(adaptive_raw)
-
         cooldown_enabled_raw = data.get("wf_cooldown_enabled", False)
         if isinstance(cooldown_enabled_raw, str):
             cooldown_enabled = cooldown_enabled_raw.strip().lower() in {"true", "1", "yes", "on"}
@@ -829,8 +872,7 @@ def register_routes(app):
             )
 
         wf_config = WFConfig(
-            is_period_days=is_period_days,
-            oos_period_days=oos_period_days,
+            **wf_config_period_values,
             warmup_bars=warmup_bars,
             strategy_id=strategy_id,
             post_process=post_process_config,
@@ -859,8 +901,7 @@ def register_routes(app):
         base_template["cooldown_days"] = cooldown_days
 
         base_template["wfa"] = {
-            "is_period_days": is_period_days,
-            "oos_period_days": oos_period_days,
+            **wfa_period_values,
             "store_top_n_trials": store_top_n_trials,
             "adaptive_mode": adaptive_mode,
             "max_oos_period_days": max_oos_period_days,
@@ -895,8 +936,7 @@ def register_routes(app):
                 "data_path": data_path,
                 "config": config_payload,
                 "wfa": {
-                    "is_period_days": is_period_days,
-                    "oos_period_days": oos_period_days,
+                    **wfa_period_values,
                     "store_top_n_trials": store_top_n_trials,
                     "adaptive_mode": adaptive_mode,
                     "max_oos_period_days": max_oos_period_days,
@@ -1017,8 +1057,7 @@ def register_routes(app):
                 "summary": response_payload.get("summary", {}),
                 "study_id": study_id,
                 "wfa": {
-                    "is_period_days": is_period_days,
-                    "oos_period_days": oos_period_days,
+                    **wfa_period_values,
                     "store_top_n_trials": store_top_n_trials,
                     "adaptive_mode": adaptive_mode,
                     "max_oos_period_days": max_oos_period_days,

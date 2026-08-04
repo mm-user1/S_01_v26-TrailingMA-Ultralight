@@ -189,7 +189,7 @@ project-root/
 | `backtest_engine.py` | Bar-by-bar trade simulation, position management, data preparation |
 | `optuna_engine.py` | Optuna optimization engine: single/multi-objective, constraints, samplers (TPE/Random/NSGA), pruning (single-objective only), Initial Search Coverage, trial deduplication, InMemoryJournalBackend, and database persistence |
 | `grid_engine.py` | Deterministic Grid optimizer: generic budget parsing, mode allocation, LHS sampling, ranking, validation orchestration, fast/slow refinement, storage handoff (`save_grid_study_to_db`, `build_grid_dsr_results`, `preview_grid_parameter_space`) |
-| `walkforward_engine.py` | Rolling walk-forward analysis with calendar-based IS/OOS windows, stitched OOS equity, annualized WFE, adaptive re-optimization triggers (CUSUM, drawdown, inactivity), adaptive cooldown, per-module top-N trial retention, database persistence |
+| `walkforward_engine.py` | Rolling walk-forward analysis with fixed day windows or complete calendar-month windows, stitched OOS equity, annualized WFE, day-only adaptive re-optimization triggers (CUSUM, drawdown, inactivity), adaptive cooldown, per-module top-N trial retention, database persistence |
 | `metrics.py` | Calculate BasicMetrics, AdvancedMetrics, and WFAMetrics (Sharpe, RoMaD, Profit Factor, SQN, Ulcer Index, Consistency R²) |
 | `analytics.py` | Portfolio equity aggregation: equal-weight curve merging, forward-fill alignment, annualized profit, max drawdown for aggregated curves |
 | `storage.py` | SQLite database operations: save/load studies, manage trials/windows/wfa_window_trials, multi-database management, study sets CRUD with color/sort_order, analytics group cache, queue state persistence |
@@ -228,7 +228,7 @@ Strategies auto-discovered by `strategies/__init__.py` if both files exist.
 - `server_routes_analytics.py` - Analytics page + WFA summary API endpoint
 
 **Frontend (JavaScript):**
-- `templates/index.html` - Start page: strategy configuration, optimizer mode (Optuna/Grid), coverage mode, trials log toggle, Grid preview, WFA settings (with adaptive cooldown), optimization launch, run queue
+- `templates/index.html` - Start page: strategy configuration, optimizer mode (Optuna/Grid), coverage mode, trials log toggle, Grid preview, fixed day/calendar-month WFA settings (with day-only adaptive cooldown), optimization launch, run queue
 - `templates/results.html` - Results page: studies browser, trials/windows display, trade downloads
 - `templates/analytics.html` - Analytics page: WFA research, multi-study comparison, filtering
 - `static/js/main.js` - Start page logic and form handling
@@ -344,6 +344,7 @@ SQLite database stored in `src/storage/` directory. Multiple `.db` files support
 - Unique constraint: `study_name`
 - Fields: strategy_id, strategy_version, optimization_mode (`'optuna'` / `'grid'` / `'wfa'`), status, trial counts, best value, filters applied, configuration JSON, CSV file path, timestamps
 - **Adaptive WFA fields:** adaptive_mode, max_oos_period_days, min_oos_trades, check_interval_trades, cusum_threshold, dd_threshold_multiplier, inactivity_multiplier, cooldown_enabled, cooldown_days
+- **Fixed WFA period contract:** missing unit means the unchanged day mode. Calendar-month mode stores `period_unit`, `is_period_months`, and `oos_period_months` in `config_json.wfa`, while the legacy `is_period_days` SQL column remains `NULL`; no approximate day value or schema migration is used.
 - **Stitched OOS fields:** stitched_oos_equity_curve, stitched_oos_timestamps_json, stitched_oos_window_ids_json, stitched_oos_net_profit_pct, stitched_oos_max_drawdown_pct, stitched_oos_total_trades, stitched_oos_winning_trades, stitched_oos_win_rate
 - **Window aggregate fields:** profitable_windows, total_windows, median_window_profit, median_window_wr, worst_window_profit, worst_window_dd
 

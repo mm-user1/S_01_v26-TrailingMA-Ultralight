@@ -268,13 +268,6 @@ def register_routes(app):
             return "Fixed"
         return "Unknown"
 
-    def _extract_oos_period_days(config_json_value: Any) -> Optional[int]:
-        config_payload = _parse_json_dict(config_json_value)
-        wfa_payload = config_payload.get("wfa")
-        if not isinstance(wfa_payload, dict):
-            return None
-        return _safe_int(wfa_payload.get("oos_period_days"))
-
     def _json_error(message: str, status: HTTPStatus) -> object:
         return jsonify({"error": message}), status
 
@@ -809,11 +802,19 @@ def register_routes(app):
                 wfa_mode = _format_wfa_mode(row_dict.get("adaptive_mode"))
             wfa_mode_values.add(wfa_mode)
 
+            period_unit = "months" if wfa_config.get("period_unit") == "months" else "days"
             is_period_days = _safe_int(row_dict.get("is_period_days"))
+            if is_period_days is None:
+                is_period_days = _safe_int(wfa_config.get("is_period_days"))
             oos_period_days = _safe_int(wfa_config.get("oos_period_days"))
-            if oos_period_days is None:
-                oos_period_days = _extract_oos_period_days(row_dict.get("config_json"))
-            if is_period_days is None and oos_period_days is None:
+            is_period_months = _safe_int(wfa_config.get("is_period_months"))
+            oos_period_months = _safe_int(wfa_config.get("oos_period_months"))
+            if period_unit == "months":
+                is_oos = (
+                    f"{is_period_months if is_period_months is not None else '?'}m/"
+                    f"{oos_period_months if oos_period_months is not None else '?'}m"
+                )
+            elif is_period_days is None and oos_period_days is None:
                 is_oos = "N/A"
             else:
                 is_oos = (
@@ -1028,12 +1029,11 @@ def register_routes(app):
                         "score_min_threshold": _safe_float(score_config.get("min_score_threshold")),
                     },
                     "wfa_settings": {
-                        "is_period_days": (
-                            is_period_days
-                            if is_period_days is not None
-                            else _safe_int(wfa_config.get("is_period_days"))
-                        ),
+                        "period_unit": period_unit,
+                        "is_period_days": is_period_days,
                         "oos_period_days": oos_period_days,
+                        "is_period_months": is_period_months,
+                        "oos_period_months": oos_period_months,
                         "adaptive_mode": adaptive_mode_bool,
                         "cooldown_enabled": (
                             _safe_bool(row_dict.get("cooldown_enabled"))

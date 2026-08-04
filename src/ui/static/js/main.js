@@ -382,7 +382,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const previewTriggerIds = [
       'dateFilter', 'startDate', 'endDate',
-      'enableWF', 'enableAdaptiveWF', 'wfIsPeriodDays', 'wfOosPeriodDays',
+      'enableWF', 'enableAdaptiveWF', 'wfCalendarMonths', 'wfIsPeriodDays', 'wfOosPeriodDays',
       'enablePostProcess', 'ftPeriodDays',
       'enableOosTest', 'oosPeriodDays'
     ];

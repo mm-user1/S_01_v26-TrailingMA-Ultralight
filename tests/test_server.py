@@ -67,6 +67,7 @@ def test_grid_start_page_label_and_marker_are_compact():
     results_tables_js = (repo_root / "src" / "ui" / "static" / "js" / "results-tables.js").read_text(encoding="utf-8")
     analytics_js = (repo_root / "src" / "ui" / "static" / "js" / "analytics.js").read_text(encoding="utf-8")
     queue_js = (repo_root / "src" / "ui" / "static" / "js" / "queue.js").read_text(encoding="utf-8")
+    run_routes_py = (repo_root / "src" / "ui" / "server_routes_run.py").read_text(encoding="utf-8")
 
     assert "Grid v1 is supported only for S03 Reversal v10." not in ui_handlers_js
     assert "No fast Grid backend is available." in ui_handlers_js
@@ -108,6 +109,23 @@ def test_grid_start_page_label_and_marker_are_compact():
     assert "grid_fast_objectives" in ui_handlers_js
     assert "applyQueueGridConfig" in queue_js
     assert "grid_slow_refinement_enabled" in queue_js
+    assert 'id="wfCalendarMonths"' in index_html
+    assert 'id="wfIsPeriodLabel"' in index_html
+    assert 'id="wfOosPeriodLabel"' in index_html
+    assert "function syncWfaModeUi()" in ui_handlers_js
+    assert "isPeriodMonths" in ui_handlers_js
+    assert "wf_is_period_months" in ui_handlers_js
+    assert 'id="wfa-is-period-key"' in results_html
+    assert 'id="wfa-oos-period-key"' in results_html
+    assert "isPeriodMonths" in results_tables_js
+    assert "IS (${periodUnit})" in analytics_js
+    assert "appendQueueWfaPeriodFields" in queue_js
+    assert "WFA-F'} ${facts.compact}" in queue_js
+    assert run_routes_py.count("**wfa_period_values") == 4
+    wfa_queue_load = queue_js[queue_js.index("const isWfaMode = item.mode === 'wfa'"):]
+    assert wfa_queue_load.index("setCheckboxValue('wfCalendarMonths'") < wfa_queue_load.index(
+        "setInputValue(\n      'wfIsPeriodDays'"
+    )
     assert "grid_v2_planning_policy" in ui_handlers_js
     assert "const sameOrderedBlocks = blockNames.length === existingBlockNames.length" in ui_handlers_js
     assert "if (sameOrderedBlocks)" in ui_handlers_js
@@ -1287,6 +1305,163 @@ def test_valid_v2_and_v1_walkforward_retain_existing_post_profile_path(
     )
     assert response.status_code == 400
     assert response.get_json() == {"error": "CSV path is required."}
+
+
+@pytest.mark.parametrize(
+    ("period_fields", "fixed_params", "message"),
+    [
+        (
+            {"wf_period_unit": "months", "wf_is_period_months": "2", "wf_oos_period_months": "1", "wf_adaptive_mode": "true"},
+            {"dateFilter": True, "start": "2025-10-01", "end": "2026-08-01"},
+            "Adaptive",
+        ),
+        (
+            {"wf_period_unit": "months", "wf_is_period_months": "2", "wf_oos_period_months": "1"},
+            {"dateFilter": False, "start": "2025-10-01", "end": "2026-08-01"},
+            "Date Filter",
+        ),
+        (
+            {"wf_period_unit": "months", "wf_is_period_months": "2", "wf_oos_period_months": "1"},
+            {"dateFilter": True, "start": "2025-09-28", "end": "2026-08-01"},
+            "first calendar day",
+        ),
+        (
+            {"wf_period_unit": "months", "wf_is_period_months": "1.5", "wf_oos_period_months": "1"},
+            {"dateFilter": True, "start": "2025-10-01", "end": "2026-08-01"},
+            "whole number",
+        ),
+        (
+            {"wf_period_unit": "weeks"},
+            {"dateFilter": True, "start": "2025-10-01", "end": "2026-08-01"},
+            "days.*months",
+        ),
+    ],
+)
+def test_wfa_month_request_validation_precedes_csv_and_config_work(
+    client, monkeypatch, period_fields, fixed_params, message
+):
+    from ui import server_routes_run
+
+    monkeypatch.setattr(
+        server_routes_run,
+        "_resolve_csv_path",
+        lambda _raw: pytest.fail("CSV resolution must not start"),
+    )
+    monkeypatch.setattr(
+        server_routes_run,
+        "_build_optimization_config",
+        lambda *_args, **_kwargs: pytest.fail("optimization config must not be built"),
+    )
+    payload = _build_minimal_optuna_payload()
+    payload["fixed_params"] = fixed_params
+
+    response = client.post(
+        "/api/walkforward",
+        data={
+            "strategy": "s01_trailing_ma",
+            "csvPath": "unused.csv",
+            "config": json.dumps(payload),
+            **period_fields,
+        },
+    )
+
+    assert response.status_code == 400
+    assert re.search(message, response.get_json()["error"])
+
+
+@pytest.mark.parametrize(
+    ("strategy_id", "is_v2"),
+    [("s01_trailing_ma", False), ("s03_reversal_v11_regime_er_b2", True)],
+)
+def test_wfa_month_request_uses_authoritative_month_fields(
+    monkeypatch, client, tmp_path, strategy_id, is_v2
+):
+    from core import walkforward_engine
+    from core.engine_v2.runtime_contract import normalize_v2_runtime_field_value
+    from ui import server_routes_run
+
+    csv_path = tmp_path / "calendar_wfa.csv"
+    csv_path.write_text("unused", encoding="utf-8")
+    df = pd.DataFrame(
+        {"Open": 1.0, "High": 1.0, "Low": 1.0, "Close": 1.0, "Volume": 1.0},
+        index=pd.date_range("2025-08-01", "2026-08-01", freq="h", tz="UTC"),
+    )
+    captured = {}
+
+    class DummyWalkForwardEngine:
+        def __init__(self, config, base_template, _optuna_settings, csv_file_path=None):
+            captured["config"] = config
+            captured["base_template"] = base_template
+
+        def run_wf_optimization(self, routed_df):
+            config = captured["config"]
+            fixed = captured["base_template"]["fixed_params"]
+            requested_end = normalize_v2_runtime_field_value("end", fixed["end"])
+            windows = walkforward_engine.build_calendar_month_windows(
+                routed_df.index,
+                fixed["start"],
+                pd.Timestamp(requested_end),
+                config.is_period_months,
+                config.oos_period_months,
+            )
+            captured["windows"] = windows
+            stitched = SimpleNamespace(
+                final_net_profit_pct=0.0,
+                max_drawdown_pct=0.0,
+                total_trades=0,
+                wfe=0.0,
+                oos_win_rate=0.0,
+            )
+            return SimpleNamespace(total_windows=len(windows), stitched_oos=stitched), "month-study"
+
+    monkeypatch.setattr(server_routes_run, "_resolve_csv_path", lambda _raw: csv_path)
+    monkeypatch.setattr(server_routes_run, "load_data", lambda _path: df)
+    monkeypatch.setattr(walkforward_engine, "WalkForwardEngine", DummyWalkForwardEngine)
+    if is_v2:
+        payload = _s03_regime_er_grid_preview_payload(
+            optimization_mode="optuna",
+            objectives=["net_profit_pct"],
+            primary_objective="net_profit_pct",
+        )
+        payload["fixed_params"].update(
+            {"dateFilter": True, "start": "2025-10-01", "end": "2026-08-01"}
+        )
+    else:
+        payload = _build_minimal_optuna_payload()
+        payload["fixed_params"] = {
+            "dateFilter": True,
+            "start": "2025-10-01",
+            "end": "2026-08-01",
+        }
+
+    response = client.post(
+        "/api/walkforward",
+        data={
+            "strategy": strategy_id,
+            "csvPath": str(csv_path),
+            "warmupBars": "1000",
+            "config": json.dumps(payload),
+            "wf_period_unit": "months",
+            "wf_is_period_months": "2",
+            "wf_oos_period_months": "1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["summary"]["total_windows"] == 8
+    assert captured["config"].is_period_days is None
+    assert captured["config"].oos_period_days is None
+    assert captured["base_template"]["wfa"]["period_unit"] == "months"
+    assert captured["base_template"]["wfa"]["is_period_months"] == 2
+    assert captured["base_template"]["wfa"]["oos_period_months"] == 1
+    assert "is_period_days" not in captured["base_template"]["wfa"]
+    assert "oos_period_days" not in captured["base_template"]["wfa"]
+    state_wfa = client.get("/api/optimization/status").get_json()["wfa"]
+    assert state_wfa["period_unit"] == "months"
+    assert state_wfa["is_period_months"] == 2
+    assert state_wfa["oos_period_months"] == 1
+    assert "is_period_days" not in state_wfa
+    assert "oos_period_days" not in state_wfa
 
 
 def test_config_api_unexpected_failure_uses_app_logger(monkeypatch, client, caplog):
@@ -5240,6 +5415,47 @@ def test_analytics_summary_includes_study_name_and_timestamps(client):
         assert isinstance(second["completed_at_epoch"], int)
         assert second["completed_at_epoch"] > 0
         assert second["wfa_settings"]["run_time_seconds"] is None
+
+
+def test_analytics_summary_distinguishes_calendar_month_periods(client):
+    with _temporary_active_db(f"analytics_month_periods_{uuid.uuid4().hex[:8]}"):
+        _insert_analytics_study(
+            study_id="wfa_months",
+            study_name="Calendar Months",
+            adaptive_mode=0,
+            is_period_days=None,
+            config_json={
+                "wfa": {
+                    "period_unit": "months",
+                    "is_period_months": 2,
+                    "oos_period_months": 1,
+                    "adaptive_mode": False,
+                }
+            },
+        )
+        _insert_analytics_study(
+            study_id="wfa_days",
+            study_name="Calendar Days",
+            adaptive_mode=0,
+            is_period_days=2,
+            config_json={"wfa": {"is_period_days": 2, "oos_period_days": 1}},
+        )
+
+        response = client.get("/api/analytics/summary")
+        assert response.status_code == 200
+        payload = response.get_json()
+        by_id = {study["study_id"]: study for study in payload["studies"]}
+
+        assert by_id["wfa_months"]["is_oos"] == "2m/1m"
+        month_settings = by_id["wfa_months"]["wfa_settings"]
+        assert month_settings["period_unit"] == "months"
+        assert month_settings["is_period_days"] is None
+        assert month_settings["oos_period_days"] is None
+        assert month_settings["is_period_months"] == 2
+        assert month_settings["oos_period_months"] == 1
+        assert by_id["wfa_days"]["is_oos"] == "2/1"
+        assert by_id["wfa_days"]["wfa_settings"]["period_unit"] == "days"
+        assert {"2m/1m", "2/1"}.issubset(payload["research_info"]["is_oos_periods"])
 
 
 def test_analytics_study_equity_endpoint_returns_lazy_curve_payload(client):

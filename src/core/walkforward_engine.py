@@ -37,14 +37,98 @@ from .post_process import (
 
 logger = logging.getLogger(__name__)
 
+WFA_PERIOD_UNITS = frozenset({"days", "months"})
+MAX_WFA_PERIOD_MONTHS = 120
+
+
+def normalize_wfa_period_unit(value: Any) -> str:
+    """Return the supported WFA period unit, preserving the legacy default."""
+
+    unit = "days" if value is None else str(value).strip().lower()
+    if unit not in WFA_PERIOD_UNITS:
+        raise ValueError("Walk-Forward period unit must be 'days' or 'months'.")
+    return unit
+
+
+def _normalize_wfa_month_count(value: Any, label: str) -> int:
+    if isinstance(value, bool):
+        valid = False
+    elif isinstance(value, int):
+        valid = True
+    elif isinstance(value, str):
+        stripped = value.strip()
+        valid = bool(stripped) and stripped.isascii() and stripped.isdecimal()
+        if valid:
+            value = int(stripped)
+    else:
+        valid = False
+    if not valid or not 1 <= value <= MAX_WFA_PERIOD_MONTHS:
+        raise ValueError(
+            f"{label} must be a whole number from 1 to {MAX_WFA_PERIOD_MONTHS}."
+        )
+    return int(value)
+
+
+def validate_wfa_period_settings(
+    period_unit: Any,
+    *,
+    is_period_months: Any = None,
+    oos_period_months: Any = None,
+    adaptive_mode: bool = False,
+) -> Tuple[str, Optional[int], Optional[int]]:
+    """Normalize the unit and authoritative month values for WFA boundaries."""
+
+    unit = normalize_wfa_period_unit(period_unit)
+    if unit == "days":
+        return unit, None, None
+    if adaptive_mode:
+        raise ValueError("Calendar Months cannot be used with Adaptive WFA.")
+    return (
+        unit,
+        _normalize_wfa_month_count(is_period_months, "In-Sample months"),
+        _normalize_wfa_month_count(oos_period_months, "Out-of-Sample months"),
+    )
+
+
+def resolve_calendar_wfa_anchor(
+    fixed_params: Any,
+    *,
+    strategy_id: str = "<unknown strategy>",
+) -> pd.Timestamp:
+    """Resolve the requested, canonical first-of-month WFA anchor."""
+
+    if not isinstance(fixed_params, dict):
+        raise ValueError("Calendar Months requires fixed runtime parameters.")
+    date_filter = normalize_v2_runtime_field_value(
+        "dateFilter",
+        fixed_params.get("dateFilter", False),
+        strategy_id=strategy_id,
+        path="fixed_params.dateFilter",
+    )
+    if not date_filter:
+        raise ValueError("Calendar Months requires Date Filter to be enabled.")
+    requested_start = fixed_params.get("start")
+    if requested_start in (None, ""):
+        raise ValueError("Calendar Months requires a requested Start timestamp.")
+    canonical_start = normalize_v2_runtime_field_value(
+        "start",
+        requested_start,
+        strategy_id=strategy_id,
+        path="fixed_params.start",
+    )
+    anchor = pd.Timestamp(canonical_start).normalize()
+    if anchor.day != 1:
+        raise ValueError("Calendar Months requires Start on the first calendar day of a month.")
+    return anchor
+
 
 @dataclass
 class WFConfig:
     """Walk-Forward Analysis Configuration"""
 
     # Window sizing (calendar-based)
-    is_period_days: int = 180
-    oos_period_days: int = 60
+    is_period_days: Optional[int] = 180
+    oos_period_days: Optional[int] = 60
 
     # Strategy and warmup
     strategy_id: str = ""
@@ -65,6 +149,27 @@ class WFConfig:
     cooldown_enabled: bool = False
     cooldown_days: int = 15
 
+    # Optional fixed calendar-month mode (appended for positional compatibility)
+    period_unit: str = "days"
+    is_period_months: Optional[int] = None
+    oos_period_months: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        unit, is_months, oos_months = validate_wfa_period_settings(
+            self.period_unit,
+            is_period_months=self.is_period_months,
+            oos_period_months=self.oos_period_months,
+            adaptive_mode=self.adaptive_mode,
+        )
+        self.period_unit = unit
+        if unit == "months":
+            if self.is_period_days is not None or self.oos_period_days is not None:
+                raise ValueError("Calendar Months requires day period fields to be omitted.")
+            self.is_period_months = is_months
+            self.oos_period_months = oos_months
+        elif self.is_period_months is not None or self.oos_period_months is not None:
+            raise ValueError("Day WFA requires month period fields to be omitted.")
+
 
 @dataclass
 class WindowSplit:
@@ -75,6 +180,115 @@ class WindowSplit:
     is_end: pd.Timestamp
     oos_start: pd.Timestamp
     oos_end: pd.Timestamp
+
+
+def build_calendar_month_windows(
+    data_index: pd.DatetimeIndex,
+    requested_start: Any,
+    inclusive_end: pd.Timestamp,
+    is_period_months: Any,
+    oos_period_months: Any,
+) -> List[WindowSplit]:
+    """Build fixed WFA windows from logical UTC calendar-month boundaries."""
+
+    _, is_months, oos_months = validate_wfa_period_settings(
+        "months",
+        is_period_months=is_period_months,
+        oos_period_months=oos_period_months,
+    )
+    if len(data_index) == 0:
+        raise ValueError("Input dataframe is empty.")
+
+    canonical_start = normalize_v2_runtime_field_value("start", requested_start)
+    if canonical_start is None:
+        raise ValueError("Calendar Months requires a requested Start timestamp.")
+    anchor = pd.Timestamp(canonical_start).normalize()
+    if anchor.day != 1:
+        raise ValueError("Calendar Months requires Start on the first calendar day of a month.")
+
+    end = pd.Timestamp(inclusive_end)
+    if end.tzinfo is None:
+        end = end.tz_localize("UTC")
+    else:
+        end = end.tz_convert("UTC")
+    last_bar = pd.Timestamp(data_index[-1])
+    if last_bar.tzinfo is None:
+        last_bar = last_bar.tz_localize("UTC")
+    else:
+        last_bar = last_bar.tz_convert("UTC")
+    effective_end = min(end, last_bar)
+    trading_end_exclusive = effective_end.normalize() + pd.Timedelta(days=1)
+
+    print("Creating calendar-month walk-forward windows:")
+    print(f"  IS Period: {is_months} months")
+    print(f"  OOS Period: {oos_months} months")
+    print(f"  Requested Start: {anchor}")
+    print(f"  Effective End: {effective_end}")
+
+    windows: List[WindowSplit] = []
+    window_index = 0
+    while True:
+        is_start_boundary = anchor + pd.DateOffset(months=window_index * oos_months)
+        oos_start_boundary = is_start_boundary + pd.DateOffset(months=is_months)
+        oos_end_boundary = oos_start_boundary + pd.DateOffset(months=oos_months)
+        window_id = window_index + 1
+
+        if oos_end_boundary > trading_end_exclusive:
+            print(
+                f"  Stopping: Window {window_id} complete OOS end "
+                f"({oos_end_boundary.date()}) exceeds effective inclusive range."
+            )
+            break
+
+        is_start_idx = data_index.searchsorted(is_start_boundary, side="left")
+        is_end_idx = data_index.searchsorted(oos_start_boundary, side="left") - 1
+        oos_start_idx = data_index.searchsorted(oos_start_boundary, side="left")
+        if effective_end < oos_end_boundary:
+            oos_end_idx = data_index.searchsorted(effective_end, side="right") - 1
+        else:
+            oos_end_idx = data_index.searchsorted(oos_end_boundary, side="left") - 1
+
+        if is_start_idx >= len(data_index) or is_end_idx < is_start_idx:
+            print(f"  Stopping: Window {window_id} IS calendar slice contains no bars.")
+            break
+        if oos_start_idx >= len(data_index) or oos_end_idx < oos_start_idx:
+            print(f"  Stopping: Window {window_id} OOS calendar slice contains no bars.")
+            break
+
+        is_bar_count = is_end_idx - is_start_idx + 1
+        oos_bar_count = oos_end_idx - oos_start_idx + 1
+        min_bars = 100
+        if is_bar_count < min_bars:
+            print(
+                f"  Warning: Window {window_id} IS has only {is_bar_count} bars "
+                f"(recommended minimum: {min_bars})"
+            )
+        if oos_bar_count < min_bars:
+            print(
+                f"  Warning: Window {window_id} OOS has only {oos_bar_count} bars "
+                f"(recommended minimum: {min_bars})"
+            )
+
+        window = WindowSplit(
+            window_id=window_id,
+            is_start=data_index[is_start_idx],
+            is_end=data_index[is_end_idx],
+            oos_start=data_index[oos_start_idx],
+            oos_end=data_index[oos_end_idx],
+        )
+        windows.append(window)
+        print(f"  Window {window_id}:")
+        print(f"    IS:  {window.is_start} to {window.is_end} ({is_bar_count} bars)")
+        print(f"    OOS: {window.oos_start} to {window.oos_end} ({oos_bar_count} bars)")
+        window_index += 1
+
+    if len(windows) < 2:
+        raise ValueError(
+            f"Configuration produces only {len(windows)} complete window(s) "
+            f"for IS={is_months}m, OOS={oos_months}m. WFA requires at least 2 windows."
+        )
+    print(f"Created {len(windows)} calendar-month windows successfully")
+    return windows
 
 
 @dataclass
@@ -338,6 +552,20 @@ class WalkForwardEngine:
 
         All window boundaries are aligned to 00:00 day start to match TradingView behavior.
         """
+        if self.config.period_unit == "months":
+            fixed_params = self.base_config_template.get("fixed_params", {})
+            requested_start = resolve_calendar_wfa_anchor(
+                fixed_params,
+                strategy_id=self.config.strategy_id,
+            )
+            return build_calendar_month_windows(
+                df.index,
+                requested_start,
+                trading_end,
+                self.config.is_period_months,
+                self.config.oos_period_months,
+            )
+
         if self.config.is_period_days <= 0 or self.config.oos_period_days <= 0:
             raise ValueError("IS and OOS periods must be positive")
 
@@ -2436,7 +2664,10 @@ class WalkForwardEngine:
         if windows:
             avg_is_profit = sum(w.is_net_profit_pct for w in windows) / len(windows)
             days_per_year = 365.0
-            is_annual_factor = days_per_year / self.config.is_period_days
+            if self.config.period_unit == "months":
+                is_annual_factor = 12.0 / self.config.is_period_months
+            else:
+                is_annual_factor = days_per_year / self.config.is_period_days
 
             annualized_is = avg_is_profit * is_annual_factor
             if self.config.adaptive_mode:
@@ -2456,7 +2687,10 @@ class WalkForwardEngine:
                     annualized_oos = 0.0
             else:
                 avg_oos_profit = sum(w.oos_net_profit_pct for w in windows) / len(windows)
-                oos_annual_factor = days_per_year / self.config.oos_period_days
+                if self.config.period_unit == "months":
+                    oos_annual_factor = 12.0 / self.config.oos_period_months
+                else:
+                    oos_annual_factor = days_per_year / self.config.oos_period_days
                 annualized_oos = avg_oos_profit * oos_annual_factor
 
             if annualized_is != 0:

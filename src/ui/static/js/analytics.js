@@ -1,3 +1,16 @@
+function resolveAnalyticsWfaPeriods(wfaSettings = {}) {
+  const periodUnit = wfaSettings.period_unit === 'months' ? 'months' : 'days';
+  return {
+    periodUnit,
+    isPeriod: periodUnit === 'months'
+      ? wfaSettings.is_period_months
+      : wfaSettings.is_period_days,
+    oosPeriod: periodUnit === 'months'
+      ? wfaSettings.oos_period_months
+      : wfaSettings.oos_period_days,
+  };
+}
+
 (function () {
   const DEFAULT_SORT_STATE = {
     sortColumn: null,
@@ -1416,18 +1429,19 @@
     const cooldownEnabled = cooldownEnabledRaw === null || cooldownEnabledRaw === undefined
       ? null
       : Boolean(cooldownEnabledRaw);
+    const {periodUnit, isPeriod, oosPeriod} = resolveAnalyticsWfaPeriods(wfaSettings);
     const wfaRows = [
       {
-        key: 'IS (days)',
-        val: toFiniteNumber(wfaSettings.is_period_days) === null
+        key: `IS (${periodUnit})`,
+        val: toFiniteNumber(isPeriod) === null
           ? MISSING_TEXT
-          : String(Math.max(0, Math.round(Number(wfaSettings.is_period_days)))),
+          : String(Math.max(0, Math.round(Number(isPeriod)))),
       },
       {
-        key: 'OOS (days)',
-        val: toFiniteNumber(wfaSettings.oos_period_days) === null
+        key: `OOS (${periodUnit})`,
+        val: toFiniteNumber(oosPeriod) === null
           ? MISSING_TEXT
-          : String(Math.max(0, Math.round(Number(wfaSettings.oos_period_days)))),
+          : String(Math.max(0, Math.round(Number(oosPeriod)))),
       },
       { key: 'Adaptive', val: adaptiveMode === null ? MISSING_TEXT : (adaptiveMode ? 'On' : 'Off') },
     ];

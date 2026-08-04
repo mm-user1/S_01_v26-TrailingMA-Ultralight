@@ -515,72 +515,117 @@ async function refreshOptimizationStateFromServer() {
   return null;
 }
 
-function toggleWFSettings() {
+const wfaPeriodValueCache = {
+  days: { is: '90', oos: '30' },
+  months: { is: '2', oos: '1' }
+};
+let renderedWfaPeriodUnit = null;
+
+function syncWfaModeUi() {
   const wfToggle = document.getElementById('enableWF');
   const wfSettings = document.getElementById('wfSettings');
   const adaptiveToggle = document.getElementById('enableAdaptiveWF');
-  if (!wfToggle || !wfSettings) {
+  const calendarToggle = document.getElementById('wfCalendarMonths');
+  const adaptiveSettings = document.getElementById('adaptiveWFSettings');
+  const isInput = document.getElementById('wfIsPeriodDays');
+  const oosInput = document.getElementById('wfOosPeriodDays');
+  const isLabel = document.getElementById('wfIsPeriodLabel');
+  const oosLabel = document.getElementById('wfOosPeriodLabel');
+  const cooldownToggle = document.getElementById('wfCooldownEnabled');
+  const cooldownDaysInput = document.getElementById('wfCooldownDays');
+  if (!wfToggle || !wfSettings || !adaptiveToggle || !isInput || !oosInput) {
     return;
   }
-  if (wfToggle.disabled) {
-    wfSettings.style.display = 'none';
-    if (adaptiveToggle) {
-      adaptiveToggle.disabled = true;
-      adaptiveToggle.checked = false;
-    }
-    toggleAdaptiveWFSettings();
-    if (typeof syncQueueAutoCreateSetUi === 'function') {
-      syncQueueAutoCreateSetUi();
-    }
-    return;
+
+  const periodUnit = calendarToggle && calendarToggle.checked ? 'months' : 'days';
+  if (renderedWfaPeriodUnit === null) {
+    wfaPeriodValueCache.days = { is: isInput.value, oos: oosInput.value };
+  } else if (renderedWfaPeriodUnit !== periodUnit) {
+    wfaPeriodValueCache[renderedWfaPeriodUnit] = { is: isInput.value, oos: oosInput.value };
+    isInput.value = wfaPeriodValueCache[periodUnit].is;
+    oosInput.value = wfaPeriodValueCache[periodUnit].oos;
   }
-  wfSettings.style.display = wfToggle.checked ? 'block' : 'none';
-  if (adaptiveToggle) {
-    adaptiveToggle.disabled = !wfToggle.checked;
-    if (!wfToggle.checked) {
-      adaptiveToggle.checked = false;
-    }
+  renderedWfaPeriodUnit = periodUnit;
+
+  const isMonths = periodUnit === 'months';
+  if (isLabel) isLabel.textContent = `In-Sample (${periodUnit}):`;
+  if (oosLabel) oosLabel.textContent = `Out-of-Sample (${periodUnit}):`;
+  isInput.min = isMonths ? '1' : '30';
+  isInput.max = isMonths ? (isInput.dataset.monthMax || '120') : '3650';
+  isInput.step = '1';
+  oosInput.min = isMonths ? '1' : '15';
+  oosInput.max = isMonths ? (oosInput.dataset.monthMax || '120') : '3650';
+  oosInput.step = '1';
+
+  const wfEnabled = wfToggle.checked && !wfToggle.disabled;
+  wfSettings.style.display = wfEnabled ? 'block' : 'none';
+  adaptiveToggle.disabled = !wfEnabled || isMonths;
+  if (!wfEnabled || isMonths) {
+    adaptiveToggle.checked = false;
   }
-  toggleAdaptiveWFSettings();
+  const adaptiveEnabled = wfEnabled && !isMonths && adaptiveToggle.checked;
+  if (adaptiveSettings) adaptiveSettings.style.display = adaptiveEnabled ? 'block' : 'none';
+  oosInput.disabled = adaptiveEnabled;
+  if (cooldownToggle) {
+    cooldownToggle.disabled = !adaptiveEnabled;
+    if (!adaptiveEnabled) cooldownToggle.checked = false;
+  }
+  if (cooldownDaysInput) {
+    cooldownDaysInput.disabled = !adaptiveEnabled || !(cooldownToggle && cooldownToggle.checked);
+  }
+
   if (typeof syncQueueAutoCreateSetUi === 'function') {
     syncQueueAutoCreateSetUi();
   }
 }
 
+window.syncWfaModeUi = syncWfaModeUi;
+
+function toggleWFSettings() {
+  syncWfaModeUi();
+}
+
 window.toggleWFSettings = toggleWFSettings;
 
 function toggleAdaptiveWFSettings() {
-  const wfToggle = document.getElementById('enableWF');
-  const adaptiveToggle = document.getElementById('enableAdaptiveWF');
-  const adaptiveSettings = document.getElementById('adaptiveWFSettings');
-  const oosInput = document.getElementById('wfOosPeriodDays');
-  const cooldownToggle = document.getElementById('wfCooldownEnabled');
-  const cooldownDaysInput = document.getElementById('wfCooldownDays');
-  if (!adaptiveToggle || !adaptiveSettings || !oosInput) {
-    return;
-  }
-
-  const enabled = Boolean(
-    wfToggle
-    && wfToggle.checked
-    && !wfToggle.disabled
-    && adaptiveToggle.checked
-    && !adaptiveToggle.disabled
-  );
-  adaptiveSettings.style.display = enabled ? 'block' : 'none';
-  oosInput.disabled = enabled;
-  if (cooldownToggle) {
-    cooldownToggle.disabled = !enabled;
-    if (!enabled) {
-      cooldownToggle.checked = false;
-    }
-  }
-  if (cooldownDaysInput) {
-    cooldownDaysInput.disabled = !enabled || !(cooldownToggle && cooldownToggle.checked);
-  }
+  syncWfaModeUi();
 }
 
 window.toggleAdaptiveWFSettings = toggleAdaptiveWFSettings;
+
+function toggleWfaCalendarMonths() {
+  syncWfaModeUi();
+  if (typeof window.updateDatasetPreview === 'function') {
+    window.updateDatasetPreview();
+  }
+}
+
+window.toggleWfaCalendarMonths = toggleWfaCalendarMonths;
+
+function buildWfaPeriodState(periodUnit, isPeriod, oosPeriod) {
+  return periodUnit === 'months'
+    ? {
+        periodUnit: 'months',
+        isPeriodMonths: Number(isPeriod),
+        oosPeriodMonths: Number(oosPeriod)
+      }
+    : {
+        periodUnit: 'days',
+        isPeriodDays: Number(isPeriod),
+        oosPeriodDays: Number(oosPeriod)
+      };
+}
+
+function appendWfaPeriodFields(formData, periodUnit, isPeriod, oosPeriod) {
+  if (periodUnit === 'months') {
+    formData.append('wf_period_unit', 'months');
+    formData.append('wf_is_period_months', isPeriod);
+    formData.append('wf_oos_period_months', oosPeriod);
+  } else {
+    formData.append('wf_is_period_days', isPeriod);
+    formData.append('wf_oos_period_days', oosPeriod);
+  }
+}
 
 function syncBudgetInputs() {
   const budgetModeRadios = document.querySelectorAll('input[name="budgetMode"]');
@@ -1774,6 +1819,8 @@ async function runWalkForward({ sources, state }) {
 
   const wfIsPeriodDays = document.getElementById('wfIsPeriodDays').value;
   const wfOosPeriodDays = document.getElementById('wfOosPeriodDays').value;
+  const wfPeriodUnit = document.getElementById('wfCalendarMonths')?.checked ? 'months' : 'days';
+  const wfaPeriodState = buildWfaPeriodState(wfPeriodUnit, wfIsPeriodDays, wfOosPeriodDays);
   const wfStoreTopNTrials = document.getElementById('wfStoreTopNTrials')?.value || '50';
   const wfAdaptiveMode = Boolean(document.getElementById('enableAdaptiveWF')?.checked);
   const wfCooldownEnabled = wfAdaptiveMode && Boolean(document.getElementById('wfCooldownEnabled')?.checked);
@@ -1826,8 +1873,7 @@ async function runWalkForward({ sources, state }) {
       slowPrimaryObjective: config.grid_slow_primary_objective
     } : null,
     wfa: {
-      isPeriodDays: Number(wfIsPeriodDays),
-      oosPeriodDays: Number(wfOosPeriodDays),
+      ...wfaPeriodState,
       storeTopNTrials: Number(wfStoreTopNTrials),
       adaptiveMode: wfAdaptiveMode,
       cooldownEnabled: wfCooldownEnabled,
@@ -1883,8 +1929,7 @@ async function runWalkForward({ sources, state }) {
     formData.append('csvPath', sourcePath);
 
     formData.append('config', JSON.stringify(config));
-    formData.append('wf_is_period_days', wfIsPeriodDays);
-    formData.append('wf_oos_period_days', wfOosPeriodDays);
+    appendWfaPeriodFields(formData, wfPeriodUnit, wfIsPeriodDays, wfOosPeriodDays);
     formData.append('wf_store_top_n_trials', wfStoreTopNTrials);
     formData.append('wf_adaptive_mode', wfAdaptiveMode ? 'true' : 'false');
     formData.append('wf_cooldown_enabled', wfCooldownEnabled ? 'true' : 'false');

@@ -44,11 +44,19 @@ const context = {
     clearCalls += 1;
     return {items: [], nextIndex: 1, runtime: {active: false, updatedAt: 0}};
   },
+  clonePreset(value) {
+    return JSON.parse(JSON.stringify(value));
+  },
 };
 vm.createContext(context);
 vm.runInContext(
   `${source}\nthis.__queueTest = {
     appendQueueWarmupField,
+    appendQueueWfaPeriodFields,
+    buildQueueAutoSetModeLabel,
+    buildQueueTooltip,
+    buildStateForItem,
+    generateQueueLabel,
     ensureQueueStateLoaded,
     loadQueue,
     reset() {
@@ -101,6 +109,40 @@ async function main() {
   context.__queueTest.appendQueueWarmupField(malformed, {warmupBars: 'bad'});
   assert.deepEqual(malformed.entries, [['warmupBars', 'bad']]);
 
+  const monthItem = sourceItem('month');
+  monthItem.mode = 'wfa';
+  monthItem.wfa = {
+    periodUnit: 'months',
+    isPeriodMonths: 2,
+    oosPeriodMonths: 1,
+    adaptiveMode: false,
+  };
+  const monthFields = captureFormData();
+  context.__queueTest.appendQueueWfaPeriodFields(monthFields, monthItem);
+  assert.deepEqual(monthFields.entries, [
+    ['wf_period_unit', 'months'],
+    ['wf_is_period_months', '2'],
+    ['wf_oos_period_months', '1'],
+  ]);
+  assert.match(context.__queueTest.generateQueueLabel(monthItem), /WFA-F 2m\/1m/);
+  assert.equal(context.__queueTest.buildQueueAutoSetModeLabel(monthItem), 'WFA-F 2m/1m');
+  assert.match(context.__queueTest.buildQueueTooltip(monthItem), /IS: 2m, OOS: 1m/);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.__queueTest.buildStateForItem(monthItem, 'running').wfa)),
+    monthItem.wfa,
+  );
+
+  const legacyDayItem = sourceItem('day');
+  legacyDayItem.mode = 'wfa';
+  legacyDayItem.wfa = {isPeriodDays: 90, oosPeriodDays: 30, adaptiveMode: false};
+  const dayFields = captureFormData();
+  context.__queueTest.appendQueueWfaPeriodFields(dayFields, legacyDayItem);
+  assert.deepEqual(dayFields.entries, [
+    ['wf_is_period_days', '90'],
+    ['wf_oos_period_days', '30'],
+  ]);
+  assert.match(context.__queueTest.generateQueueLabel(legacyDayItem), /WFA-F 90\/30/);
+
   context.__queueTest.reset();
   storage.clear();
   storageReads = 0;
@@ -124,7 +166,15 @@ async function main() {
 
   context.__queueTest.reset();
   storage.clear();
-  storage.set('merlinRunQueue', JSON.stringify({items: [sourceItem('legacy')], nextIndex: 2}));
+  const legacyMonth = sourceItem('legacy');
+  legacyMonth.mode = 'wfa';
+  legacyMonth.wfa = {
+    periodUnit: 'months',
+    isPeriodMonths: 2,
+    oosPeriodMonths: 1,
+    adaptiveMode: false,
+  };
+  storage.set('merlinRunQueue', JSON.stringify({items: [legacyMonth], nextIndex: 2}));
   storage.set('merlinQueueRuntime', JSON.stringify({active: false, updatedAt: 0}));
   storageReads = 0;
   storageRemovals = 0;
@@ -138,6 +188,10 @@ async function main() {
       grid_fast_objectives: ['sharpe_ratio', 'sqn', 'net_profit_pct'],
       grid_fast_primary_objective: 'sqn',
     },
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.__queueTest.loadQueue().items[0].wfa)),
+    legacyMonth.wfa,
   );
   assert.equal(saveCalls, 1, 'valid legacy state must still migrate after a successful empty GET');
   assert.equal(storage.size, 0);

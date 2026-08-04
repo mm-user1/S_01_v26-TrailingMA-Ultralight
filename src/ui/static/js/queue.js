@@ -1515,8 +1515,17 @@ function applyQueueConfigFallback(item) {
   setCheckboxValue('enableWF', isWfaMode);
   if (isWfaMode && item.wfa && typeof item.wfa === 'object') {
     const adaptiveMode = Boolean(item.wfa.adaptiveMode);
-    setInputValue('wfIsPeriodDays', item.wfa.isPeriodDays);
-    setInputValue('wfOosPeriodDays', item.wfa.oosPeriodDays);
+    const periodUnit = item.wfa.periodUnit === 'months' ? 'months' : 'days';
+    setCheckboxValue('wfCalendarMonths', periodUnit === 'months');
+    if (typeof syncWfaModeUi === 'function') syncWfaModeUi();
+    setInputValue(
+      'wfIsPeriodDays',
+      periodUnit === 'months' ? item.wfa.isPeriodMonths : item.wfa.isPeriodDays
+    );
+    setInputValue(
+      'wfOosPeriodDays',
+      periodUnit === 'months' ? item.wfa.oosPeriodMonths : item.wfa.oosPeriodDays
+    );
     setInputValue('wfStoreTopNTrials', item.wfa.storeTopNTrials);
     setCheckboxValue('enableAdaptiveWF', adaptiveMode);
     setCheckboxValue('wfCooldownEnabled', adaptiveMode && Boolean(item.wfa.cooldownEnabled));
@@ -1885,9 +1894,27 @@ function buildQueueAutoSetBudgetLabel(item) {
 }
 
 function buildQueueAutoSetModeLabel(item) {
-  const isPeriod = Math.max(1, Math.round(Number(item?.wfa?.isPeriodDays || 0))) || '?';
-  const oosPeriod = Math.max(1, Math.round(Number(item?.wfa?.oosPeriodDays || 0))) || '?';
-  return `${item?.wfa?.adaptiveMode ? 'WFA-A' : 'WFA-F'} ${isPeriod}/${oosPeriod}`;
+  const facts = getQueueWfaPeriodFacts(item);
+  return `${item?.wfa?.adaptiveMode ? 'WFA-A' : 'WFA-F'} ${facts.compact}`;
+}
+
+function getQueueWfaPeriodFacts(item) {
+  const months = item?.wfa?.periodUnit === 'months';
+  const normalizePeriod = (value) => (
+    Math.max(1, Math.round(Number(value || 0))) || '?'
+  );
+  const isPeriod = normalizePeriod(
+    months ? item?.wfa?.isPeriodMonths : item?.wfa?.isPeriodDays
+  );
+  const oosPeriod = normalizePeriod(
+    months ? item?.wfa?.oosPeriodMonths : item?.wfa?.oosPeriodDays
+  );
+  return {
+    unit: months ? 'months' : 'days',
+    isPeriod: isPeriod ?? '?',
+    oosPeriod: oosPeriod ?? '?',
+    compact: months ? `${isPeriod}m/${oosPeriod}m` : `${isPeriod}/${oosPeriod}`
+  };
 }
 
 function buildQueueStudySetState(item, patch = {}) {
@@ -2120,9 +2147,8 @@ function collectQueueItem() {
   if (mode === 'wfa') {
     const adaptiveMode = Boolean(document.getElementById('enableAdaptiveWF')?.checked);
     const cooldownEnabled = adaptiveMode && Boolean(document.getElementById('wfCooldownEnabled')?.checked);
+    const periodUnit = document.getElementById('wfCalendarMonths')?.checked ? 'months' : 'days';
     item.wfa = {
-      isPeriodDays: Number(document.getElementById('wfIsPeriodDays')?.value) || 90,
-      oosPeriodDays: Number(document.getElementById('wfOosPeriodDays')?.value) || 30,
       storeTopNTrials: Number(document.getElementById('wfStoreTopNTrials')?.value) || 50,
       adaptiveMode,
       cooldownEnabled,
@@ -2134,6 +2160,14 @@ function collectQueueItem() {
       ddThresholdMultiplier: Number(document.getElementById('wfDdThresholdMultiplier')?.value) || 1.5,
       inactivityMultiplier: Number(document.getElementById('wfInactivityMultiplier')?.value) || 5.0
     };
+    if (periodUnit === 'months') {
+      item.wfa.periodUnit = 'months';
+      item.wfa.isPeriodMonths = Number(document.getElementById('wfIsPeriodDays')?.value) || 2;
+      item.wfa.oosPeriodMonths = Number(document.getElementById('wfOosPeriodDays')?.value) || 1;
+    } else {
+      item.wfa.isPeriodDays = Number(document.getElementById('wfIsPeriodDays')?.value) || 90;
+      item.wfa.oosPeriodDays = Number(document.getElementById('wfOosPeriodDays')?.value) || 30;
+    }
   }
 
   item.label = generateQueueLabel(item);
@@ -2161,9 +2195,8 @@ function generateQueueLabel(item) {
 
   let modeLabel = item.config?.optimization_mode === 'grid' || item.mode === 'grid' ? 'GRID' : 'OPT';
   if (item.mode === 'wfa') {
-    const isPeriod = item.wfa?.isPeriodDays || '?';
-    const oosPeriod = item.wfa?.oosPeriodDays || '?';
-    modeLabel = (item.wfa?.adaptiveMode ? 'WFA-A' : 'WFA-F') + ' ' + isPeriod + '/' + oosPeriod
+    const periods = getQueueWfaPeriodFacts(item);
+    modeLabel = (item.wfa?.adaptiveMode ? 'WFA-A' : 'WFA-F') + ' ' + periods.compact
       + (item.config?.optimization_mode === 'grid' ? ' GRID' : '');
   }
 
@@ -2271,7 +2304,9 @@ function buildQueueTooltip(item) {
 
   if (item.mode === 'wfa') {
     const typeLabel = item.wfa?.adaptiveMode ? 'Adaptive' : 'Fixed';
-    lines.push('Mode: WFA ' + typeLabel + ' (IS: ' + item.wfa?.isPeriodDays + 'd, OOS: ' + item.wfa?.oosPeriodDays + 'd)');
+    const periods = getQueueWfaPeriodFacts(item);
+    const suffix = periods.unit === 'months' ? 'm' : 'd';
+    lines.push('Mode: WFA ' + typeLabel + ' (IS: ' + periods.isPeriod + suffix + ', OOS: ' + periods.oosPeriod + suffix + ')');
   } else if (item.mode === 'grid' || item.config?.optimization_mode === 'grid') {
     lines.push('Mode: Grid Optimization');
   } else {
@@ -2645,6 +2680,18 @@ function appendQueueWarmupField(formData, item) {
   }
 }
 
+function appendQueueWfaPeriodFields(formData, item) {
+  const periods = getQueueWfaPeriodFacts(item);
+  if (periods.unit === 'months') {
+    formData.append('wf_period_unit', 'months');
+    formData.append('wf_is_period_months', String(periods.isPeriod));
+    formData.append('wf_oos_period_months', String(periods.oosPeriod));
+  } else {
+    formData.append('wf_is_period_days', String(periods.isPeriod));
+    formData.append('wf_oos_period_days', String(periods.oosPeriod));
+  }
+}
+
 async function finalizeQueueItem(itemId, finalState, patch = {}) {
   const normalizedFinalState = normalizeQueueFinalState(finalState);
   if (!normalizedFinalState) return;
@@ -2829,8 +2876,7 @@ async function runQueue() {
         try {
           let data;
           if (item.mode === 'wfa' && item.wfa) {
-            formData.append('wf_is_period_days', String(item.wfa.isPeriodDays));
-            formData.append('wf_oos_period_days', String(item.wfa.oosPeriodDays));
+            appendQueueWfaPeriodFields(formData, item);
             formData.append('wf_store_top_n_trials', String(item.wfa.storeTopNTrials));
             formData.append('wf_adaptive_mode', item.wfa.adaptiveMode ? 'true' : 'false');
             formData.append('wf_cooldown_enabled', item.wfa.cooldownEnabled ? 'true' : 'false');

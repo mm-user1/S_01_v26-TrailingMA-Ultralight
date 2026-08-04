@@ -14,11 +14,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from core import storage
 from core.walkforward_engine import (
     ISPipelineResult,
+    MAX_WFA_PERIOD_MONTHS,
     OOSStitchedResult,
     WFConfig,
     WFResult,
     WalkForwardEngine,
     WindowResult,
+    build_calendar_month_windows,
 )
 from core.optuna_engine import OptimizationResult
 from core.post_process import (
@@ -546,6 +548,203 @@ def test_split_data_rolls_forward():
     assert windows[1].is_start == windows[0].is_start + pd.Timedelta(days=5)
 
 
+def test_day_period_unit_default_and_explicit_preserve_exact_windows():
+    index = pd.date_range("2025-01-01", periods=40, freq="D", tz="UTC")
+    df = pd.DataFrame({"Close": np.ones(len(index))}, index=index)
+    expected = [
+        (
+            pd.Timestamp("2025-01-01", tz="UTC") + pd.Timedelta(days=5 * offset),
+            pd.Timestamp("2025-01-10", tz="UTC") + pd.Timedelta(days=5 * offset),
+            pd.Timestamp("2025-01-11", tz="UTC") + pd.Timedelta(days=5 * offset),
+            pd.Timestamp("2025-01-15", tz="UTC") + pd.Timedelta(days=5 * offset),
+        )
+        for offset in range(6)
+    ]
+
+    actual = []
+    for unit in (None, "days"):
+        kwargs = {} if unit is None else {"period_unit": unit}
+        engine = WalkForwardEngine(
+            WFConfig(
+                strategy_id="s01_trailing_ma",
+                is_period_days=10,
+                oos_period_days=5,
+                **kwargs,
+            ),
+            {},
+            {},
+        )
+        actual.append(
+            [
+                (window.is_start, window.is_end, window.oos_start, window.oos_end)
+                for window in engine.split_data(df, index[0], index[-1])
+            ]
+        )
+
+    assert actual == [expected, expected]
+
+
+def _calendar_engine(is_months=2, oos_months=1, start="2025-10-01"):
+    return WalkForwardEngine(
+        WFConfig(
+            strategy_id="s01_trailing_ma",
+            period_unit="months",
+            is_period_days=None,
+            oos_period_days=None,
+            is_period_months=is_months,
+            oos_period_months=oos_months,
+        ),
+        {"fixed_params": {"dateFilter": True, "start": start}},
+        {},
+    )
+
+
+def test_calendar_month_windows_use_requested_anchor_and_complete_oos_periods():
+    index = pd.date_range("2025-08-01", "2026-08-01", freq="D", tz="UTC")
+    df = pd.DataFrame(index=index)
+    engine = _calendar_engine()
+
+    july_end = engine.split_data(
+        df,
+        pd.Timestamp("2025-10-01", tz="UTC"),
+        pd.Timestamp("2026-07-31", tz="UTC"),
+    )
+    august_start = engine.split_data(
+        df,
+        pd.Timestamp("2025-10-01", tz="UTC"),
+        pd.Timestamp("2026-08-01", tz="UTC"),
+    )
+
+    assert len(july_end) == len(august_start) == 8
+    assert july_end == august_start
+    assert (july_end[0].is_start, july_end[0].is_end) == (
+        pd.Timestamp("2025-10-01", tz="UTC"),
+        pd.Timestamp("2025-11-30", tz="UTC"),
+    )
+    assert (july_end[0].oos_start, july_end[0].oos_end) == (
+        pd.Timestamp("2025-12-01", tz="UTC"),
+        pd.Timestamp("2025-12-31", tz="UTC"),
+    )
+    assert (july_end[-1].oos_start, july_end[-1].oos_end) == (
+        pd.Timestamp("2026-07-01", tz="UTC"),
+        pd.Timestamp("2026-07-31", tz="UTC"),
+    )
+    assert all(
+        left.oos_end < right.oos_start
+        for left, right in zip(july_end, july_end[1:])
+    )
+    assert engine.split_data(df, index[0], pd.Timestamp("2026-07-15", tz="UTC")) == july_end[:-1]
+
+
+def test_calendar_month_windows_clamp_late_end_to_last_available_calendar_date():
+    index = pd.date_range("2025-08-01", "2026-07-15", freq="D", tz="UTC")
+    requested_ends = [
+        pd.Timestamp("2026-08-01", tz="UTC"),
+        pd.Timestamp("2026-08-01T23:59:59", tz="UTC"),
+        pd.Timestamp("2026-09-30T23:59:59.999999Z"),
+    ]
+
+    outputs = [
+        build_calendar_month_windows(index, "2025-10-01", end, 2, 1)
+        for end in requested_ends
+    ]
+
+    assert outputs[0] == outputs[1] == outputs[2]
+    assert len(outputs[0]) == 7
+    assert outputs[0][-1].oos_start == pd.Timestamp("2026-06-01", tz="UTC")
+    assert outputs[0][-1].oos_end == pd.Timestamp("2026-06-30", tz="UTC")
+
+
+def test_calendar_month_windows_keep_logical_boundaries_when_bars_are_missing():
+    index = pd.date_range("2027-01-03", "2027-06-01", freq="D", tz="UTC")
+    index = index[index != pd.Timestamp("2027-03-01", tz="UTC")]
+    df = pd.DataFrame(index=index)
+    engine = _calendar_engine(is_months=1, oos_months=1, start="2027-01-01")
+
+    windows = engine.split_data(df, index[0], pd.Timestamp("2027-05-31", tz="UTC"))
+
+    assert windows[0].is_start == pd.Timestamp("2027-01-03", tz="UTC")
+    assert windows[0].oos_start == pd.Timestamp("2027-02-01", tz="UTC")
+    assert windows[0].oos_end == pd.Timestamp("2027-02-28", tz="UTC")
+    assert windows[1].oos_start == pd.Timestamp("2027-03-02", tz="UTC")
+    assert windows[1].is_start == pd.Timestamp("2027-02-01", tz="UTC")
+
+
+@pytest.mark.parametrize(
+    ("year", "expected_end"),
+    [(2027, "2027-02-28"), (2028, "2028-02-29")],
+)
+def test_calendar_month_windows_follow_real_february(year, expected_end):
+    index = pd.date_range(f"{year}-01-01", f"{year}-06-01", freq="D", tz="UTC")
+    windows = build_calendar_month_windows(index, f"{year}-01-01", index[-1], 1, 1)
+    assert windows[0].oos_end == pd.Timestamp(expected_end, tz="UTC")
+    assert windows[1].oos_start == pd.Timestamp(f"{year}-03-01", tz="UTC")
+
+
+def test_calendar_month_windows_do_not_fabricate_missing_leap_day():
+    index = pd.date_range("2028-01-01", "2028-06-01", freq="D", tz="UTC")
+    index = index[index != pd.Timestamp("2028-02-29", tz="UTC")]
+    windows = build_calendar_month_windows(index, "2028-01-01", index[-1], 1, 1)
+    assert windows[0].oos_end == pd.Timestamp("2028-02-28", tz="UTC")
+    assert windows[1].oos_start == pd.Timestamp("2028-03-01", tz="UTC")
+
+
+def test_calendar_month_windows_cross_year_without_drift():
+    index = pd.date_range("2025-11-01", "2026-05-01", freq="D", tz="UTC")
+    windows = build_calendar_month_windows(index, "2025-11-01", index[-1], 1, 1)
+    assert windows[0].oos_start == pd.Timestamp("2025-12-01", tz="UTC")
+    assert windows[1].oos_start == pd.Timestamp("2026-01-01", tz="UTC")
+
+
+@pytest.mark.parametrize(
+    "fixed_params, message",
+    [
+        ({"dateFilter": False, "start": "2025-10-01"}, "Date Filter"),
+        ({"dateFilter": True}, "requested Start"),
+        ({"dateFilter": True, "start": "2025-09-28"}, "first calendar day"),
+    ],
+)
+def test_calendar_month_engine_rejects_invalid_requested_anchor(fixed_params, message):
+    index = pd.date_range("2025-10-01", "2026-04-01", freq="D", tz="UTC")
+    engine = _calendar_engine()
+    engine.base_config_template["fixed_params"] = fixed_params
+    with pytest.raises(ValueError, match=message):
+        engine.split_data(pd.DataFrame(index=index), index[0], index[-1])
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "", "0", "-1", "1.0", 121])
+def test_calendar_month_config_rejects_invalid_counts(value):
+    with pytest.raises(ValueError, match=f"1 to {MAX_WFA_PERIOD_MONTHS}"):
+        WFConfig(
+            period_unit="months",
+            is_period_days=None,
+            oos_period_days=None,
+            is_period_months=value,
+            oos_period_months=1,
+        )
+
+
+def test_calendar_month_config_rejects_unknown_unit_and_adaptive_mode():
+    with pytest.raises(ValueError, match="days.*months"):
+        WFConfig(period_unit="weeks")
+    with pytest.raises(ValueError, match="Adaptive"):
+        WFConfig(
+            period_unit="months",
+            is_period_days=None,
+            oos_period_days=None,
+            is_period_months=2,
+            oos_period_months=1,
+            adaptive_mode=True,
+        )
+
+
+def test_calendar_month_windows_reject_empty_slice_and_fewer_than_two():
+    index = pd.date_range("2025-01-01", "2025-05-01", freq="D", tz="UTC")
+    index = index[(index.month != 2)]
+    with pytest.raises(ValueError, match=r"IS=1m, OOS=1m"):
+        build_calendar_month_windows(index, "2025-01-01", index[-1], 1, 1)
+
+
 def test_stitched_equity_skips_duplicate_points():
     wf_config = WFConfig(strategy_id="s01_trailing_ma", is_period_days=180, oos_period_days=60)
     engine = WalkForwardEngine(wf_config, {}, {})
@@ -645,6 +844,45 @@ def test_wfe_is_annualized():
     stitched = engine._build_stitched_oos_equity(windows)
 
     assert pytest.approx(stitched.wfe, rel=1e-3) == 120.0
+
+
+def test_calendar_month_wfe_uses_nominal_month_annualization():
+    wf_config = WFConfig(
+        strategy_id="s01_trailing_ma",
+        period_unit="months",
+        is_period_days=None,
+        oos_period_days=None,
+        is_period_months=2,
+        oos_period_months=1,
+    )
+    engine = WalkForwardEngine(wf_config, {}, {})
+    windows = [
+        WindowResult(
+            window_id=index,
+            is_start=pd.Timestamp(f"2028-0{index}-01", tz="UTC"),
+            is_end=pd.Timestamp(f"2028-0{index + 1}-29", tz="UTC"),
+            oos_start=pd.Timestamp(f"2028-0{index + 2}-01", tz="UTC"),
+            oos_end=pd.Timestamp(f"2028-0{index + 2}-28", tz="UTC"),
+            best_params={},
+            param_id=f"p{index}",
+            is_net_profit_pct=50.0,
+            is_max_drawdown_pct=2.0,
+            is_total_trades=5,
+            oos_net_profit_pct=20.0,
+            oos_max_drawdown_pct=1.0,
+            oos_total_trades=3,
+            oos_equity_curve=[100.0, 120.0],
+            oos_timestamps=[
+                pd.Timestamp(f"2028-0{index + 2}-01", tz="UTC"),
+                pd.Timestamp(f"2028-0{index + 2}-28", tz="UTC"),
+            ],
+        )
+        for index in (1, 2)
+    ]
+
+    stitched = engine._build_stitched_oos_equity(windows)
+
+    assert stitched.wfe == pytest.approx(80.0)
 
 
 def test_store_top_n_trials_limit():

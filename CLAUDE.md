@@ -64,7 +64,7 @@ Key: Flask, pandas, numpy, matplotlib, optuna==4.6.0
 2. **camelCase naming** - End-to-end: Pine Script -> config.json -> Python -> CSV
 3. **Dual optimizer modes** - Optuna (Bayesian/evolutionary) and Grid (deterministic; per-strategy backend chooses generation: S03 = LHS/full by mode, S06 = complete enumeration); both share constraints/objectives/storage. Optuna offers optional Initial Search Coverage for systematic parameter exploration.
 4. **Strategy isolation** - Each strategy owns its params dataclass; optional Numba-accelerated fast Grid backend per strategy (`s03_reversal_v10/fast_grid.py`, `s03_reversal_v11/fast_grid.py`, `s06_r_trend_v02/fast_grid.py`)
-5. **Rolling WFA** - Calendar-based IS/OOS windows, stitched OOS equity, annualized WFE, adaptive re-optimization triggers, optional cooldown after triggers, per-module top-N trial retention
+5. **Rolling WFA** - Fixed WFA supports unchanged day windows (default) or complete calendar-month windows; Adaptive remains day-only. Both use stitched OOS equity, annualized WFE, optional cooldown after adaptive triggers, and per-module top-N trial retention.
 6. **In-memory backend** - RAM-based Optuna journal storage for faster multiprocess optimization
 7. **Trial deduplication** - Automatic detection/skipping of duplicate parameter sets with search space exhaustion early stopping
 8. **Database persistence** - All optimization results automatically saved to SQLite, browsable through web UI; analytics group caches keep aggregated WFA equity computations warm
@@ -267,6 +267,18 @@ wf_config = WFConfig(
     cooldown_days=15,
     store_top_n_trials=50,   # Per-module top-N trial retention for storage
 )
+
+### Walk-Forward Analysis (Fixed Calendar Months)
+
+Fixed WFA can use `period_unit="months"` with authoritative month counts and
+`is_period_days=None` / `oos_period_days=None`. Calendar windows are anchored
+to the requested UTC Start, which requires Date Filter and the first calendar
+day of a month. Actual CSV bars are aligned inside half-open logical month
+boundaries; only complete OOS months covered by the inclusive requested End
+and last available CSV date are emitted, so an incomplete tail is ignored.
+Adaptive WFA remains day-only. Month WFE uses nominal `12 / months`
+annualization factors; day WFE remains `365 / days`. Queue, Results, and
+Analytics display month settings as compact values such as `2m/1m`.
 
 ### Using Indicators
 ```python
@@ -510,7 +522,7 @@ backend advertises capability via `get_backend_metadata()` (normalized by
 - Grid preview panel calls `POST /api/grid/preview` to show parameter space size, mode allocation and coverage
 - Initial Search Coverage mode toggle (Optuna) with coverage analysis and warmup auto-fill
 - Trials Log toggle for Optuna trial-level logging control
-- Walk-Forward Analysis settings (IS/OOS periods, adaptive mode, adaptive cooldown, store top-N trials)
+- Walk-Forward Analysis settings (fixed day/calendar-month IS/OOS periods, day-only adaptive mode, adaptive cooldown, store top-N trials)
 - Scheduled run queue management
 - CSV file browser
 - Dataset preview (WFA window layout)
@@ -648,7 +660,9 @@ Unreadable encoding/JSON or invalid top-level Queue shape is preserved and
 reported to the UI, while legacy item/source normalization remains lenient.
 A legacy item without `warmupBars` omits that launch field so the core default
 `1000` applies; an explicitly present malformed value still reaches strict V2
-validation. Preset runtime integration remains deferred and uncertified.
+validation. Legacy WFA items without `periodUnit` remain day items; fixed
+calendar-month items retain authoritative month counts and use labels such as
+`WFA-F 2m/1m`. Preset runtime integration remains deferred and uncertified.
 
 ### Analytics
 - `GET /api/analytics/summary` - WFA studies summary with filters and aggregated metrics

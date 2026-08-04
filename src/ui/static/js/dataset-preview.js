@@ -9,6 +9,14 @@
     return copy;
   }
 
+  function addMonths(date, months) {
+    return new Date(Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth() + months,
+      1
+    ));
+  }
+
   function daysBetween(startDate, endDate) {
     return Math.round((endDate.getTime() - startDate.getTime()) / DAY_MS);
   }
@@ -129,6 +137,27 @@
     return windows;
   }
 
+  function calcCalendarMonthWindows(startDate, endDate, isMonths, oosMonths) {
+    if (!isMonths || !oosMonths || startDate.getUTCDate() !== 1) {
+      throw new Error('invalid_calendar_month_periods');
+    }
+    const windows = [];
+    const endExclusive = addDays(endDate, 1);
+    for (let windowIndex = 0; ; windowIndex += 1) {
+      const isStart = addMonths(startDate, windowIndex * oosMonths);
+      const isEnd = addMonths(isStart, isMonths);
+      const oosEnd = addMonths(isEnd, oosMonths);
+      if (oosEnd > endExclusive) break;
+      windows.push({
+        isStart,
+        isEnd,
+        oosStart: new Date(isEnd.getTime()),
+        oosEnd
+      });
+    }
+    return windows;
+  }
+
   function calcOptunaPeriods(startDate, endDate, ftEnabled, ftDays, oosEnabled, oosDays) {
     const totalDays = daysBetween(startDate, endDate);
     if (totalDays <= 0) {
@@ -189,7 +218,7 @@
   }
 
   function buildSegments(config) {
-    const { mode, startDate, endDate, isDays, oosDays, ftDays } = config;
+    const { mode, startDate, endDate, isDays, oosDays, ftDays, periodUnit } = config;
     const segments = [];
 
     if (!modeIsWfa(mode)) {
@@ -214,7 +243,9 @@
     }
 
     if (!modeIsAdaptive(mode)) {
-      const windows = calcWFAWindows(startDate, endDate, isDays, oosDays);
+      const windows = periodUnit === 'months'
+        ? calcCalendarMonthWindows(startDate, endDate, isDays, oosDays)
+        : calcWFAWindows(startDate, endDate, isDays, oosDays);
       if (windows.length < 2) {
         return { segments: [], windows: [], error: 'insufficient' };
       }
@@ -271,7 +302,7 @@
   }
 
   function buildLabels(config, result) {
-    const { mode, startDate, endDate, isDays, oosDays, ftDays } = config;
+    const { mode, startDate, endDate, isDays, oosDays, ftDays, periodUnit } = config;
     const arrow = '&rarr;';
     const sep = '<span class="lbl-sep">&middot;</span>';
     const dots = '<span class="lbl-dots">&middot;&middot;&middot;</span>';
@@ -297,6 +328,23 @@
 
     const withFt = modeHasFt(mode);
     const isAdaptive = modeIsAdaptive(mode);
+
+    if (!isAdaptive && periodUnit === 'months') {
+      const windows = result.windows || [];
+      if (!windows.length) return '';
+      const firstWindow = windows[0];
+      const lastWindow = windows[windows.length - 1];
+      let firstWindowLabel = `${spanText('dim', 'W1')} ${spanText('is', 'IS')} ${spanText('is', fmtDate(firstWindow.isStart))}${arrow}${spanText('is', fmtDate(firstWindow.isEnd))}`;
+      if (withFt) {
+        firstWindowLabel += ` ${spanText('ft', 'FT')}${arrow}${spanText('ft', fmtDate(firstWindow.isEnd))}`;
+      }
+      firstWindowLabel += ` ${spanText('oos', 'OOS')}${arrow}${spanText('oos', fmtDate(firstWindow.oosEnd))}`;
+      const endNorm = addDays(endDate, 1);
+      const unusedDays = daysBetween(lastWindow.oosEnd, endNorm);
+      const lastWindowLabel = `${spanText('dim', `W${windows.length}`)} ${spanText('oos', 'OOS')}${arrow}${spanText('oos', fmtDate(lastWindow.oosEnd))}`;
+      const unusedLabel = unusedDays > 0 ? ` ${sep} ${spanText('dim', `${unusedDays}d`)}` : '';
+      return `${firstWindowLabel} ${dots} ${lastWindowLabel}${unusedLabel}`;
+    }
 
     const nominalIsEnd = addDays(startDate, isDays);
     const ftCarve = withFt ? carveFtDays(isDays, ftDays) : { isDays, ftDays: 0 };
@@ -398,6 +446,7 @@
       }
 
       const mode = detectMode();
+      const periodUnit = document.getElementById('wfCalendarMonths')?.checked ? 'months' : 'days';
       const isDays = readPositiveInt('wfIsPeriodDays', 90);
       const wfOosDays = readPositiveInt('wfOosPeriodDays', 30);
       const ftDays = readPositiveInt('ftPeriodDays', 30);
@@ -407,6 +456,7 @@
         mode,
         startDate,
         endDate,
+        periodUnit,
         isDays,
         oosDays: modeIsWfa(mode) ? wfOosDays : optunaOosDays,
         ftDays

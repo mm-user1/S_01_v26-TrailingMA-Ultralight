@@ -13,6 +13,21 @@ function updateResultsHeader() {
   }
 }
 
+function resolveWfaPeriodDisplay(wfa = {}) {
+  const periodUnit = wfa.periodUnit === 'months' || wfa.period_unit === 'months'
+    ? 'months'
+    : 'days';
+  return {
+    periodUnit,
+    isPeriod: periodUnit === 'months'
+      ? (wfa.isPeriodMonths ?? wfa.is_period_months ?? '-')
+      : (wfa.isPeriodDays ?? wfa.is_period_days ?? '-'),
+    oosPeriod: periodUnit === 'months'
+      ? (wfa.oosPeriodMonths ?? wfa.oos_period_months ?? '-')
+      : (wfa.oosPeriodDays ?? wfa.oos_period_days ?? '-')
+  };
+}
+
 function updateTableHeader(title, subtitle, periodLabel) {
   const titleEl = document.getElementById('resultsTableTitle');
   const subtitleEl = document.getElementById('resultsTableSubtitle');
@@ -1360,8 +1375,11 @@ function updateSidebarSettings() {
   if (ResultsState.mode === 'wfa') {
     setElementVisible('wfa-progress-section', true);
     setElementVisible('wfa-settings-section', true);
-    setText('wfa-is-days', ResultsState.wfa.isPeriodDays ?? ResultsState.wfa.is_period_days ?? '-');
-    setText('wfa-oos-days', ResultsState.wfa.oosPeriodDays ?? ResultsState.wfa.oos_period_days ?? '-');
+    const periodDisplay = resolveWfaPeriodDisplay(ResultsState.wfa);
+    setText('wfa-is-period-key', `IS (${periodDisplay.periodUnit})`);
+    setText('wfa-oos-period-key', `OOS (${periodDisplay.periodUnit})`);
+    setText('wfa-is-days', periodDisplay.isPeriod);
+    setText('wfa-oos-days', periodDisplay.oosPeriod);
     const adaptiveModeRaw = ResultsState.wfa.adaptiveMode ?? ResultsState.wfa.adaptive_mode;
     const adaptiveModeLabel = adaptiveModeRaw === null || adaptiveModeRaw === undefined
       ? '-'
