@@ -35,7 +35,11 @@ const context = {
     formElements[id] ||= {checked: false, value: ''};
     formElements[id].value = value == null ? '' : String(value);
   },
-  parseISOTimestamp() { return {date: '', time: ''}; },
+  parseISOTimestamp(value) {
+    return value
+      ? {date: String(value).slice(0, 10), time: String(value).slice(11, 16)}
+      : {date: '', time: ''};
+  },
   syncWfaModeUi() { wfaSyncCalls += 1; },
   localStorage: {
     getItem(key) {
@@ -130,6 +134,11 @@ async function main() {
 
   const monthItem = sourceItem('month');
   monthItem.mode = 'wfa';
+  monthItem.config.fixed_params = {
+    dateFilter: true,
+    start: '2025-08-15T00:00:00Z',
+    end: '2026-08-14T00:00:00Z',
+  };
   monthItem.wfa = {
     periodUnit: 'months',
     isPeriodMonths: 2,
@@ -201,6 +210,7 @@ async function main() {
   assert.equal(formElements.wfCalendarMonths.checked, true);
   assert.equal(formElements.wfIsPeriodDays.value, '2');
   assert.equal(formElements.wfOosPeriodDays.value, '1');
+  assert.equal(formElements.startDate.value, '2025-08-15');
   assert.equal(wfaSyncCalls, 1);
 
   context.__queueTest.reset();
@@ -228,6 +238,11 @@ async function main() {
   storage.clear();
   const legacyMonth = sourceItem('legacy');
   legacyMonth.mode = 'wfa';
+  legacyMonth.config.fixed_params = {
+    dateFilter: true,
+    start: '2025-08-15T00:00:00Z',
+    end: '2026-08-14T00:00:00Z',
+  };
   legacyMonth.wfa = {
     periodUnit: 'months',
     isPeriodMonths: 2,
@@ -247,12 +262,25 @@ async function main() {
       optimization_mode: 'grid',
       grid_fast_objectives: ['sharpe_ratio', 'sqn', 'net_profit_pct'],
       grid_fast_primary_objective: 'sqn',
+      fixed_params: legacyMonth.config.fixed_params,
     },
   );
   assert.deepEqual(
     JSON.parse(JSON.stringify(context.__queueTest.loadQueue().items[0].wfa)),
     legacyMonth.wfa,
   );
+  const reloadedMonth = context.__queueTest.loadQueue().items[0];
+  context.__queueTest.applyQueueConfigFallback(reloadedMonth);
+  assert.equal(formElements.startDate.value, '2025-08-15');
+  assert.equal(formElements.wfCalendarMonths.checked, true);
+  const reloadedMonthFields = captureFormData();
+  context.__queueTest.appendQueueWfaPeriodFields(reloadedMonthFields, reloadedMonth);
+  assert.deepEqual(reloadedMonthFields.entries, [
+    ['wf_period_unit', 'months'],
+    ['wf_is_period_months', '2'],
+    ['wf_oos_period_months', '1'],
+  ]);
+  assert.equal(reloadedMonth.config.fixed_params.start, '2025-08-15T00:00:00Z');
   assert.equal(saveCalls, 1, 'valid legacy state must still migrate after a successful empty GET');
   assert.equal(storage.size, 0);
   assert.equal(storageRemovals, 2);

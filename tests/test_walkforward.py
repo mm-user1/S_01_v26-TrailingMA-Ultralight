@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from core import storage
 from core.walkforward_engine import (
     ISPipelineResult,
+    MAX_WFA_CALENDAR_ANCHOR_DAY,
     MAX_WFA_PERIOD_MONTHS,
     OOSStitchedResult,
     WFConfig,
@@ -21,6 +22,7 @@ from core.walkforward_engine import (
     WalkForwardEngine,
     WindowResult,
     build_calendar_month_windows,
+    resolve_calendar_wfa_anchor,
 )
 from core.optuna_engine import OptimizationResult
 from core.post_process import (
@@ -636,6 +638,116 @@ def test_calendar_month_windows_use_requested_anchor_and_complete_oos_periods():
     assert engine.split_data(df, index[0], pd.Timestamp("2026-07-15", tz="UTC")) == july_end[:-1]
 
 
+@pytest.mark.parametrize(
+    ("start", "end", "is_months", "oos_months", "expected_count", "first_bounds"),
+    [
+        (
+            "2025-08-15",
+            "2026-08-14",
+            2,
+            1,
+            10,
+            ("2025-08-15", "2025-10-14", "2025-10-15", "2025-11-14"),
+        ),
+        (
+            "2025-11-28",
+            "2026-07-27",
+            1,
+            1,
+            7,
+            ("2025-11-28", "2025-12-27", "2025-12-28", "2026-01-27"),
+        ),
+    ],
+)
+def test_calendar_month_windows_preserve_non_first_anchor_day(
+    start, end, is_months, oos_months, expected_count, first_bounds
+):
+    index = pd.date_range(start, end, freq="D", tz="UTC")
+
+    windows = build_calendar_month_windows(
+        index, start, pd.Timestamp(end, tz="UTC"), is_months, oos_months
+    )
+
+    assert len(windows) == expected_count
+    assert (
+        windows[0].is_start,
+        windows[0].is_end,
+        windows[0].oos_start,
+        windows[0].oos_end,
+    ) == tuple(pd.Timestamp(value, tz="UTC") for value in first_bounds)
+    assert windows[-1].oos_end == pd.Timestamp(end, tz="UTC")
+    assert all(
+        left.oos_end < right.oos_start
+        for left, right in zip(windows, windows[1:])
+    )
+    if start == "2025-08-15":
+        assert windows[3].is_end == pd.Timestamp("2026-01-14", tz="UTC")
+        assert windows[3].oos_start == pd.Timestamp("2026-01-15", tz="UTC")
+
+
+def test_calendar_month_day_15_inclusive_end_ignores_incomplete_tail():
+    index = pd.date_range("2025-10-15", "2026-07-15", freq="D", tz="UTC")
+
+    boundary_eve = build_calendar_month_windows(
+        index, "2025-10-15", pd.Timestamp("2026-07-14", tz="UTC"), 2, 1
+    )
+    boundary_day = build_calendar_month_windows(
+        index, "2025-10-15", pd.Timestamp("2026-07-15", tz="UTC"), 2, 1
+    )
+
+    assert boundary_eve == boundary_day
+    assert len(boundary_eve) == 7
+    assert boundary_eve[-1].oos_end == pd.Timestamp("2026-07-14", tz="UTC")
+
+
+@pytest.mark.parametrize(("year", "oos_bar_count"), [(2027, 28), (2028, 29)])
+def test_calendar_month_day_28_anchor_handles_february(year, oos_bar_count):
+    start = f"{year - 1}-11-28"
+    index = pd.date_range(start, f"{year}-05-27", freq="D", tz="UTC")
+
+    windows = build_calendar_month_windows(index, start, index[-1], 1, 1)
+
+    february_window = windows[2]
+    assert february_window.is_start == pd.Timestamp(f"{year}-01-28", tz="UTC")
+    assert february_window.is_end == pd.Timestamp(f"{year}-02-27", tz="UTC")
+    assert february_window.oos_start == pd.Timestamp(f"{year}-02-28", tz="UTC")
+    assert february_window.oos_end == pd.Timestamp(f"{year}-03-27", tz="UTC")
+    assert (february_window.oos_end - february_window.oos_start).days + 1 == oos_bar_count
+
+
+def test_calendar_month_day_15_anchor_aligns_sparse_boundary_bars():
+    index = pd.date_range("2025-08-15", "2026-01-14", freq="D", tz="UTC")
+    index = index[index != pd.Timestamp("2025-10-15", tz="UTC")]
+
+    windows = build_calendar_month_windows(
+        index, "2025-08-15", index[-1], 2, 1
+    )
+
+    assert windows[0].is_end == pd.Timestamp("2025-10-14", tz="UTC")
+    assert windows[0].oos_start == pd.Timestamp("2025-10-16", tz="UTC")
+    assert windows[0].oos_end == pd.Timestamp("2025-11-14", tz="UTC")
+    assert windows[1].oos_start == pd.Timestamp("2025-11-15", tz="UTC")
+
+
+def test_calendar_month_day_15_anchor_rejects_empty_logical_slice():
+    index = pd.date_range("2025-08-15", "2026-01-14", freq="D", tz="UTC")
+    index = index[
+        (index < pd.Timestamp("2025-10-15", tz="UTC"))
+        | (index >= pd.Timestamp("2025-11-15", tz="UTC"))
+    ]
+
+    with pytest.raises(ValueError) as error:
+        build_calendar_month_windows(index, "2025-08-15", index[-1], 2, 1)
+
+    _assert_empty_calendar_slice(
+        error,
+        window=1,
+        stage="OOS",
+        start="2025-10-15T00:00:00+00:00",
+        end="2025-11-15T00:00:00+00:00",
+    )
+
+
 def test_calendar_month_windows_clamp_late_end_to_last_available_calendar_date():
     index = pd.date_range("2025-08-01", "2026-07-15", freq="D", tz="UTC")
     requested_ends = [
@@ -701,7 +813,7 @@ def test_calendar_month_windows_cross_year_without_drift():
     [
         ({"dateFilter": False, "start": "2025-10-01"}, "Date Filter"),
         ({"dateFilter": True}, "requested Start"),
-        ({"dateFilter": True, "start": "2025-09-28"}, "first calendar day"),
+        ({"dateFilter": True, "start": "2025-09-29"}, "calendar day 1 through 28"),
     ],
 )
 def test_calendar_month_engine_rejects_invalid_requested_anchor(fixed_params, message):
@@ -710,6 +822,20 @@ def test_calendar_month_engine_rejects_invalid_requested_anchor(fixed_params, me
     engine.base_config_template["fixed_params"] = fixed_params
     with pytest.raises(ValueError, match=message):
         engine.split_data(pd.DataFrame(index=index), index[0], index[-1])
+
+
+@pytest.mark.parametrize("day", [29, 30, 31])
+def test_calendar_month_anchor_validation_sites_reject_late_month_days(day):
+    start = f"2025-08-{day:02d}"
+    fixed_params = {"dateFilter": True, "start": start}
+    message = f"calendar day 1 through {MAX_WFA_CALENDAR_ANCHOR_DAY}"
+
+    with pytest.raises(ValueError, match=message):
+        resolve_calendar_wfa_anchor(fixed_params)
+
+    index = pd.date_range("2025-08-01", "2026-02-28", freq="D", tz="UTC")
+    with pytest.raises(ValueError, match=message):
+        build_calendar_month_windows(index, start, index[-1], 1, 1)
 
 
 @pytest.mark.parametrize("value", [True, 1.5, "", "0", "-1", "1.0", 121])

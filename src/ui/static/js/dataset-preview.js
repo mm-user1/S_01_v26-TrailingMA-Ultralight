@@ -1,5 +1,6 @@
 (function () {
   const DAY_MS = 24 * 60 * 60 * 1000;
+  const MAX_CALENDAR_MONTH_ANCHOR_DAY = 28;
   const INSUFFICIENT_TEXT = 'Insufficient data for min 2 WFA windows';
   const GENERIC_ERROR_TEXT = 'Preview Error';
 
@@ -13,7 +14,7 @@
     return new Date(Date.UTC(
       date.getUTCFullYear(),
       date.getUTCMonth() + months,
-      1
+      date.getUTCDate()
     ));
   }
 
@@ -138,7 +139,13 @@
   }
 
   function calcCalendarMonthWindows(startDate, endDate, isMonths, oosMonths) {
-    if (!isMonths || !oosMonths || startDate.getUTCDate() !== 1) {
+    const anchorDay = startDate.getUTCDate();
+    if (
+      !isMonths
+      || !oosMonths
+      || anchorDay < 1
+      || anchorDay > MAX_CALENDAR_MONTH_ANCHOR_DAY
+    ) {
       throw new Error('invalid_calendar_month_periods');
     }
     const windows = [];

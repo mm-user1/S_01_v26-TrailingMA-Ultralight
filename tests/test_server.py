@@ -1322,8 +1322,18 @@ def test_valid_v2_and_v1_walkforward_retain_existing_post_profile_path(
         ),
         (
             {"wf_period_unit": "months", "wf_is_period_months": "2", "wf_oos_period_months": "1"},
-            {"dateFilter": True, "start": "2025-09-28", "end": "2026-08-01"},
-            "first calendar day",
+            {"dateFilter": True, "start": "2025-08-29", "end": "2026-08-01"},
+            "calendar day 1 through 28",
+        ),
+        (
+            {"wf_period_unit": "months", "wf_is_period_months": "2", "wf_oos_period_months": "1"},
+            {"dateFilter": True, "start": "2025-08-30", "end": "2026-08-01"},
+            "calendar day 1 through 28",
+        ),
+        (
+            {"wf_period_unit": "months", "wf_is_period_months": "2", "wf_oos_period_months": "1"},
+            {"dateFilter": True, "start": "2025-08-31", "end": "2026-08-01"},
+            "calendar day 1 through 28",
         ),
         (
             {"wf_period_unit": "months", "wf_is_period_months": "1.5", "wf_oos_period_months": "1"},
@@ -1373,8 +1383,18 @@ def test_wfa_month_request_validation_precedes_csv_and_config_work(
     ("strategy_id", "is_v2"),
     [("s01_trailing_ma", False), ("s03_reversal_v11_regime_er_b2", True)],
 )
+@pytest.mark.parametrize(
+    ("requested_start", "expected_windows"),
+    [("2025-10-01", 8), ("2025-10-15", 7), ("2025-10-28", 7)],
+)
 def test_wfa_month_request_uses_authoritative_month_fields(
-    monkeypatch, client, tmp_path, strategy_id, is_v2
+    monkeypatch,
+    client,
+    tmp_path,
+    strategy_id,
+    is_v2,
+    requested_start,
+    expected_windows,
 ):
     from core import walkforward_engine
     from core.engine_v2.runtime_contract import normalize_v2_runtime_field_value
@@ -1424,13 +1444,13 @@ def test_wfa_month_request_uses_authoritative_month_fields(
             primary_objective="net_profit_pct",
         )
         payload["fixed_params"].update(
-            {"dateFilter": True, "start": "2025-10-01", "end": "2026-08-01"}
+            {"dateFilter": True, "start": requested_start, "end": "2026-08-01"}
         )
     else:
         payload = _build_minimal_optuna_payload()
         payload["fixed_params"] = {
             "dateFilter": True,
-            "start": "2025-10-01",
+            "start": requested_start,
             "end": "2026-08-01",
         }
 
@@ -1448,7 +1468,13 @@ def test_wfa_month_request_uses_authoritative_month_fields(
     )
 
     assert response.status_code == 200
-    assert response.get_json()["summary"]["total_windows"] == 8
+    assert response.get_json()["summary"]["total_windows"] == expected_windows
+    anchor = pd.Timestamp(requested_start, tz="UTC")
+    first_window = captured["windows"][0]
+    assert first_window.is_start == anchor
+    assert first_window.is_end == anchor + pd.DateOffset(months=2) - pd.Timedelta(hours=1)
+    assert first_window.oos_start == anchor + pd.DateOffset(months=2)
+    assert first_window.oos_end == anchor + pd.DateOffset(months=3) - pd.Timedelta(hours=1)
     assert captured["config"].is_period_days is None
     assert captured["config"].oos_period_days is None
     assert captured["base_template"]["wfa"]["period_unit"] == "months"

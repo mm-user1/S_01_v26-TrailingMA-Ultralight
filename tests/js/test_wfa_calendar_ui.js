@@ -156,6 +156,16 @@ assert.doesNotMatch(elements.datasetPreview.innerHTML, /Insufficient|Preview Err
 assert.match(elements.datasetPreview.innerHTML, /W8/);
 assert.match(elements.datasetPreview.innerHTML, /08\.01/);
 
+elements.startDate.value = '2025-08-15';
+elements.endDate.value = '2026-08-14';
+context.updateDatasetPreview();
+assert.doesNotMatch(elements.datasetPreview.innerHTML, /Insufficient|Preview Error/);
+assert.match(elements.datasetPreview.innerHTML, /W10/);
+assert.match(
+  elements.datasetPreview.innerHTML,
+  /W1[\s\S]*IS[\s\S]*08\.15[\s\S]*10\.15[\s\S]*OOS[\s\S]*11\.15[\s\S]*W10[\s\S]*08\.15/,
+);
+
 elements.enablePostProcess.checked = true;
 elements.ftPeriodDays.value = '10';
 context.updateDatasetPreview();
@@ -163,14 +173,30 @@ assert.match(elements.datasetPreview.innerHTML, /seg-is" style="flex-grow: 51;/)
 assert.match(elements.datasetPreview.innerHTML, /seg-ft" style="flex-grow: 10;/);
 assert.match(
   elements.datasetPreview.innerHTML,
-  /W1[\s\S]*IS[\s\S]*10\.01[\s\S]*11\.21[\s\S]*FT[\s\S]*12\.01[\s\S]*OOS/,
+  /W1[\s\S]*IS[\s\S]*08\.15[\s\S]*10\.05[\s\S]*FT[\s\S]*10\.15[\s\S]*OOS/,
 );
-assert.doesNotMatch(elements.datasetPreview.innerHTML, /IS[\s\S]*12\.01[\s\S]*FT[\s\S]*12\.01/);
+assert.doesNotMatch(elements.datasetPreview.innerHTML, /IS[\s\S]*10\.15[\s\S]*FT[\s\S]*10\.15/);
 elements.enablePostProcess.checked = false;
 
-elements.startDate.value = '2025-09-28';
-context.updateDatasetPreview();
-assert.match(elements.datasetPreview.innerHTML, /Preview Error/);
+for (const year of [2025, 2027]) {
+  elements.startDate.value = `${year}-11-28`;
+  elements.endDate.value = `${year + 1}-07-27`;
+  elements.wfIsPeriodDays.value = '1';
+  context.updateDatasetPreview();
+  assert.doesNotMatch(elements.datasetPreview.innerHTML, /Insufficient|Preview Error/);
+  assert.match(elements.datasetPreview.innerHTML, /W7/);
+  assert.match(
+    elements.datasetPreview.innerHTML,
+    /W1[\s\S]*IS[\s\S]*11\.28[\s\S]*12\.28[\s\S]*OOS[\s\S]*01\.28[\s\S]*W7[\s\S]*07\.28/,
+  );
+}
+
+for (const day of [29, 30, 31]) {
+  elements.startDate.value = `2025-08-${day}`;
+  elements.endDate.value = '2026-08-31';
+  context.updateDatasetPreview();
+  assert.match(elements.datasetPreview.innerHTML, /Preview Error/);
+}
 
 elements.startDate.value = '2025-01-01';
 elements.endDate.value = '2025-03-31';

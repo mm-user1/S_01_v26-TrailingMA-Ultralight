@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 WFA_PERIOD_UNITS = frozenset({"days", "months"})
 MAX_WFA_PERIOD_MONTHS = 120
+MAX_WFA_CALENDAR_ANCHOR_DAY = 28
 
 
 def normalize_wfa_period_unit(value: Any) -> str:
@@ -95,7 +96,7 @@ def resolve_calendar_wfa_anchor(
     *,
     strategy_id: str = "<unknown strategy>",
 ) -> pd.Timestamp:
-    """Resolve the requested, canonical first-of-month WFA anchor."""
+    """Resolve the requested, canonical UTC-midnight WFA anchor."""
 
     if not isinstance(fixed_params, dict):
         raise ValueError("Calendar Months requires fixed runtime parameters.")
@@ -116,9 +117,12 @@ def resolve_calendar_wfa_anchor(
         strategy_id=strategy_id,
         path="fixed_params.start",
     )
-    anchor = pd.Timestamp(canonical_start).normalize()
-    if anchor.day != 1:
-        raise ValueError("Calendar Months requires Start on the first calendar day of a month.")
+    return _validate_calendar_wfa_anchor(pd.Timestamp(canonical_start).normalize())
+
+
+def _validate_calendar_wfa_anchor(anchor: pd.Timestamp) -> pd.Timestamp:
+    if not 1 <= anchor.day <= MAX_WFA_CALENDAR_ANCHOR_DAY:
+        raise ValueError("Calendar Months requires Start on calendar day 1 through 28.")
     return anchor
 
 
@@ -202,9 +206,7 @@ def build_calendar_month_windows(
     canonical_start = normalize_v2_runtime_field_value("start", requested_start)
     if canonical_start is None:
         raise ValueError("Calendar Months requires a requested Start timestamp.")
-    anchor = pd.Timestamp(canonical_start).normalize()
-    if anchor.day != 1:
-        raise ValueError("Calendar Months requires Start on the first calendar day of a month.")
+    anchor = _validate_calendar_wfa_anchor(pd.Timestamp(canonical_start).normalize())
 
     end = pd.Timestamp(inclusive_end)
     if end.tzinfo is None:

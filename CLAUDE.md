@@ -272,8 +272,9 @@ wf_config = WFConfig(
 
 Fixed WFA can use `period_unit="months"` with authoritative month counts and
 `is_period_days=None` / `oos_period_days=None`. Calendar windows are anchored
-to the requested UTC Start, which requires Date Filter and the first calendar
-day of a month. Actual CSV bars are aligned inside half-open logical month
+to the requested UTC Start, which requires Date Filter and calendar day 1
+through 28. The anchor day is preserved across every month boundary. Actual CSV
+bars are aligned inside half-open logical month
 boundaries; only complete OOS months covered by the inclusive requested End
 and last available CSV date are emitted, so an incomplete tail is ignored.
 Adaptive WFA remains day-only. Month WFE uses nominal `12 / months`
