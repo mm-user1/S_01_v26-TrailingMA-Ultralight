@@ -156,6 +156,18 @@ assert.doesNotMatch(elements.datasetPreview.innerHTML, /Insufficient|Preview Err
 assert.match(elements.datasetPreview.innerHTML, /W8/);
 assert.match(elements.datasetPreview.innerHTML, /08\.01/);
 
+elements.enablePostProcess.checked = true;
+elements.ftPeriodDays.value = '10';
+context.updateDatasetPreview();
+assert.match(elements.datasetPreview.innerHTML, /seg-is" style="flex-grow: 51;/);
+assert.match(elements.datasetPreview.innerHTML, /seg-ft" style="flex-grow: 10;/);
+assert.match(
+  elements.datasetPreview.innerHTML,
+  /W1[\s\S]*IS[\s\S]*10\.01[\s\S]*11\.21[\s\S]*FT[\s\S]*12\.01[\s\S]*OOS/,
+);
+assert.doesNotMatch(elements.datasetPreview.innerHTML, /IS[\s\S]*12\.01[\s\S]*FT[\s\S]*12\.01/);
+elements.enablePostProcess.checked = false;
+
 elements.startDate.value = '2025-09-28';
 context.updateDatasetPreview();
 assert.match(elements.datasetPreview.innerHTML, /Preview Error/);

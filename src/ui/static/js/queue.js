@@ -1537,9 +1537,11 @@ function applyQueueConfigFallback(item) {
     setInputValue('wfDdThresholdMultiplier', item.wfa.ddThresholdMultiplier);
     setInputValue('wfInactivityMultiplier', item.wfa.inactivityMultiplier);
   } else {
+    setCheckboxValue('wfCalendarMonths', false);
     setCheckboxValue('enableAdaptiveWF', false);
     setCheckboxValue('wfCooldownEnabled', false);
     setInputValue('wfCooldownDays', 15);
+    if (typeof syncWfaModeUi === 'function') syncWfaModeUi();
   }
 
   const postProcess = config && typeof config.postProcess === 'object' ? config.postProcess : {};
@@ -1900,9 +1902,10 @@ function buildQueueAutoSetModeLabel(item) {
 
 function getQueueWfaPeriodFacts(item) {
   const months = item?.wfa?.periodUnit === 'months';
-  const normalizePeriod = (value) => (
-    Math.max(1, Math.round(Number(value || 0))) || '?'
-  );
+  const normalizePeriod = (value) => {
+    const rounded = Math.round(Number(value));
+    return Number.isFinite(rounded) && rounded > 0 ? rounded : '?';
+  };
   const isPeriod = normalizePeriod(
     months ? item?.wfa?.isPeriodMonths : item?.wfa?.isPeriodDays
   );

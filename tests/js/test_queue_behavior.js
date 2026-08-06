@@ -16,10 +16,27 @@ let fetchCalls = 0;
 let saveCalls = 0;
 let clearCalls = 0;
 let fetchOutcomes = [];
+let wfaSyncCalls = 0;
+const formElements = {};
 
 const context = {
   console: {warn() {}, error() {}, log() {}},
   window: {},
+  document: {
+    getElementById(id) { return formElements[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+  },
+  setCheckboxValue(id, value) {
+    formElements[id] ||= {checked: false, value: ''};
+    formElements[id].checked = Boolean(value);
+  },
+  setInputValue(id, value) {
+    formElements[id] ||= {checked: false, value: ''};
+    formElements[id].value = value == null ? '' : String(value);
+  },
+  parseISOTimestamp() { return {date: '', time: ''}; },
+  syncWfaModeUi() { wfaSyncCalls += 1; },
   localStorage: {
     getItem(key) {
       storageReads += 1;
@@ -53,10 +70,12 @@ vm.runInContext(
   `${source}\nthis.__queueTest = {
     appendQueueWarmupField,
     appendQueueWfaPeriodFields,
+    applyQueueConfigFallback,
     buildQueueAutoSetModeLabel,
     buildQueueTooltip,
     buildStateForItem,
     generateQueueLabel,
+    getQueueWfaPeriodFacts,
     ensureQueueStateLoaded,
     loadQueue,
     reset() {
@@ -142,6 +161,47 @@ async function main() {
     ['wf_oos_period_days', '30'],
   ]);
   assert.match(context.__queueTest.generateQueueLabel(legacyDayItem), /WFA-F 90\/30/);
+
+  const invalidPeriods = [undefined, null, 0, -5, 'not-a-number'];
+  invalidPeriods.forEach((value) => {
+    const invalidItem = sourceItem(`invalid-${String(value)}`);
+    invalidItem.mode = 'wfa';
+    invalidItem.wfa = {isPeriodDays: value, oosPeriodDays: value, adaptiveMode: false};
+    const facts = context.__queueTest.getQueueWfaPeriodFacts(invalidItem);
+    assert.equal(facts.isPeriod, '?');
+    assert.equal(facts.oosPeriod, '?');
+    assert.equal(facts.compact, '?/?');
+    const invalidFields = captureFormData();
+    context.__queueTest.appendQueueWfaPeriodFields(invalidFields, invalidItem);
+    assert.deepEqual(invalidFields.entries, [
+      ['wf_is_period_days', '?'],
+      ['wf_oos_period_days', '?'],
+    ]);
+    assert.doesNotMatch(context.__queueTest.generateQueueLabel(invalidItem), /1\/1/);
+  });
+
+  const roundedDayItem = sourceItem('rounded-day');
+  roundedDayItem.mode = 'wfa';
+  roundedDayItem.wfa = {isPeriodDays: 90.4, oosPeriodDays: '30.6', adaptiveMode: false};
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.__queueTest.getQueueWfaPeriodFacts(roundedDayItem))),
+    {unit: 'days', isPeriod: 90, oosPeriod: 31, compact: '90/31'},
+  );
+
+  formElements.wfCalendarMonths = {checked: true, value: ''};
+  wfaSyncCalls = 0;
+  const nonWfaLegacyItem = sourceItem('non-wfa-legacy');
+  nonWfaLegacyItem.mode = 'optuna';
+  context.__queueTest.applyQueueConfigFallback(nonWfaLegacyItem);
+  assert.equal(formElements.wfCalendarMonths.checked, false);
+  assert.equal(wfaSyncCalls, 1);
+
+  wfaSyncCalls = 0;
+  context.__queueTest.applyQueueConfigFallback(monthItem);
+  assert.equal(formElements.wfCalendarMonths.checked, true);
+  assert.equal(formElements.wfIsPeriodDays.value, '2');
+  assert.equal(formElements.wfOosPeriodDays.value, '1');
+  assert.equal(wfaSyncCalls, 1);
 
   context.__queueTest.reset();
   storage.clear();

@@ -249,11 +249,17 @@ def build_calendar_month_windows(
             oos_end_idx = data_index.searchsorted(oos_end_boundary, side="left") - 1
 
         if is_start_idx >= len(data_index) or is_end_idx < is_start_idx:
-            print(f"  Stopping: Window {window_id} IS calendar slice contains no bars.")
-            break
+            raise ValueError(
+                f"Window {window_id} IS calendar slice "
+                f"[{is_start_boundary.isoformat()}, {oos_start_boundary.isoformat()}) "
+                "contains no market bars."
+            )
         if oos_start_idx >= len(data_index) or oos_end_idx < oos_start_idx:
-            print(f"  Stopping: Window {window_id} OOS calendar slice contains no bars.")
-            break
+            raise ValueError(
+                f"Window {window_id} OOS calendar slice "
+                f"[{oos_start_boundary.isoformat()}, {oos_end_boundary.isoformat()}) "
+                "contains no market bars."
+            )
 
         is_bar_count = is_end_idx - is_start_idx + 1
         oos_bar_count = oos_end_idx - oos_start_idx + 1

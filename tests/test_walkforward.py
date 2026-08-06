@@ -738,9 +738,74 @@ def test_calendar_month_config_rejects_unknown_unit_and_adaptive_mode():
         )
 
 
-def test_calendar_month_windows_reject_empty_slice_and_fewer_than_two():
-    index = pd.date_range("2025-01-01", "2025-05-01", freq="D", tz="UTC")
-    index = index[(index.month != 2)]
+def _assert_empty_calendar_slice(error, *, window, stage, start, end):
+    message = str(error.value)
+    assert f"Window {window}" in message
+    assert stage in message
+    assert start in message
+    assert end in message
+    assert "no market bars" in message
+
+
+def test_calendar_month_windows_reject_start_before_available_data():
+    index = pd.date_range("2025-04-01", "2025-12-31", freq="D", tz="UTC")
+
+    with pytest.raises(ValueError) as error:
+        build_calendar_month_windows(index, "2025-01-01", index[-1], 2, 1)
+
+    _assert_empty_calendar_slice(
+        error,
+        window=1,
+        stage="IS",
+        start="2025-01-01T00:00:00+00:00",
+        end="2025-03-01T00:00:00+00:00",
+    )
+
+
+def test_calendar_month_windows_reject_empty_interior_is_slice():
+    index = pd.date_range("2025-01-01", "2025-09-30", freq="D", tz="UTC")
+    index = index[index.month != 5]
+
+    with pytest.raises(ValueError) as error:
+        build_calendar_month_windows(index, "2025-01-01", index[-1], 1, 2)
+
+    _assert_empty_calendar_slice(
+        error,
+        window=3,
+        stage="IS",
+        start="2025-05-01T00:00:00+00:00",
+        end="2025-06-01T00:00:00+00:00",
+    )
+
+
+def test_calendar_month_windows_reject_empty_interior_oos_slice():
+    index = pd.date_range("2025-01-01", "2025-07-31", freq="D", tz="UTC")
+    index = index[index.month != 4]
+
+    with pytest.raises(ValueError) as error:
+        build_calendar_month_windows(index, "2025-01-01", index[-1], 1, 1)
+
+    _assert_empty_calendar_slice(
+        error,
+        window=3,
+        stage="OOS",
+        start="2025-04-01T00:00:00+00:00",
+        end="2025-05-01T00:00:00+00:00",
+    )
+
+
+def test_calendar_month_windows_ignore_incomplete_trailing_month():
+    index = pd.date_range("2025-01-01", "2025-05-15", freq="D", tz="UTC")
+
+    windows = build_calendar_month_windows(index, "2025-01-01", index[-1], 1, 1)
+
+    assert len(windows) == 3
+    assert windows[-1].oos_start == pd.Timestamp("2025-04-01", tz="UTC")
+    assert windows[-1].oos_end == pd.Timestamp("2025-04-30", tz="UTC")
+
+
+def test_calendar_month_windows_still_require_two_complete_nonempty_windows():
+    index = pd.date_range("2025-01-01", "2025-02-28", freq="D", tz="UTC")
     with pytest.raises(ValueError, match=r"IS=1m, OOS=1m"):
         build_calendar_month_windows(index, "2025-01-01", index[-1], 1, 1)
 

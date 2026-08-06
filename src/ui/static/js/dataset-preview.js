@@ -271,7 +271,7 @@
       const endNorm = addDays(endDate, 1);
       pushSegment(segments, 'unused', daysBetween(lastWindow.oosEnd, endNorm));
 
-      return { segments, windows, periods: null };
+      return { segments, windows, periods: null, firstFtCarve };
     }
 
     const totalDaysNorm = daysBetween(startDate, addDays(endDate, 1));
@@ -334,7 +334,10 @@
       if (!windows.length) return '';
       const firstWindow = windows[0];
       const lastWindow = windows[windows.length - 1];
-      let firstWindowLabel = `${spanText('dim', 'W1')} ${spanText('is', 'IS')} ${spanText('is', fmtDate(firstWindow.isStart))}${arrow}${spanText('is', fmtDate(firstWindow.isEnd))}`;
+      const firstIsEnd = withFt
+        ? addDays(firstWindow.isStart, result.firstFtCarve.isDays)
+        : firstWindow.isEnd;
+      let firstWindowLabel = `${spanText('dim', 'W1')} ${spanText('is', 'IS')} ${spanText('is', fmtDate(firstWindow.isStart))}${arrow}${spanText('is', fmtDate(firstIsEnd))}`;
       if (withFt) {
         firstWindowLabel += ` ${spanText('ft', 'FT')}${arrow}${spanText('ft', fmtDate(firstWindow.isEnd))}`;
       }
