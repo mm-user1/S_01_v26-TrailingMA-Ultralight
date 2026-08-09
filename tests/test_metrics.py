@@ -24,6 +24,7 @@ from core.backtest_engine import (  # noqa: E402
     load_data,
     prepare_dataset_with_warmup,
 )
+import core.metrics as metrics_module  # noqa: E402
 from core.metrics import (  # noqa: E402
     _advanced_metric_view,
     _calculate_monthly_returns,
@@ -70,6 +71,63 @@ def test_result(test_data, baseline_params):
 
     result = S01TrailingMA.run(df_prepared, asdict(params), trade_start_idx)
     return result
+
+
+class TestDatasetPreparationDateRange:
+    @staticmethod
+    def _frame():
+        index = pd.date_range("2025-01-01", periods=5, freq="D", tz="UTC")
+        return pd.DataFrame({"Close": range(5)}, index=index)
+
+    def test_inverted_closed_range_fails_before_index_processing(self):
+        empty = self._frame().iloc[0:0]
+
+        with pytest.raises(ValueError, match=r"^start must not be after end\.$"):
+            prepare_dataset_with_warmup(
+                empty,
+                pd.Timestamp("2025-01-04", tz="UTC"),
+                pd.Timestamp("2025-01-03", tz="UTC"),
+                1,
+            )
+
+    @pytest.mark.parametrize(
+        ("start_day", "end_day", "expected_days", "expected_trade_start"),
+        [
+            (3, 4, [2, 3, 4], 1),
+            (3, 3, [2, 3], 1),
+            (None, 3, [1, 2, 3], 0),
+            (3, None, [2, 3, 4, 5], 1),
+            (None, None, [1, 2, 3, 4, 5], 0),
+        ],
+    )
+    def test_ordered_equal_and_open_ended_ranges_are_unchanged(
+        self,
+        start_day,
+        end_day,
+        expected_days,
+        expected_trade_start,
+    ):
+        frame = self._frame()
+        start = (
+            pd.Timestamp(f"2025-01-{start_day:02d}", tz="UTC")
+            if start_day is not None
+            else None
+        )
+        end = (
+            pd.Timestamp(f"2025-01-{end_day:02d}", tz="UTC")
+            if end_day is not None
+            else None
+        )
+
+        prepared, trade_start_idx = prepare_dataset_with_warmup(
+            frame,
+            start,
+            end,
+            1,
+        )
+
+        assert prepared.index.day.tolist() == expected_days
+        assert trade_start_idx == expected_trade_start
 
 
 class TestMetricsParity:
@@ -481,6 +539,7 @@ class TestAdvancedMetricBoundary:
         result = self._result(
             [100.0, 101.0],
             [pd.Timestamp("2025-01-01", tz="UTC")],
+            trades=[],
         )
         with pytest.raises(ValueError, match="timestamps.*equity_curve"):
             calculate_advanced(result)
@@ -491,6 +550,9 @@ class TestAdvancedMetricBoundary:
         assert view.initial_equity == 100.0
         assert view.equity_observations.size == 0
         assert view.equity_path.tolist() == [100.0]
+        empty_advanced = calculate_advanced(empty)
+        assert empty_advanced.ulcer_index is None
+        assert empty_advanced.consistency_score is None
 
         timestamps = pd.date_range("2025-01-01", periods=2, freq="D", tz="UTC")
         warmup_only = self._result(
@@ -503,7 +565,77 @@ class TestAdvancedMetricBoundary:
         view = _advanced_metric_view(warmup_only)
         assert view.initial_equity == 100.0
         assert view.equity_observations.size == 0
-        assert calculate_advanced(warmup_only).sharpe_ratio is None
+        warmup_only_advanced = calculate_advanced(warmup_only)
+        assert warmup_only_advanced.sharpe_ratio is None
+        assert warmup_only_advanced.ulcer_index is None
+        assert warmup_only_advanced.consistency_score is None
+
+    @pytest.mark.parametrize("observation_count", [1, 3])
+    def test_genuine_flat_evaluation_observations_keep_zero_path_metrics(
+        self,
+        observation_count,
+    ):
+        timestamps = pd.date_range(
+            "2025-01-01",
+            periods=observation_count,
+            freq="D",
+            tz="UTC",
+        )
+        result = self._result(
+            [100.0] * observation_count,
+            timestamps,
+            trades=[],
+        )
+
+        advanced = calculate_advanced(result)
+
+        assert advanced.ulcer_index == 0.0
+        if observation_count == 1:
+            assert advanced.consistency_score is None
+        else:
+            assert advanced.consistency_score == 0.0
+
+    def test_zero_trade_metrics_validate_lengths_without_calendar_materialization(
+        self,
+        monkeypatch,
+    ):
+        timestamps = [
+            "2025-01-01T00:00:00Z",
+            "2025-02-01T00:00:00Z",
+        ]
+        result = self._result([100.0, 100.0], timestamps, trades=[])
+
+        def fail_datetime_index(*args, **kwargs):
+            raise AssertionError("zero-trade metrics must not normalize timestamps")
+
+        monkeypatch.setattr(metrics_module.pd, "DatetimeIndex", fail_datetime_index)
+
+        advanced = calculate_advanced(result)
+
+        assert advanced.sharpe_ratio is None
+        assert advanced.ulcer_index == 0.0
+        assert advanced.consistency_score == 0.0
+
+    def test_trade_bearing_string_timestamps_normalize_for_monthly_metrics(self):
+        result = self._result(
+            [110.0, 121.0, 133.1],
+            [
+                "2025-01-31T23:30:00Z",
+                "2025-02-01T00:00:00Z",
+                "2025-03-01T00:00:00Z",
+            ],
+        )
+        view = _advanced_metric_view(result)
+
+        returns = _calculate_monthly_returns(
+            view.equity_observations,
+            view.timestamps,
+            initial_equity=view.initial_equity,
+        )
+        advanced = calculate_advanced(result)
+
+        assert returns == pytest.approx([10.0, 10.0, 10.0])
+        assert advanced.sharpe_ratio is not None
 
     def test_production_anchor_makes_advanced_metrics_caller_independent(self):
         timestamps = pd.to_datetime(

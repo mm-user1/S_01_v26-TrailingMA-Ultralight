@@ -141,6 +141,9 @@ def prepare_dataset_with_warmup(
         - trimmed_df: DataFrame with warmup + trading period
         - trade_start_idx: Index where trading should begin (warmup ends)
     """
+    if start is not None and end is not None and start > end:
+        raise ValueError("start must not be after end.")
+
     try:
         normalized_warmup = int(warmup_bars)
     except (TypeError, ValueError):

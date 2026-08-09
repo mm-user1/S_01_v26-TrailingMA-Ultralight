@@ -20,7 +20,7 @@ import logging
 import math
 from dataclasses import dataclass, fields
 import operator
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -164,7 +164,7 @@ class AdvancedMetricView:
     """Evaluation-only observations plus their pre-first-bar equity anchor."""
 
     initial_equity: Optional[float]
-    timestamps: pd.DatetimeIndex
+    timestamps: Sequence[Any]
     equity_observations: np.ndarray
     equity_path: np.ndarray
 
@@ -185,7 +185,7 @@ def _advanced_metric_view(
 ) -> AdvancedMetricView:
     """Resolve the canonical advanced-metric interval for a strategy result."""
     equity_values = np.asarray(result.equity_curve, dtype=float)
-    timestamps = pd.DatetimeIndex(result.timestamps)
+    timestamps = result.timestamps
     if equity_values.ndim != 1:
         raise ValueError("StrategyResult equity_curve must be one-dimensional.")
     if len(timestamps) != equity_values.size:
@@ -254,13 +254,15 @@ def _advanced_metric_view(
 
 def _calculate_monthly_returns(
     equity_curve: List[float],
-    time_index: pd.DatetimeIndex,
+    time_index: Sequence[Any],
     *,
     initial_equity: Optional[float] = None,
 ) -> List[float]:
     """Calculate calendar-month returns from end-of-bar equity observations."""
     if len(equity_curve) == 0 or len(equity_curve) != len(time_index):
         return []
+
+    calendar_index = pd.DatetimeIndex(time_index)
 
     if initial_equity is None:
         period_start_equity = _validated_metric_equity(
@@ -274,11 +276,11 @@ def _calculate_monthly_returns(
         )
 
     monthly_returns: List[float] = []
-    first_timestamp = time_index[0]
+    first_timestamp = calendar_index[0]
     current_month = (first_timestamp.year, first_timestamp.month)
     previous_equity = period_start_equity
 
-    for equity, timestamp in zip(equity_curve, time_index):
+    for equity, timestamp in zip(equity_curve, calendar_index):
         month_key = (timestamp.year, timestamp.month)
         if month_key != current_month:
             if period_start_equity > 0:
@@ -603,7 +605,7 @@ def calculate_advanced(
         sharpe_ratio = _calculate_sharpe_ratio_value(monthly_returns, risk_free_rate)
         sortino_ratio = _calculate_sortino_ratio_value(monthly_returns, risk_free_rate)
 
-    if metric_view.equity_path.size:
+    if metric_view.equity_observations.size:
         ulcer_index = _calculate_ulcer_index_value(metric_view.equity_path)
         consistency_score = _calculate_r2_consistency(metric_view.equity_path)
 

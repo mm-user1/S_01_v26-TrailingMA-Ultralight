@@ -546,6 +546,63 @@ def test_position_fast_metrics_are_request_gated_and_match_reference(
     assert materialized.fast_metrics["sqn"] == materialized.sqn
 
 
+def test_position_bracket_compiled_sharpe_matches_reference_after_real_warmup(
+    prepared_data,
+    hooks,
+):
+    df, trade_start_idx = prepared_data
+    plan = build_grid_v2_plan(
+        _config_with_rounding("none"),
+        GridV2Settings(
+            enabled_variants=("bracket",),
+            enabled_axes=("stopX", "stopRR"),
+            prefer_compiled=True,
+            top_n=0,
+        ),
+        base_params=merged_reference_params("reference_b_trend_bracket"),
+    )
+    compiled = execute_grid_v2_candidates(
+        plan,
+        df,
+        trade_start_idx,
+        hooks,
+        (0,),
+        compute_sharpe=True,
+    )
+    candidate = plan.candidate_for_index(0)
+    params = hooks.normalize_params(dict(candidate.params))
+    data = hooks.build_execution_data(df, params)
+    reference = run_v2_strategy(
+        data=data,
+        profile=plan.profile,
+        params=params,
+        trade_start_idx=trade_start_idx,
+    ).strategy_result
+    view = _advanced_metric_view(reference)
+    monthly_returns = _calculate_monthly_returns(
+        view.equity_observations,
+        view.timestamps,
+        initial_equity=view.initial_equity,
+    )
+    evaluation_months = {
+        (timestamp.year, timestamp.month) for timestamp in view.timestamps
+    }
+    prepared_months = {(timestamp.year, timestamp.month) for timestamp in df.index}
+    compiled_row = compiled.rows[0]
+
+    assert trade_start_idx == 1000
+    assert df.index[0] < df.index[trade_start_idx]
+    assert compiled_row.variant_name == "bracket"
+    assert compiled_row.total_trades == reference.total_trades > 0
+    assert math.isfinite(compiled_row.sharpe_ratio)
+    assert compiled_row.sharpe_ratio == reference.sharpe_ratio
+    assert reference.metric_start_idx == trade_start_idx
+    assert reference.metric_initial_equity == 100.0
+    assert len(reference.timestamps) == len(reference.equity_curve) == len(df)
+    assert view.timestamps[0] == df.index[trade_start_idx]
+    assert len(monthly_returns) == len(evaluation_months) < len(prepared_months)
+
+
 def test_sampled_position_grid_compiled_rows_match_reference(prepared_data, hooks):
     df, trade_start_idx = prepared_data
     base_params = merged_reference_params("reference_b_trend_bracket")

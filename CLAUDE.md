@@ -768,6 +768,10 @@ contract do not. Calendar returns assign a transition bar to its new month and
 close the old month with the preceding bar. Fast Grid implementations must
 match this contract and must not count technical warmup months.
 
+Monthly Sortino requires real downside months and is often `None` on two- to
+four-month windows; selecting it as a Slow objective may remove many or all
+candidates.
+
 Delayed WFA OOS transformations remove live technical warmup observations,
 retain only the sparse scheduled flat prefix, produce strictly increasing
 unique timestamps, and rebase the metric boundary to zero with an explicit
