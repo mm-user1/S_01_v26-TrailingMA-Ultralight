@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from core import storage
+from core import metrics, storage
 from core.walkforward_engine import (
     ISPipelineResult,
     MAX_WFA_CALENDAR_ANCHOR_DAY,
@@ -38,6 +38,56 @@ from core.backtest_engine import StrategyResult, TradeRecord
 from core.backtest_engine import load_data
 from strategies import get_strategy_config
 from strategies.s03_reversal_v11_regime_er_b2.strategy import normalized_params as normalized_s03_params
+
+
+def test_delayed_oos_prefix_strips_technical_warmup_and_rebases_metric_boundary():
+    result = StrategyResult(
+        trades=[],
+        equity_curve=[91.0, 92.0, 101.0, 103.0],
+        balance_curve=[90.0, 90.0, 100.0, 102.0],
+        timestamps=list(pd.to_datetime([
+            "2025-01-30T00:00:00Z",
+            "2025-01-31T00:00:00Z",
+            "2025-03-01T00:00:00Z",
+            "2025-03-02T00:00:00Z",
+        ])),
+        metric_start_idx=2,
+        metric_initial_equity=100.0,
+    )
+
+    prefixed = WalkForwardEngine._prepend_flat_prefix(
+        result,
+        scheduled_start=pd.Timestamp("2025-02-01T00:00:00Z"),
+        live_start=pd.Timestamp("2025-03-01T00:00:00Z"),
+    )
+
+    assert prefixed.timestamps == list(pd.to_datetime([
+        "2025-02-01T00:00:00Z",
+        "2025-03-01T00:00:00Z",
+        "2025-03-02T00:00:00Z",
+    ]))
+    assert prefixed.equity_curve == [100.0, 101.0, 103.0]
+    assert prefixed.balance_curve == [100.0, 100.0, 102.0]
+    assert prefixed.metric_start_idx == 0
+    assert prefixed.metric_initial_equity == 100.0
+    view = metrics._advanced_metric_view(prefixed)
+    assert list(view.timestamps) == prefixed.timestamps
+
+
+def test_non_delayed_oos_prefix_is_bit_identical_object():
+    result = StrategyResult(
+        trades=[],
+        equity_curve=[100.0],
+        balance_curve=[100.0],
+        timestamps=[pd.Timestamp("2025-02-01T00:00:00Z")],
+        metric_initial_equity=100.0,
+    )
+
+    assert WalkForwardEngine._prepend_flat_prefix(
+        result,
+        scheduled_start=pd.Timestamp("2025-02-01T00:00:00Z"),
+        live_start=pd.Timestamp("2025-02-01T00:00:00Z"),
+    ) is result
 
 
 def _build_params_from_config(strategy_id: str):

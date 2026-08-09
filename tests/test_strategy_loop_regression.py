@@ -21,9 +21,9 @@ from strategies.s04_stochrsi.strategy import S04Params, S04StochRSI
 PROJECT_ROOT = Path(__file__).parent.parent
 
 EXPECTED_SIGNATURES = {
-    "s01": "190c9f1cfe5222cff6086ec912a375bf42993b625a26d241c199c5d2a8098166",
-    "s03": "0c2b2d9d70bf906e85227b5530ade1472c6021ba3c036dbafea4cc0c55632226",
-    "s04": "2006d2bb158b39122d5aada0a29406b6da28def594b5b5b63dc41cc4302fdfa8",
+    "s01": "d83d37231e36c7c3bb5e95bb85551dac25ce55d4393055f9783e3cd623158384",
+    "s03": "bfda86adb8947de5962e81cc96331c8331d45ea26c4c3b6240ac5c73696177f8",
+    "s04": "b1e4896189defe93b71d322efcf849d0dffacede637152caea99fe9576788db9",
 }
 
 

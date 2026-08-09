@@ -412,6 +412,8 @@ class S01TrailingMA(BaseStrategy):
             equity_curve=mtm_curve,
             balance_curve=realized_curve,
             timestamps=timestamps,
+            metric_start_idx=trade_start_idx,
+            metric_initial_equity=equity,
         )
 
         metrics.enrich_strategy_result(result, initial_balance=equity, risk_free_rate=0.02)

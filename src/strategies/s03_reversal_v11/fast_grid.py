@@ -852,6 +852,7 @@ def _s03_fast_loop_impl(
     consecutive_losses = 0
     current_month = -1
     month_start_equity = 0.0
+    previous_month_equity = initial_capital
     last_equity = initial_capital
     monthly_count = 0
     monthly_mean = 0.0
@@ -1116,14 +1117,14 @@ def _s03_fast_loop_impl(
         equity_value = balance + unrealized
         last_equity = equity_value
 
-        if compute_sharpe:
+        if compute_sharpe and i >= trade_start_idx:
             month_key = month_ids[i]
             if current_month < 0:
                 current_month = month_key
-                month_start_equity = equity_value
+                month_start_equity = initial_capital
             elif month_key != current_month:
                 if month_start_equity > 0.0:
-                    monthly_return = ((equity_value / month_start_equity) - 1.0) * 100.0
+                    monthly_return = ((previous_month_equity / month_start_equity) - 1.0) * 100.0
                     monthly_count += 1
                     delta = monthly_return - monthly_mean
                     monthly_mean += delta / monthly_count
@@ -1133,7 +1134,8 @@ def _s03_fast_loop_impl(
                         monthly_sum3 += monthly_return * monthly_return * monthly_return
                         monthly_sum4 += monthly_return * monthly_return * monthly_return * monthly_return
                 current_month = month_key
-                month_start_equity = equity_value
+                month_start_equity = previous_month_equity
+            previous_month_equity = equity_value
 
         if balance >= running_max_balance:
             if i > last_drawdown_boundary_index + 1 and current_drawdown_pct > max_drawdown_pct:
@@ -1182,7 +1184,7 @@ def _s03_fast_loop_impl(
     dsr_kurtosis = math.nan
     if compute_sharpe and total_trades > 0:
         if month_start_equity > 0.0:
-            monthly_return = ((last_equity / month_start_equity) - 1.0) * 100.0
+            monthly_return = ((previous_month_equity / month_start_equity) - 1.0) * 100.0
             monthly_count += 1
             delta = monthly_return - monthly_mean
             monthly_mean += delta / monthly_count
@@ -1218,6 +1220,9 @@ def _s03_fast_loop_impl(
         sqn_std = math.sqrt(sqn_m2 / (sqn_count - 1))
         if sqn_std >= 1e-10:
             sqn = math.sqrt(sqn_count) * sqn_mean / sqn_std
+
+    if total_trades == 0:
+        monthly_count = 0
 
     return (
         net_profit_pct,

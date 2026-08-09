@@ -199,6 +199,14 @@ project-root/
 | `post_process.py` | Forward Test validation, DSR (Deflated Sharpe Ratio) analysis, Stress Test, profit degradation metrics |
 | `testing.py` | OOS selection utilities, stress test candidate filtering, comparison metrics |
 
+Advanced metrics consume a canonical evaluation view of `StrategyResult`.
+`metric_start_idx` marks the first in-curve evaluation observation and
+`metric_initial_equity` supplies its pre-observation anchor. This keeps
+technical warmup available to strategy state while excluding it from Sharpe,
+Sortino, Ulcer Index, and Consistency. Basic realized drawdown/RoMaD semantics
+remain unchanged. Calendar-month ownership closes the old month on the bar
+before a transition and assigns the transition bar to the new month.
+
 #### Indicators (`src/indicators/`)
 
 | Module | Indicators |

@@ -983,6 +983,7 @@ def _compiled_loop_one(
 
     current_month = -1
     month_start_equity = 0.0
+    previous_month_equity = initial_capital
     last_equity = initial_capital
     monthly_count = 0
     monthly_mean = 0.0
@@ -1305,7 +1306,7 @@ def _compiled_loop_one(
                         pending_target = target
                     pending_size = order_size
 
-        if compute_sharpe:
+        if compute_sharpe and i >= trade_start_idx:
             unrealized = 0.0
             if position > 0:
                 unrealized = (close - entry_price) * size
@@ -1316,16 +1317,17 @@ def _compiled_loop_one(
             month_key = month_ids[i]
             if current_month < 0:
                 current_month = month_key
-                month_start_equity = equity_value
+                month_start_equity = initial_capital
             elif month_key != current_month:
                 if month_start_equity > 0.0:
-                    monthly_return = ((equity_value / month_start_equity) - 1.0) * 100.0
+                    monthly_return = ((previous_month_equity / month_start_equity) - 1.0) * 100.0
                     monthly_count += 1
                     monthly_delta = monthly_return - monthly_mean
                     monthly_mean += monthly_delta / monthly_count
                     monthly_m2 += monthly_delta * (monthly_return - monthly_mean)
                 current_month = month_key
-                month_start_equity = equity_value
+                month_start_equity = previous_month_equity
+            previous_month_equity = equity_value
 
         if balance >= running_peak:
             if i > last_drawdown_boundary + 1 and current_drawdown > max_drawdown:
@@ -1361,7 +1363,7 @@ def _compiled_loop_one(
     sharpe_ratio = math.nan
     if compute_sharpe and total_trades > 0:
         if month_start_equity > 0.0:
-            monthly_return = ((last_equity / month_start_equity) - 1.0) * 100.0
+            monthly_return = ((previous_month_equity / month_start_equity) - 1.0) * 100.0
             monthly_count += 1
             monthly_delta = monthly_return - monthly_mean
             monthly_mean += monthly_delta / monthly_count

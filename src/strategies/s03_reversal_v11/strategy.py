@@ -169,7 +169,13 @@ class S03ReversalV11(BaseStrategy):
         p = S03Params.from_dict(params)
 
         if df.empty:
-            return StrategyResult(trades=[], equity_curve=[], balance_curve=[], timestamps=[])
+            return StrategyResult(
+                trades=[],
+                equity_curve=[],
+                balance_curve=[],
+                timestamps=[],
+                metric_initial_equity=p.initialCapital,
+            )
 
         close = df["Close"]
         open_ = df["Open"]
@@ -476,6 +482,8 @@ class S03ReversalV11(BaseStrategy):
             equity_curve=equity_curve,
             balance_curve=balance_curve,
             timestamps=timestamps,
+            metric_start_idx=trade_start_idx,
+            metric_initial_equity=p.initialCapital,
         )
 
         if not force_close_last_bar:

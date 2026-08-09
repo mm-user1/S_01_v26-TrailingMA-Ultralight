@@ -42,7 +42,7 @@ from core.engine_v2.kernel import ExecutionData
 from core.engine_v2.profile import parse_execution_profile
 from core.engine_v2.runner import run_v2_strategy
 from core.grid_engine import _grid_v2_result_from_row
-from core.metrics import _calculate_monthly_returns
+from core.metrics import _advanced_metric_view, _calculate_monthly_returns
 from core.grid_v2 import (
     GridV2Settings,
     GridV2StrategyHooks,
@@ -776,7 +776,7 @@ def test_intrabar_target_exits_update_sqn_once_at_29_30_boundary(trade_count, ex
         assert reference.sqn is None
 
 
-def test_sharpe_preserves_final_bar_month_transition_zero_partial_month():
+def test_sharpe_assigns_first_new_month_bar_to_new_month():
     data = _data(
         open_=[100.0, 100.0, 105.0],
         high=[100.0, 101.0, 106.0],
@@ -809,13 +809,15 @@ def test_sharpe_preserves_final_bar_month_transition_zero_partial_month():
         params=params,
         trade_start_idx=0,
     ).strategy_result
+    metric_view = _advanced_metric_view(reference)
     monthly_returns = _calculate_monthly_returns(
-        reference.equity_curve,
-        pd.DatetimeIndex(reference.timestamps),
+        metric_view.equity_observations,
+        metric_view.timestamps,
+        initial_equity=metric_view.initial_equity,
     )
 
     assert len(monthly_returns) == 3
-    assert monthly_returns[-1] == 0.0
+    assert monthly_returns[-1] != 0.0
     _assert_float_equal(compiled[OUTPUT_SHARPE_RATIO], reference.sharpe_ratio)
 
 

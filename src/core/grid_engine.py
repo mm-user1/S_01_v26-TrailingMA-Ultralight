@@ -1007,9 +1007,16 @@ def rank_grid_results(
 
     if not valid:
         objective_list = ", ".join(objectives)
+        sharpe_hint = ""
+        if "sharpe_ratio" in objectives:
+            sharpe_hint = (
+                ". Sharpe is undefined with insufficient real calendar observations, "
+                "no completed trades, or unusable monthly variance"
+            )
         raise ValueError(
             f"{stage_label} produced no candidates with usable objective values"
             + (f" for: {objective_list}" if objective_list else ".")
+            + sharpe_hint
         )
 
     _mark_grid_pareto(valid, mo_config)

@@ -37,6 +37,8 @@ class StrategyResult:
     equity_curve: List[float]
     balance_curve: List[float]
     timestamps: List[pd.Timestamp]
+    metric_start_idx: int = 0
+    metric_initial_equity: Optional[float] = None
 
     net_profit: float = 0.0
     net_profit_pct: float = 0.0

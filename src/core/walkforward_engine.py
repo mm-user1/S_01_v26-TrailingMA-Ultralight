@@ -1081,6 +1081,7 @@ class WalkForwardEngine:
                 _, separator, objective_text = ranking_error.partition(" for:")
                 objective_names = set()
                 if separator:
+                    objective_text = objective_text.split(".", 1)[0]
                     objective_names = {
                         item.strip().rstrip(".!?")
                         for item in objective_text.split(",")
@@ -1089,10 +1090,13 @@ class WalkForwardEngine:
                 hints = []
                 if "sqn" in objective_names:
                     hints.append("SQN is undefined below 30 completed trades.")
-                if "sharpe_ratio" in objective_names:
+                if (
+                    "sharpe_ratio" in objective_names
+                    and "insufficient real calendar observations" not in ranking_error
+                ):
                     hints.append(
-                        "Sharpe can be undefined with no completed trades, fewer than two monthly "
-                        "observations, or unusable monthly variance."
+                        "Sharpe can be undefined with insufficient real calendar observations, "
+                        "no completed trades, or unusable monthly variance."
                     )
                 if not ranking_error.endswith((".", "!", "?")):
                     ranking_error = f"{ranking_error}."
@@ -1559,6 +1563,8 @@ class WalkForwardEngine:
             equity_curve=curve,
             balance_curve=list(curve),
             timestamps=timestamps,
+            metric_start_idx=0,
+            metric_initial_equity=100.0,
         )
 
     @staticmethod
@@ -1571,18 +1577,28 @@ class WalkForwardEngine:
         if live_start is None or live_start <= scheduled_start:
             return result
 
-        equity_curve = list(getattr(result, "equity_curve", None) or [])
-        balance_curve = list(getattr(result, "balance_curve", None) or [])
-        timestamps = list(getattr(result, "timestamps", None) or [])
+        metric_view = metrics._advanced_metric_view(result)
+        timestamps = list(metric_view.timestamps)
+        equity_curve = list(metric_view.equity_observations)
+        anchor = 100.0 if metric_view.initial_equity is None else metric_view.initial_equity
+
+        source_balance = list(getattr(result, "balance_curve", None) or [])
+        source_timestamps = list(getattr(result, "timestamps", None) or [])
+        if source_balance and len(source_balance) != len(source_timestamps):
+            raise ValueError(
+                "StrategyResult timestamps and balance_curve must have identical lengths."
+            )
+        metric_start_idx = len(source_timestamps) - len(timestamps)
+        balance_curve = source_balance[metric_start_idx:] if source_balance else list(equity_curve)
 
         prefixed_timestamps: List[pd.Timestamp] = [scheduled_start]
-        prefixed_equity: List[float] = [100.0]
-        prefixed_balance: List[float] = [100.0]
+        prefixed_equity: List[float] = [anchor]
+        prefixed_balance: List[float] = [anchor]
 
         if not timestamps or timestamps[0] > live_start:
             prefixed_timestamps.append(live_start)
-            prefixed_equity.append(100.0)
-            prefixed_balance.append(100.0)
+            prefixed_equity.append(anchor)
+            prefixed_balance.append(anchor)
 
         prefixed_timestamps.extend(timestamps)
         prefixed_equity.extend(equity_curve)
@@ -1595,6 +1611,8 @@ class WalkForwardEngine:
             if deduped_timestamps and ts == deduped_timestamps[-1]:
                 deduped_equity[-1] = eq
                 deduped_balance[-1] = bal
+            elif deduped_timestamps and ts < deduped_timestamps[-1]:
+                raise ValueError("Delayed OOS timestamps must be strictly increasing.")
             else:
                 deduped_timestamps.append(ts)
                 deduped_equity.append(eq)
@@ -1605,6 +1623,8 @@ class WalkForwardEngine:
             equity_curve=deduped_equity,
             balance_curve=deduped_balance,
             timestamps=deduped_timestamps,
+            metric_start_idx=0,
+            metric_initial_equity=anchor,
         )
 
     def _annotate_execution_plan(
@@ -2139,6 +2159,8 @@ class WalkForwardEngine:
         oos_timestamps = list(getattr(oos_result, "timestamps", None) or [])
         oos_balance = list(getattr(oos_result, "balance_curve", None) or [])
         oos_equity = list(getattr(oos_result, "equity_curve", None) or [])
+        metric_view = metrics._advanced_metric_view(oos_result)
+        validated_metric_start_idx = len(oos_timestamps) - len(metric_view.timestamps)
 
         if not oos_timestamps:
             return (
@@ -2147,6 +2169,8 @@ class WalkForwardEngine:
                     equity_curve=[],
                     balance_curve=[],
                     timestamps=[],
+                    metric_start_idx=0,
+                    metric_initial_equity=getattr(oos_result, "metric_initial_equity", None),
                 ),
                 trigger_time,
             )
@@ -2168,6 +2192,11 @@ class WalkForwardEngine:
                 equity_curve=truncated_equity,
                 balance_curve=truncated_balance,
                 timestamps=truncated_timestamps,
+                metric_start_idx=min(
+                    validated_metric_start_idx,
+                    len(truncated_timestamps),
+                ),
+                metric_initial_equity=getattr(oos_result, "metric_initial_equity", None),
             ),
             trigger_time,
         )
@@ -2548,6 +2577,8 @@ class WalkForwardEngine:
             return [], []
 
         time_index = pd.DatetimeIndex(timestamps)
+        if not time_index.is_monotonic_increasing or time_index.has_duplicates:
+            raise ValueError("OOS timestamps must be strictly increasing before compaction.")
 
         def _resolve_point(target: Optional[pd.Timestamp]) -> Optional[Tuple[pd.Timestamp, float]]:
             if target is None:

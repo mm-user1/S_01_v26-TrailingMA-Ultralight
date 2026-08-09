@@ -25,11 +25,14 @@ from core.backtest_engine import (  # noqa: E402
     prepare_dataset_with_warmup,
 )
 from core.metrics import (  # noqa: E402
+    _advanced_metric_view,
+    _calculate_monthly_returns,
     calculate_basic,
     calculate_advanced,
     _calculate_r2_consistency,
     _calculate_sharpe_ratio_value,
     _calculate_sqn_value,
+    _calculate_ulcer_index_value,
     _welford_mean_m2,
 )
 from strategies.s01_trailing_ma.strategy import S01Params, S01TrailingMA  # noqa: E402
@@ -355,6 +358,215 @@ class TestStableSharpeAndSqn:
 
         assert _calculate_sqn_value(tiny_variance) is None
         assert _calculate_sqn_value(non_finite) is None
+
+
+class TestAdvancedMetricBoundary:
+    @staticmethod
+    def _trade() -> TradeRecord:
+        return TradeRecord(net_pnl=1.0)
+
+    @staticmethod
+    def _result(
+        equity,
+        timestamps,
+        *,
+        metric_start_idx=0,
+        metric_initial_equity=100.0,
+        trades=None,
+    ):
+        return StrategyResult(
+            trades=[TestAdvancedMetricBoundary._trade()] if trades is None else trades,
+            equity_curve=list(equity),
+            balance_curve=list(equity),
+            timestamps=list(timestamps),
+            metric_start_idx=metric_start_idx,
+            metric_initial_equity=metric_initial_equity,
+        )
+
+    @pytest.mark.parametrize("first_equity", [99.5, 110.0, 90.0])
+    def test_boundary_zero_explicit_anchor_captures_first_bar(self, first_equity):
+        timestamps = pd.to_datetime(
+            ["2025-01-31T23:30:00Z", "2025-02-01T00:00:00Z"]
+        )
+        result = self._result([first_equity, 108.0], timestamps)
+        view = _advanced_metric_view(result)
+        returns = _calculate_monthly_returns(
+            view.equity_observations,
+            view.timestamps,
+            initial_equity=view.initial_equity,
+        )
+
+        assert view.initial_equity == 100.0
+        assert view.equity_path.tolist() == [100.0, first_equity, 108.0]
+        assert returns[0] == pytest.approx((first_equity / 100.0 - 1.0) * 100.0)
+        assert returns[1] == pytest.approx((108.0 / first_equity - 1.0) * 100.0)
+        assert math.prod(1.0 + value / 100.0 for value in returns) == pytest.approx(1.08)
+
+    def test_anchor_participates_in_ulcer_and_consistency_paths(self):
+        timestamps = pd.date_range("2025-01-01", periods=3, freq="D", tz="UTC")
+        result = self._result([90.0, 95.0, 110.0], timestamps)
+        advanced = calculate_advanced(result)
+        expected_path = [100.0, 90.0, 95.0, 110.0]
+
+        assert advanced.ulcer_index == pytest.approx(
+            _calculate_ulcer_index_value(expected_path)
+        )
+        assert advanced.consistency_score == pytest.approx(
+            _calculate_r2_consistency(expected_path)
+        )
+
+    def test_warmup_prefix_length_and_calendar_span_do_not_change_metrics(self):
+        evaluation_timestamps = pd.to_datetime(
+            [
+                "2025-03-01T00:00:00Z",
+                "2025-03-31T23:30:00Z",
+                "2025-04-01T00:00:00Z",
+                "2025-05-15T00:00:00Z",
+            ]
+        )
+        evaluation_equity = [99.5, 105.0, 102.0, 115.0]
+        results = []
+        for prefix_len, frequency in ((0, "30min"), (100, "15min"), (1000, "1D")):
+            if prefix_len:
+                prefix_timestamps = pd.date_range(
+                    end=evaluation_timestamps[0] - pd.Timedelta(frequency),
+                    periods=prefix_len,
+                    freq=frequency,
+                )
+            else:
+                prefix_timestamps = pd.DatetimeIndex([])
+            results.append(
+                self._result(
+                    [100.0] * prefix_len + evaluation_equity,
+                    list(prefix_timestamps) + list(evaluation_timestamps),
+                    metric_start_idx=prefix_len,
+                )
+            )
+
+        affected = ("sharpe_ratio", "sortino_ratio", "ulcer_index", "consistency_score")
+        expected = calculate_advanced(results[0]).to_dict()
+        for result in results[1:]:
+            actual = calculate_advanced(result).to_dict()
+            assert {name: actual[name] for name in affected} == pytest.approx(
+                {name: expected[name] for name in affected}
+            )
+
+    @pytest.mark.parametrize(
+        ("metric_start_idx", "metric_initial_equity", "message"),
+        [
+            (-1, 100.0, "metric_start_idx"),
+            (3, 100.0, "metric_start_idx"),
+            (True, 100.0, "metric_start_idx"),
+            (0, math.nan, "metric_initial_equity"),
+            (0, math.inf, "metric_initial_equity"),
+            (0, -1.0, "metric_initial_equity"),
+        ],
+    )
+    def test_malformed_boundary_facts_fail_clearly(
+        self,
+        metric_start_idx,
+        metric_initial_equity,
+        message,
+    ):
+        result = self._result(
+            [100.0, 101.0],
+            pd.date_range("2025-01-01", periods=2, freq="D", tz="UTC"),
+            metric_start_idx=metric_start_idx,
+            metric_initial_equity=metric_initial_equity,
+        )
+        with pytest.raises(ValueError, match=message):
+            calculate_advanced(result)
+
+    def test_inconsistent_timestamp_and_equity_lengths_fail_clearly(self):
+        result = self._result(
+            [100.0, 101.0],
+            [pd.Timestamp("2025-01-01", tz="UTC")],
+        )
+        with pytest.raises(ValueError, match="timestamps.*equity_curve"):
+            calculate_advanced(result)
+
+    def test_empty_and_boundary_equal_to_result_length_are_supported(self):
+        empty = self._result([], [], metric_initial_equity=100.0, trades=[])
+        view = _advanced_metric_view(empty)
+        assert view.initial_equity == 100.0
+        assert view.equity_observations.size == 0
+        assert view.equity_path.tolist() == [100.0]
+
+        timestamps = pd.date_range("2025-01-01", periods=2, freq="D", tz="UTC")
+        warmup_only = self._result(
+            [100.0, 100.0],
+            timestamps,
+            metric_start_idx=2,
+            metric_initial_equity=None,
+            trades=[],
+        )
+        view = _advanced_metric_view(warmup_only)
+        assert view.initial_equity == 100.0
+        assert view.equity_observations.size == 0
+        assert calculate_advanced(warmup_only).sharpe_ratio is None
+
+    def test_production_anchor_makes_advanced_metrics_caller_independent(self):
+        timestamps = pd.to_datetime(
+            ["2025-01-31T23:30:00Z", "2025-02-01T00:00:00Z", "2025-02-28T23:30:00Z"]
+        )
+        result = self._result([99.0, 101.0, 108.0], timestamps)
+
+        without_argument = calculate_advanced(result).to_dict()
+        with_argument = calculate_advanced(result, initial_balance=999.0).to_dict()
+        affected = ("sharpe_ratio", "sortino_ratio", "ulcer_index", "consistency_score")
+        assert {name: without_argument[name] for name in affected} == pytest.approx(
+            {name: with_argument[name] for name in affected}
+        )
+
+    def test_legacy_boundary_zero_preserves_established_path_behavior(self):
+        equity = [100.0, 90.0, 110.0]
+        timestamps = pd.date_range("2025-01-01", periods=3, freq="D", tz="UTC")
+        result = StrategyResult(
+            trades=[self._trade()],
+            equity_curve=equity,
+            balance_curve=equity,
+            timestamps=list(timestamps),
+        )
+        view = _advanced_metric_view(result)
+
+        assert view.initial_equity == 100.0
+        assert view.equity_path.tolist() == equity
+        assert calculate_advanced(result).ulcer_index == pytest.approx(
+            _calculate_ulcer_index_value(equity)
+        )
+
+    @pytest.mark.parametrize(
+        ("timestamps", "equity", "expected"),
+        [
+            (
+                ["2025-10-01T00:00:00Z", "2025-10-31T23:30:00Z", "2025-11-30T23:30:00Z"],
+                [101.0, 110.0, 121.0],
+                [10.0, 10.0],
+            ),
+            (
+                ["2025-10-15T00:00:00Z", "2025-11-01T00:00:00Z", "2025-12-14T23:30:00Z"],
+                [90.0, 99.0, 108.9],
+                [-10.0, 10.0, 10.0],
+            ),
+            (
+                ["2023-12-31T23:30:00Z", "2024-01-01T00:00:00Z", "2024-02-29T23:30:00Z"],
+                [105.0, 100.0, 110.0],
+                [5.0, (100.0 / 105.0 - 1.0) * 100.0, 10.0],
+            ),
+        ],
+    )
+    def test_month_boundaries_partial_periods_and_calendar_edges(
+        self,
+        timestamps,
+        equity,
+        expected,
+    ):
+        actual = _calculate_monthly_returns(
+            equity,
+            pd.DatetimeIndex(pd.to_datetime(timestamps)),
+            initial_equity=100.0,
+        )
+        assert actual == pytest.approx(expected)
 
 
 class TestR2Consistency:

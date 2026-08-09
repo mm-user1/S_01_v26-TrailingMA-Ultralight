@@ -421,14 +421,26 @@ class S06RTrendV02(BaseStrategy):
     ) -> StrategyResult:
         p = S06Params.from_dict(params)
         if df.empty:
-            result = StrategyResult(trades=[], equity_curve=[], balance_curve=[], timestamps=[])
+            result = StrategyResult(
+                trades=[],
+                equity_curve=[],
+                balance_curve=[],
+                timestamps=[],
+                metric_initial_equity=p.initialCapital,
+            )
             metrics.enrich_strategy_result(result, initial_balance=p.initialCapital)
             return result
 
         if p.use_date_filter and p.end is not None:
             eligible = np.flatnonzero(df.index <= p.end)
             if eligible.size == 0:
-                result = StrategyResult(trades=[], equity_curve=[], balance_curve=[], timestamps=[])
+                result = StrategyResult(
+                    trades=[],
+                    equity_curve=[],
+                    balance_curve=[],
+                    timestamps=[],
+                    metric_initial_equity=p.initialCapital,
+                )
                 metrics.enrich_strategy_result(result, initial_balance=p.initialCapital)
                 return result
             df = df.iloc[: int(eligible[-1]) + 1]
@@ -700,6 +712,8 @@ class S06RTrendV02(BaseStrategy):
             equity_curve=equity_curve,
             balance_curve=balance_curve,
             timestamps=timestamps,
+            metric_start_idx=trade_start_idx,
+            metric_initial_equity=p.initialCapital,
         )
         metrics.enrich_strategy_result(result, initial_balance=p.initialCapital, risk_free_rate=0.02)
         return result

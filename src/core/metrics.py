@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, fields
+import operator
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
@@ -158,40 +159,137 @@ class WFAMetrics:
 # ============================================================================
 
 
+@dataclass(frozen=True)
+class AdvancedMetricView:
+    """Evaluation-only observations plus their pre-first-bar equity anchor."""
+
+    initial_equity: Optional[float]
+    timestamps: pd.DatetimeIndex
+    equity_observations: np.ndarray
+    equity_path: np.ndarray
+
+
+def _validated_metric_equity(value: Any, *, field_name: str) -> float:
+    try:
+        equity = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a finite non-negative number.") from exc
+    if not math.isfinite(equity) or equity < 0.0:
+        raise ValueError(f"{field_name} must be a finite non-negative number.")
+    return equity
+
+
+def _advanced_metric_view(
+    result: StrategyResult,
+    initial_balance: Optional[float] = None,
+) -> AdvancedMetricView:
+    """Resolve the canonical advanced-metric interval for a strategy result."""
+    equity_values = np.asarray(result.equity_curve, dtype=float)
+    timestamps = pd.DatetimeIndex(result.timestamps)
+    if equity_values.ndim != 1:
+        raise ValueError("StrategyResult equity_curve must be one-dimensional.")
+    if len(timestamps) != equity_values.size:
+        raise ValueError(
+            "StrategyResult timestamps and equity_curve must have identical lengths."
+        )
+
+    raw_start_idx = getattr(result, "metric_start_idx", 0)
+    if isinstance(raw_start_idx, (bool, np.bool_)):
+        raise ValueError("StrategyResult metric_start_idx must be an integer index.")
+    try:
+        start_idx = operator.index(raw_start_idx)
+    except TypeError as exc:
+        raise ValueError("StrategyResult metric_start_idx must be an integer index.") from exc
+    if start_idx < 0 or start_idx > equity_values.size:
+        raise ValueError(
+            "StrategyResult metric_start_idx must be between zero and the result length."
+        )
+
+    explicit_anchor = getattr(result, "metric_initial_equity", None)
+    include_anchor_in_path = True
+    if explicit_anchor is not None:
+        anchor = _validated_metric_equity(
+            explicit_anchor,
+            field_name="StrategyResult metric_initial_equity",
+        )
+    elif start_idx >= 1:
+        anchor = _validated_metric_equity(
+            equity_values[start_idx - 1],
+            field_name="StrategyResult pre-boundary equity",
+        )
+    elif initial_balance is not None:
+        anchor = _validated_metric_equity(
+            initial_balance,
+            field_name="initial_balance",
+        )
+    elif equity_values.size:
+        # Legacy boundary-zero results never carried a distinct pre-bar anchor.
+        # Preserve their established path-metric behavior instead of duplicating
+        # the first recorded observation.
+        anchor = _validated_metric_equity(
+            equity_values[0],
+            field_name="StrategyResult legacy initial equity",
+        )
+        include_anchor_in_path = False
+    else:
+        anchor = None
+        include_anchor_in_path = False
+
+    observations = equity_values[start_idx:]
+    evaluation_timestamps = timestamps[start_idx:]
+    if anchor is not None and include_anchor_in_path:
+        equity_path = np.empty(observations.size + 1, dtype=float)
+        equity_path[0] = anchor
+        equity_path[1:] = observations
+    else:
+        equity_path = observations
+
+    return AdvancedMetricView(
+        initial_equity=anchor,
+        timestamps=evaluation_timestamps,
+        equity_observations=observations,
+        equity_path=equity_path,
+    )
+
+
 def _calculate_monthly_returns(
     equity_curve: List[float],
     time_index: pd.DatetimeIndex,
+    *,
+    initial_equity: Optional[float] = None,
 ) -> List[float]:
-    """
-    Calculate monthly percentage returns from equity curve and timestamps.
-
-    This is a COPY of the function from backtest_engine.py and must remain
-    bit-exact compatible with the original implementation.
-    """
-    if not equity_curve or len(equity_curve) != len(time_index):
+    """Calculate calendar-month returns from end-of-bar equity observations."""
+    if len(equity_curve) == 0 or len(equity_curve) != len(time_index):
         return []
 
+    if initial_equity is None:
+        period_start_equity = _validated_metric_equity(
+            equity_curve[0],
+            field_name="monthly-return initial equity",
+        )
+    else:
+        period_start_equity = _validated_metric_equity(
+            initial_equity,
+            field_name="monthly-return initial equity",
+        )
+
     monthly_returns: List[float] = []
-    current_month = None
-    month_start_equity: Optional[float] = None
+    first_timestamp = time_index[0]
+    current_month = (first_timestamp.year, first_timestamp.month)
+    previous_equity = period_start_equity
 
     for equity, timestamp in zip(equity_curve, time_index):
         month_key = (timestamp.year, timestamp.month)
-
-        if current_month is None:
-            current_month = month_key
-            month_start_equity = equity
-        elif month_key != current_month:
-            if month_start_equity is not None and month_start_equity > 0:
-                monthly_return = ((equity / month_start_equity) - 1.0) * 100.0
+        if month_key != current_month:
+            if period_start_equity > 0:
+                monthly_return = ((previous_equity / period_start_equity) - 1.0) * 100.0
                 monthly_returns.append(monthly_return)
-
             current_month = month_key
-            month_start_equity = equity
+            period_start_equity = previous_equity
+        previous_equity = float(equity)
 
-    if month_start_equity is not None and month_start_equity > 0 and equity_curve:
-        last_equity = equity_curve[-1]
-        monthly_return = ((last_equity / month_start_equity) - 1.0) * 100.0
+    if period_start_equity > 0:
+        monthly_return = ((previous_equity / period_start_equity) - 1.0) * 100.0
         monthly_returns.append(monthly_return)
 
     return monthly_returns
@@ -275,9 +373,9 @@ def _calculate_sortino_ratio_value(
     return sortino
 
 
-def _calculate_ulcer_index_value(equity_curve: List[float]) -> Optional[float]:
+def _calculate_ulcer_index_value(equity_curve: Any) -> Optional[float]:
     """Calculate Ulcer Index (downside volatility measure)."""
-    equity_array = np.array(equity_curve, dtype=float)
+    equity_array = np.asarray(equity_curve, dtype=float)
     if equity_array.size == 0:
         return None
 
@@ -292,7 +390,7 @@ def _calculate_ulcer_index_value(equity_curve: List[float]) -> Optional[float]:
     return ulcer
 
 
-def _calculate_r2_consistency(equity_curve: List[float]) -> Optional[float]:
+def _calculate_r2_consistency(equity_curve: Any) -> Optional[float]:
     """
     Calculate signed R² consistency from the equity curve.
 
@@ -479,8 +577,7 @@ def calculate_advanced(
 ) -> AdvancedMetrics:
     """Calculate advanced risk-adjusted metrics from strategy result."""
     trades = result.trades
-    equity_curve = result.equity_curve
-    timestamps = result.timestamps
+    metric_view = _advanced_metric_view(result, initial_balance=initial_balance)
 
     sharpe_ratio = None
     sortino_ratio = None
@@ -495,17 +592,20 @@ def calculate_advanced(
         sqn = _calculate_sqn_value(trades)
 
     monthly_returns: List[float] = []
-    if trades and timestamps:
-        time_index = pd.DatetimeIndex(timestamps)
-        monthly_returns = _calculate_monthly_returns(equity_curve, time_index)
+    if trades and len(metric_view.timestamps):
+        monthly_returns = _calculate_monthly_returns(
+            metric_view.equity_observations,
+            metric_view.timestamps,
+            initial_equity=metric_view.initial_equity,
+        )
 
     if len(monthly_returns) >= 2:
         sharpe_ratio = _calculate_sharpe_ratio_value(monthly_returns, risk_free_rate)
         sortino_ratio = _calculate_sortino_ratio_value(monthly_returns, risk_free_rate)
 
-    if equity_curve:
-        ulcer_index = _calculate_ulcer_index_value(equity_curve)
-        consistency_score = _calculate_r2_consistency(equity_curve)
+    if metric_view.equity_path.size:
+        ulcer_index = _calculate_ulcer_index_value(metric_view.equity_path)
+        consistency_score = _calculate_r2_consistency(metric_view.equity_path)
 
     basic = calculate_basic(result, initial_balance)
 

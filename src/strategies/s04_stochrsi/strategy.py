@@ -73,7 +73,13 @@ class S04StochRSI(BaseStrategy):
         p = S04Params.from_dict(params)
 
         if df.empty:
-            return StrategyResult(trades=[], equity_curve=[], balance_curve=[], timestamps=[])
+            return StrategyResult(
+                trades=[],
+                equity_curve=[],
+                balance_curve=[],
+                timestamps=[],
+                metric_initial_equity=p.initialCapital,
+            )
 
         close = df["Close"]
         high = df["High"]
@@ -352,6 +358,8 @@ class S04StochRSI(BaseStrategy):
             equity_curve=equity_curve,
             balance_curve=balance_curve,
             timestamps=timestamps,
+            metric_start_idx=trade_start_idx,
+            metric_initial_equity=p.initialCapital,
         )
 
         metrics.enrich_strategy_result(result, initial_balance=p.initialCapital, risk_free_rate=0.02)

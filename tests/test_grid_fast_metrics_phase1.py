@@ -242,16 +242,54 @@ def test_v1_dsr_reuses_sharpe_without_enabling_sqn(prepared_cases, case_name):
     assert result.dsr_track_length >= 3
     assert result.dsr_skewness is not None
     assert result.dsr_kurtosis is not None
-    pre_change_pins = {
-        "s03_v10": (0.4881925136193053, 14, 1.133951452067206, 3.3514285439520384),
-        "s03_v11": (0.5247431200958718, 14, 1.0172131288238566, 3.2472427867215417),
-        "s06": (-0.5866138094864014, 6, -0.062185214015333626, 1.801336041090677),
+    corrected_calendar_pins = {
+        "s03_v10": (0.5098869911832709, 13, 0.9757645959064098, 3.026467558616449),
+        "s03_v11": (0.5482407780597649, 13, 0.850371966940852, 2.9545541261841404),
+        "s06": (-0.6106162762799014, 5, 0.35980610920011097, 1.5073494122398496),
     }
-    sharpe, track_length, skewness, kurtosis = pre_change_pins[case_name]
+    sharpe, track_length, skewness, kurtosis = corrected_calendar_pins[case_name]
     assert result.sharpe_ratio == pytest.approx(sharpe, rel=1e-12, abs=1e-12)
     assert result.dsr_track_length == track_length
     assert result.dsr_skewness == pytest.approx(skewness, rel=1e-10, abs=1e-12)
     assert result.dsr_kurtosis == pytest.approx(kurtosis, rel=1e-10, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "expected_track_length", "expect_sharpe"),
+    [
+        ("2025-09-01T00:00:00Z", "2025-09-30T23:59:59Z", 1, False),
+        ("2025-08-01T00:00:00Z", "2025-09-30T23:59:59Z", 2, True),
+    ],
+)
+def test_v1_fast_short_real_windows_use_only_real_calendar_months(
+    prepared_cases,
+    start,
+    end,
+    expected_track_length,
+    expect_sharpe,
+):
+    backend, _frame, _trade_start_idx, _data, candidates = prepared_cases["s03_v10"]
+    raw = load_data(str(DATA_PATH))
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    frame, trade_start_idx = prepare_dataset_with_warmup(raw, start_ts, end_ts, 1000)
+    params = {**candidates[0].params, "start": start_ts, "end": end_ts}
+    candidate = backend.GridCandidate(
+        candidate_id=1,
+        mode="both",
+        params=params,
+        semantic_key=backend.candidate_semantic_key("both", params),
+        generation_mode="test",
+        diversity_group="both|SMA|75",
+    )
+    data = backend.prepare_fast_data(frame, trade_start_idx, [candidate])
+
+    result = backend.evaluate_candidates(data, [candidate], needs_dsr=True)[0]
+
+    assert result.dsr_track_length == expected_track_length
+    assert (result.sharpe_ratio is not None) is expect_sharpe
+    assert result.dsr_skewness is None
+    assert result.dsr_kurtosis is None
 
 
 def test_all_v1_close_sites_update_sqn_once():

@@ -251,7 +251,10 @@ class S05MyStrategy(BaseStrategy):
         p = S05Params.from_dict(params)
 
         if df.empty:
-            return StrategyResult(trades=[], equity_curve=[], balance_curve=[], timestamps=[])
+            return StrategyResult(
+                trades=[], equity_curve=[], balance_curve=[], timestamps=[],
+                metric_initial_equity=p.initialCapital,
+            )
 
         # Get price data
         close = df["Close"]
@@ -271,9 +274,12 @@ class S05MyStrategy(BaseStrategy):
         timestamps: List[pd.Timestamp] = []
 
         # Bar-by-bar simulation
-        for i in range(trade_start_idx, len(df)):
-            # Your entry/exit logic here
-            # ...
+        for i in range(len(df)):
+            # Calculate/advance indicators on every prepared bar. Gate all
+            # order creation and trade mutation with i >= trade_start_idx.
+            if i >= trade_start_idx:
+                # Your entry/exit logic here
+                # ...
 
             # Force-close any open position at the final bar (required for all modes).
             if i == len(df) - 1 and position != 0:
@@ -308,6 +314,8 @@ class S05MyStrategy(BaseStrategy):
             equity_curve=equity_curve,
             balance_curve=balance_curve,
             timestamps=timestamps,
+            metric_start_idx=trade_start_idx,
+            metric_initial_equity=p.initialCapital,
         )
 
         # Compute and attach all declared metrics to result
@@ -321,11 +329,17 @@ class S05MyStrategy(BaseStrategy):
 AdvancedMetrics, then attaches only the metrics that StrategyResult declares
 as fields. Additional metrics (like `win_rate`, `sortino_ratio`) are available
 in Optuna optimization results but are not exposed in single-backtest output
-by design.
+by design. Every producer that returns prepared warmup observations must set
+`metric_start_idx` to the first evaluation observation and
+`metric_initial_equity` to the capital immediately before it. Advanced metrics
+use only that evaluation interval; basic realized metrics keep their existing
+full-result contract. The first bar of a new calendar month belongs to the new
+month, while the preceding bar closes the prior month.
 
 **Key patterns from existing strategies:**
 - Pre-extract NumPy arrays from DataFrame columns before the loop (e.g., `close_arr = df["Close"].to_numpy()`) for faster element access
-- Use `trade_start_idx` to skip warmup bars
+- Use `trade_start_idx` to prevent warmup trades while still retaining the
+  prepared observation curves and boundary metadata
 - Create `TradeRecord` for each closed trade
 - Track `equity_curve`, `balance_curve`, `timestamps`
 - Calculate metrics at the end using `core.metrics`
@@ -409,6 +423,11 @@ enumeration. A fast backend typically provides:
   accepted even when the backend can use their default behavior. Sharpe and SQN
   may be requested conditionally as public Fast Objectives; Sharpe may also be
   requested internally for DSR.
+- Conditional Fast Sharpe must stream only observations at or after
+  `trade_start_idx`, anchor the first real month at initial capital, close a
+  month with the preceding bar, retain the final partial month, and remain
+  undefined when there are no completed trades or fewer than two usable real
+  calendar-month returns.
 - Optional `get_backend_metadata()` and `build_allocation(...)` hooks for
   strategy-specific mode labels and generation profiles. Full-enumeration
   backends can declare that budget, seed, and allocation controls do not apply.

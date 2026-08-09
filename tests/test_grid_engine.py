@@ -706,7 +706,7 @@ def test_internal_fast_metric_ranking_excludes_undefined_and_errors_when_all_und
     with pytest.raises(
         ValueError,
         match=f"no candidates with usable objective values for: {objective}",
-    ):
+    ) as excinfo:
         rank_grid_results(
             [undefined],
             objectives=[objective],
@@ -714,6 +714,8 @@ def test_internal_fast_metric_ranking_excludes_undefined_and_errors_when_all_und
             constraints=[],
             stage_label="Internal Fast metric",
         )
+    if objective == "sharpe_ratio":
+        assert "insufficient real calendar observations" in str(excinfo.value)
 
 
 def test_fast_metric_request_separates_sharpe_and_sqn_from_dsr():

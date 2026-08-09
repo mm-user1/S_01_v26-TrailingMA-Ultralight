@@ -773,11 +773,14 @@ Check these first when V2 strategy work drifts:
 New V2 strategies inherit conditional Fast Grid Sharpe and SQN from their
 certified execution family; strategy signal code must not implement a second
 formula. The compiled families stream Welford state in constant memory. Sharpe
-uses the established calendar-month mark-to-market equity sequence (including
-warmup observations and the final-transition partial-month behavior), fixed
+uses the evaluation-only calendar-month mark-to-market equity sequence starting
+at `trade_start_idx`. Initial capital anchors the first evaluation month, the
+bar preceding a month transition closes the old month, and the first bar in
+the new month belongs to the new month. The final partial month is retained. A
+completed-trade gate is explicit. Sharpe otherwise keeps the fixed
 2% annual risk-free rate divided by 12, population variance, and no annualizing
-square root. It is undefined with no completed trades, fewer than two monthly
-observations, or non-positive/non-finite variance. SQN uses exact net trade PnL,
+square root. It is undefined with no completed trades, fewer than two real
+calendar observations, or non-positive/non-finite variance. SQN uses exact net trade PnL,
 sample variance, and is undefined below 30 completed trades, for non-positive
 variance, or standard deviation below `1e-10`.
 
@@ -787,3 +790,7 @@ controls but permits at most six selected. Non-finite selected objectives are
 removed from direct Grid and WFA ranking; a short WFA window can therefore
 exclude many SQN candidates. Sortino, Ulcer Index, and Consistency stay
 Slow-only, Fast Constraints are unchanged, and V2 Grid DSR remains unavailable.
+
+The shared runner returns `StrategyResult.metric_start_idx=trade_start_idx` and
+`metric_initial_equity=initial_capital`; adapters must not replace or reinterpret
+those boundary facts.

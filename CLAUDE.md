@@ -756,3 +756,19 @@ Grid drops a candidate when any selected objective is non-finite. SQN is
 undefined below 30 completed trades, so short direct-Grid or WFA windows can
 lose much of their rankable population; a WFA window with no usable candidate
 fails with its window number and selected objective context.
+
+### Advanced Metric Boundary Contract
+
+`StrategyResult.metric_start_idx` identifies the first evaluation observation
+inside its curves; `metric_initial_equity` is the equity immediately before
+that observation. Strategy producers must populate both when prepared data
+contains technical warmup. Advanced Sharpe, Sortino, Ulcer Index, and
+Consistency use this boundary; realized basic metrics and their drawdown/RoMaD
+contract do not. Calendar returns assign a transition bar to its new month and
+close the old month with the preceding bar. Fast Grid implementations must
+match this contract and must not count technical warmup months.
+
+Delayed WFA OOS transformations remove live technical warmup observations,
+retain only the sparse scheduled flat prefix, produce strictly increasing
+unique timestamps, and rebase the metric boundary to zero with an explicit
+anchor. Non-delayed stitched output remains unchanged.

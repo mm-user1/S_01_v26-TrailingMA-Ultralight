@@ -744,3 +744,29 @@ warmup months participate); minimum monthly standard deviations were 0.496,
 1.384, 11.012, and 1.232 percentage points, safely above the `1e-12` review
 threshold. Non-finite selected objectives are removed from ranking, so these
 percentages are operationally relevant for short WFA windows.
+
+## TZ-10 evaluation-boundary correction (2026-08-09)
+
+The TZ-07-2 rows above are retained as historical measurements of the former
+warmup-inclusive implementation. Current Sharpe month counts exclude technical
+warmup: the corresponding S06 four-month evaluation has five real calendar
+observations, and the twelve-month S03 signal evaluation has thirteen. The
+transition bar belongs to the new month and the final partial month remains.
+
+Windows 10, Python 3.13.7, NumPy 2.3.3, Numba 0.65.1, isolated task-local
+Numba caches. The S06 comparison used six workers and one warmup plus one
+measured run. The signal comparison used the same deterministic 4,096-row,
+18,521-bar real-data shape and four workers; its before values are the retained
+TZ-07-2 medians and its after values are one warmed measured run.
+
+| Family / request | Candidates / bars | Before | After | Delta |
+|---|---:|---:|---:|---:|
+| S06 full, metrics disabled, wall | 48,480 / 6,857 | 10.044s | 10.024s | -0.20% |
+| S06 full, Sharpe+SQN, wall | 48,480 / 6,857 | 10.243s | 10.173s | -0.68% |
+| Signal sampled, metrics disabled, evaluation | 4,096 / 18,521 | 11.253s | 11.231s | -0.19% |
+| Signal sampled, Sharpe+SQN, evaluation | 4,096 / 18,521 | 11.182s | 11.340s | +1.42% |
+
+The S06 full population remains 48,480. Disabled and enabled runs retained
+candidate IDs 18,436 and 18,981 respectively. The signal run produced 4,096
+rows; all 4,096 enabled rows had usable Sharpe and SQN. No disabled-path
+regression or material enabled-path regression was observed.

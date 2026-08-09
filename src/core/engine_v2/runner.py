@@ -164,6 +164,8 @@ def run_v2_strategy(
         equity_curve=kernel_result.equity_curve,
         balance_curve=kernel_result.balance_curve,
         timestamps=kernel_result.timestamps,
+        metric_start_idx=trade_start_idx,
+        metric_initial_equity=initial_balance,
     )
     metrics.enrich_strategy_result(
         strategy_result,

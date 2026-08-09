@@ -802,12 +802,12 @@ def run_dsr_analysis(
             )
             if not df_prepared.empty:
                 result = strategy_class.run(df_prepared, params, trade_start_idx)
-                timestamps = getattr(result, "timestamps", None) or []
-                equity_curve = getattr(result, "equity_curve", None) or []
-                time_index = pd.DatetimeIndex(timestamps) if timestamps else None
-                if time_index is not None and equity_curve:
+                metric_view = metrics._advanced_metric_view(result)
+                if getattr(result, "trades", None) and len(metric_view.timestamps):
                     monthly_returns = metrics._calculate_monthly_returns(
-                        equity_curve, time_index
+                        metric_view.equity_observations,
+                        metric_view.timestamps,
+                        initial_equity=metric_view.initial_equity,
                     )
                 else:
                     monthly_returns = []

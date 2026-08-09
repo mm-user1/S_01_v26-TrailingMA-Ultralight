@@ -589,3 +589,19 @@ and plan fingerprint
 `0f8d001c380df5ee95d34ca4e25910c674e20e9e8f34886a1bd2f1c261f019b2`.
 Two-objective Pareto acceleration and the unchanged quadratic 3+ objective
 fallback both apply to these metrics.
+
+## Advanced-metric warmup boundary certification (TZ-10)
+
+The reference runner, both compiled V2 execution families, and all three V1
+Fast backends share one evaluation-only calendar contract. Technical warmup is
+excluded using `trade_start_idx`; initial capital anchors the first evaluation
+month; the previous bar closes the old month; the transition bar belongs to
+the new month; and the final partial month is retained. No-completed-trade
+results expose no usable Sharpe track. One real month cannot define Sharpe, two
+real months can, and DSR higher moments remain unavailable below three.
+
+The S06 full population remains 48,480 with unchanged semantic digest
+`fc55d174e835e7196ae5fcf21427d318dc364241f6b10560aa32545e6910a08f`
+and plan fingerprint
+`0f8d001c380df5ee95d34ca4e25910c674e20e9e8f34886a1bd2f1c261f019b2`.
+No schema, identity, output-offset, or realized-drawdown contract changed.
