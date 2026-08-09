@@ -772,3 +772,22 @@ rows; all 4,096 enabled rows had usable Sharpe and SQN. No disabled-path
 regression or material enabled-path regression was observed.
 
 TZ-11 only retains existing reference-enrichment snapshots for selected Slow consumers; Fast code is unchanged, so the existing Fast baselines remain applicable.
+
+## TZ-14-1 request-gated Daily Sharpe measurement (2026-08-10)
+
+Windows 10, Python 3.13.7, committed 30-minute SUI fixture, real 1,000-bar
+warmup, nine warmed alternating reference runs per state. S06 used the
+certified bracket reference over 5,857 evaluation bars; S03 used the certified
+signal-reversal reference over 17,521 bars.
+
+| Family | Disabled median | Daily enabled median | Delta |
+|---|---:|---:|---:|
+| S06 position/bracket | 40.81 ms | 42.98 ms | +2.17 ms (+5.33%) |
+| S03 signal-reversal | 73.78 ms | 79.63 ms | +5.84 ms (+7.92%) |
+
+The enabled helper is vectorized over bars and stores at most one return per
+observed UTC day. It does not resample, copy a DataFrame, or synthesize missing
+dates. Disabled runner tests replace daily aggregation with a failing sentinel
+and still pass, proving there is no day-ID or daily-return traversal when the
+flag is false. Fast/Grid candidate paths remain unchanged and were not timed
+because Phase 1 does not expose Daily Sharpe there.

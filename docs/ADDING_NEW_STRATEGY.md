@@ -492,3 +492,12 @@ shows seven common Fast controls and accepts at most six simultaneously.
 Sortino, Ulcer Index, and Consistency remain Slow-only. Non-finite selected
 objectives remove the candidate from ranking rather than falling back to zero
 or Net Profit.
+
+Daily Sharpe is not a Fast Objective or public strategy field. Reference code
+may explicitly request `compute_sharpe_daily=True` during certification; normal
+strategy, Grid, WFA, UI, and storage paths leave it disabled. Its UTC daily
+fractional-return, `rf/365`, population-variance, and `sqrt(365)` scale is not
+interchangeable with Merlin's unannualized percentage-return Monthly Sharpe.
+The optional observation/active-day diagnostics are factual only, with no
+minimum-active-days rule. Existing metrics and DSR must not be altered to add
+this Phase 1 evidence.

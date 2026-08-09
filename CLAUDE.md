@@ -776,3 +776,19 @@ Delayed WFA OOS transformations remove live technical warmup observations,
 retain only the sparse scheduled flat prefix, produce strictly increasing
 unique timestamps, and rebase the metric boundary to zero with an explicit
 anchor. Non-delayed stitched output remains unchanged.
+
+### Request-gated Daily Sharpe reference metric
+
+`AdvancedMetrics.sharpe_daily` is a reference-only, explicit opt-in metric and
+is distinct from the existing unannualized Monthly Sharpe. It groups the
+evaluation-only mark-to-market curve by `floor(UTC nanoseconds / 86_400_000_000_000)`,
+uses the canonical pre-evaluation equity anchor, emits fractional simple
+returns for observed days (including partial edge days), subtracts `rf / 365`,
+uses population variance, and annualizes with `sqrt(365)`. Required non-finite
+values or non-positive opening denominators invalidate the complete series.
+
+The optional observation and active-day diagnostics remain `None` when the
+request is disabled; active means `abs(raw return) > 1e-12` and is descriptive,
+not a hard gate. Sparse WFA timestamps never imply synthesized dates. Fast
+Grid, UI, storage, WFA production integration, DSR, Monthly Sharpe, and every
+other metric remain unchanged pending a Phase 2 product decision.

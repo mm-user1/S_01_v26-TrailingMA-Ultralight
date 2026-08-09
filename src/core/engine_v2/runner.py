@@ -147,6 +147,7 @@ def run_v2_strategy(
     profile: Any,
     params: Mapping[str, Any],
     trade_start_idx: int = 0,
+    compute_sharpe_daily: bool = False,
 ) -> V2RunResult:
     """Run V2 execution and return an enriched Merlin strategy result."""
 
@@ -174,6 +175,7 @@ def run_v2_strategy(
         strategy_result,
         initial_balance=initial_balance,
         risk_free_rate=0.02,
+        compute_sharpe_daily=compute_sharpe_daily,
     )
     return V2RunResult(
         strategy_result=strategy_result,

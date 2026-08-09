@@ -108,6 +108,9 @@ class AdvancedMetrics:
     sqn: Optional[float] = None
     ulcer_index: Optional[float] = None
     consistency_score: Optional[float] = None
+    sharpe_daily: Optional[float] = None
+    sharpe_daily_observations: Optional[int] = None
+    sharpe_daily_active_days: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -119,6 +122,9 @@ class AdvancedMetrics:
             "sqn": self.sqn,
             "ulcer_index": self.ulcer_index,
             "consistency_score": self.consistency_score,
+            "sharpe_daily": self.sharpe_daily,
+            "sharpe_daily_observations": self.sharpe_daily_observations,
+            "sharpe_daily_active_days": self.sharpe_daily_active_days,
         }
 
 
@@ -297,6 +303,83 @@ def _calculate_monthly_returns(
     return monthly_returns
 
 
+_NANOSECONDS_PER_UTC_DAY = 86_400_000_000_000
+_DAILY_ACTIVE_RETURN_TOLERANCE = 1e-12
+_DAILY_COMPOUNDING_TOLERANCE = 1e-12
+
+
+def _utc_day_ids(time_index: Sequence[Any]) -> np.ndarray:
+    """Return UTC calendar-day identifiers without changing source order."""
+    try:
+        calendar_index = pd.DatetimeIndex(
+            pd.to_datetime(time_index, utc=True, format="mixed")
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "Daily Sharpe timestamps must be valid UTC-convertible timestamps."
+        ) from exc
+
+    if calendar_index.hasnans:
+        raise ValueError("Daily Sharpe timestamps must not contain NaT values.")
+
+    day_ids_64 = np.floor_divide(calendar_index.asi8, _NANOSECONDS_PER_UTC_DAY)
+    int32_info = np.iinfo(np.int32)
+    if np.any(day_ids_64 < int32_info.min) or np.any(day_ids_64 > int32_info.max):
+        raise ValueError("Daily Sharpe UTC day identifiers exceed the int32 range.")
+    return day_ids_64.astype(np.int32, copy=False)
+
+
+def _calculate_daily_returns(
+    equity_curve: Any,
+    time_index: Sequence[Any],
+    *,
+    initial_equity: Optional[float],
+) -> Optional[np.ndarray]:
+    """Build fractional simple returns from end-of-bar UTC daily closes."""
+    equity = np.asarray(equity_curve, dtype=float)
+    if equity.ndim != 1 or equity.size == 0 or equity.size != len(time_index):
+        return None
+    if initial_equity is None:
+        return None
+
+    try:
+        anchor = float(initial_equity)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(anchor) or anchor <= 0.0 or not np.isfinite(equity).all():
+        return None
+
+    day_ids = _utc_day_ids(time_index)
+    closing_indices = np.append(np.flatnonzero(day_ids[1:] != day_ids[:-1]), equity.size - 1)
+    daily_closes = equity[closing_indices]
+    opening_equity = np.empty(daily_closes.size, dtype=float)
+    opening_equity[0] = anchor
+    opening_equity[1:] = daily_closes[:-1]
+    if np.any(opening_equity <= 0.0) or not np.isfinite(daily_closes).all():
+        return None
+
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        daily_returns = daily_closes / opening_equity - 1.0
+    if not np.isfinite(daily_returns).all():
+        return None
+
+    with np.errstate(invalid="ignore", over="ignore"):
+        compounded = float(np.prod(1.0 + daily_returns, dtype=float))
+    total_return_factor = float(equity[-1] / anchor)
+    if not (
+        math.isfinite(compounded)
+        and math.isfinite(total_return_factor)
+        and math.isclose(
+            compounded,
+            total_return_factor,
+            rel_tol=_DAILY_COMPOUNDING_TOLERANCE,
+            abs_tol=_DAILY_COMPOUNDING_TOLERANCE,
+        )
+    ):
+        return None
+    return daily_returns
+
+
 def _calculate_profit_factor_value(trades: List[TradeRecord]) -> Optional[float]:
     """Calculate Profit Factor (gross profit / gross loss)."""
     if not trades:
@@ -330,6 +413,22 @@ def _calculate_sharpe_ratio_value(
     sd_return = math.sqrt(variance)
     rfr_monthly = (risk_free_rate * 100.0) / 12.0
     sharpe = (avg_return - rfr_monthly) / sd_return
+    return sharpe if math.isfinite(sharpe) else None
+
+
+def _calculate_sharpe_daily_value(
+    daily_returns: Any,
+    risk_free_rate: float = 0.02,
+) -> Optional[float]:
+    """Calculate annualized Sharpe from fractional UTC daily returns."""
+    count, avg_return, m2 = _welford_mean_m2(daily_returns)
+    if count < 2 or not math.isfinite(avg_return) or not math.isfinite(m2):
+        return None
+    variance = m2 / count
+    if not (variance > 0.0) or not math.isfinite(variance):
+        return None
+
+    sharpe = math.sqrt(365.0) * (avg_return - risk_free_rate / 365.0) / math.sqrt(variance)
     return sharpe if math.isfinite(sharpe) else None
 
 
@@ -576,6 +675,7 @@ def calculate_advanced(
     result: StrategyResult,
     initial_balance: Optional[float] = None,
     risk_free_rate: float = 0.02,
+    compute_sharpe_daily: bool = False,
 ) -> AdvancedMetrics:
     """Calculate advanced risk-adjusted metrics from strategy result."""
     trades = result.trades
@@ -588,10 +688,26 @@ def calculate_advanced(
     sqn = None
     ulcer_index = None
     consistency_score = None
+    sharpe_daily = None
+    sharpe_daily_observations = None
+    sharpe_daily_active_days = None
 
     if trades:
         profit_factor = _calculate_profit_factor_value(trades)
         sqn = _calculate_sqn_value(trades)
+
+    daily_returns: Optional[np.ndarray] = None
+    if compute_sharpe_daily:
+        daily_returns = _calculate_daily_returns(
+            metric_view.equity_observations,
+            metric_view.timestamps,
+            initial_equity=metric_view.initial_equity,
+        )
+        if daily_returns is not None:
+            sharpe_daily_observations = int(daily_returns.size)
+            sharpe_daily_active_days = int(
+                np.count_nonzero(np.abs(daily_returns) > _DAILY_ACTIVE_RETURN_TOLERANCE)
+            )
 
     monthly_returns: List[float] = []
     if trades and len(metric_view.timestamps):
@@ -604,6 +720,9 @@ def calculate_advanced(
     if len(monthly_returns) >= 2:
         sharpe_ratio = _calculate_sharpe_ratio_value(monthly_returns, risk_free_rate)
         sortino_ratio = _calculate_sortino_ratio_value(monthly_returns, risk_free_rate)
+
+    if trades and daily_returns is not None:
+        sharpe_daily = _calculate_sharpe_daily_value(daily_returns, risk_free_rate)
 
     if metric_view.equity_observations.size:
         ulcer_index = _calculate_ulcer_index_value(metric_view.equity_path)
@@ -629,6 +748,9 @@ def calculate_advanced(
         sqn=sqn,
         ulcer_index=ulcer_index,
         consistency_score=consistency_score,
+        sharpe_daily=sharpe_daily,
+        sharpe_daily_observations=sharpe_daily_observations,
+        sharpe_daily_active_days=sharpe_daily_active_days,
     )
 
 
@@ -637,6 +759,7 @@ def enrich_strategy_result(
     *,
     initial_balance: Optional[float] = None,
     risk_free_rate: float = 0.02,
+    compute_sharpe_daily: bool = False,
 ) -> tuple[BasicMetrics, AdvancedMetrics]:
     """
     Compute metrics and attach declared fields to StrategyResult.
@@ -658,6 +781,7 @@ def enrich_strategy_result(
         result,
         initial_balance=initial_balance,
         risk_free_rate=risk_free_rate,
+        compute_sharpe_daily=compute_sharpe_daily,
     )
 
     values = {**basic.to_dict(), **advanced.to_dict()}
