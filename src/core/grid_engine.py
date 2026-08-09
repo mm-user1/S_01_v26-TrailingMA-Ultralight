@@ -1535,38 +1535,29 @@ def _grid_v2_slow_result(
         params=params,
         trade_start_idx=trade_start_idx,
     )
-    strategy_result = run.strategy_result
-    profit_factor = getattr(strategy_result, "profit_factor", None)
+    basic_metrics = run.basic_metrics
+    advanced_metrics = run.advanced_metrics
     result = OptimizationResult(
         params=dict(raw_params),
-        net_profit_pct=float(getattr(strategy_result, "net_profit_pct", 0.0)),
-        max_drawdown_pct=float(getattr(strategy_result, "max_drawdown_pct", 0.0)),
-        total_trades=int(getattr(strategy_result, "total_trades", 0)),
-        winning_trades=int(getattr(strategy_result, "winning_trades", 0)),
-        losing_trades=int(getattr(strategy_result, "losing_trades", 0)),
-        win_rate=(
-            float(getattr(strategy_result, "winning_trades", 0))
-            / float(getattr(strategy_result, "total_trades", 0))
-            * 100.0
-            if int(getattr(strategy_result, "total_trades", 0)) else 0.0
-        ),
-        gross_profit=float(getattr(strategy_result, "gross_profit", 0.0)),
-        gross_loss=float(getattr(strategy_result, "gross_loss", 0.0)),
-        max_consecutive_losses=_max_consecutive_losses_for_grid_v2(strategy_result.trades),
-        romad=getattr(strategy_result, "romad", None),
-        profit_factor=profit_factor,
-        sharpe_ratio=getattr(strategy_result, "sharpe_ratio", None),
-        sortino_ratio=getattr(strategy_result, "sortino_ratio", None),
-        sqn=getattr(strategy_result, "sqn", None),
-        ulcer_index=getattr(strategy_result, "ulcer_index", None),
-        consistency_score=getattr(strategy_result, "consistency_score", None),
+        net_profit_pct=basic_metrics.net_profit_pct,
+        max_drawdown_pct=basic_metrics.max_drawdown_pct,
+        total_trades=basic_metrics.total_trades,
+        winning_trades=basic_metrics.winning_trades,
+        losing_trades=basic_metrics.losing_trades,
+        win_rate=basic_metrics.win_rate,
+        gross_profit=basic_metrics.gross_profit,
+        gross_loss=basic_metrics.gross_loss,
+        max_consecutive_losses=basic_metrics.max_consecutive_losses,
+        avg_win=basic_metrics.avg_win,
+        avg_loss=basic_metrics.avg_loss,
+        romad=advanced_metrics.romad,
+        profit_factor=advanced_metrics.profit_factor,
+        sharpe_ratio=advanced_metrics.sharpe_ratio,
+        sortino_ratio=advanced_metrics.sortino_ratio,
+        sqn=advanced_metrics.sqn,
+        ulcer_index=advanced_metrics.ulcer_index,
+        consistency_score=advanced_metrics.consistency_score,
         optuna_trial_number=int(row.candidate_id),
-    )
-    result.avg_win = (
-        result.gross_profit / result.winning_trades if result.winning_trades else 0.0
-    )
-    result.avg_loss = (
-        result.gross_loss / result.losing_trades if result.losing_trades else 0.0
     )
     generation_mode = str(
         plan.per_block_counts.get(row.grid_mode_name, {}).get(
@@ -1608,24 +1599,6 @@ def _grid_v2_slow_result(
     setattr(result, "metric_tier", "slow_public_v2")
     setattr(result, "validation_status", "passed")
     return result
-
-
-def _max_consecutive_losses_for_grid_v2(trades: Sequence[Any]) -> int:
-    max_consecutive = 0
-    consecutive = 0
-    for trade in trades:
-        if isinstance(trade, Mapping):
-            pnl = float(trade["net_pnl"])
-        elif hasattr(trade, "net_pnl"):
-            pnl = float(trade.net_pnl)
-        else:
-            pnl = float(trade)
-        if pnl <= 0.0:
-            consecutive += 1
-            max_consecutive = max(max_consecutive, consecutive)
-        else:
-            consecutive = 0
-    return max_consecutive
 
 
 def _grid_v2_diversity_group_field(plan: Any) -> str:

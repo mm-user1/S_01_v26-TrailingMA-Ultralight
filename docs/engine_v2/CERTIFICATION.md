@@ -605,3 +605,13 @@ The S06 full population remains 48,480 with unchanged semantic digest
 and plan fingerprint
 `0f8d001c380df5ee95d34ca4e25910c674e20e9e8f34886a1bd2f1c261f019b2`.
 No schema, identity, output-offset, or realized-drawdown contract changed.
+
+## Selected Slow-metric transport certification (TZ-11)
+
+Each successful reference `V2RunResult` owns the exact required `BasicMetrics`
+and `AdvancedMetrics` objects returned by its single enrichment call. Generic
+selected enrichment and the normal Grid V2 selected validator read those typed
+snapshots directly, without silent defaults or recalculation. Fast rows remain
+Fast-authoritative and unchanged. Canonical Win Rate and finite Sortino now
+reach selected results, storage, and WFA module trials; genuinely undefined
+Sortino remains `None` and is still unusable as a sole Slow objective.

@@ -794,3 +794,11 @@ Slow-only, Fast Constraints are unchanged, and V2 Grid DSR remains unavailable.
 The shared runner returns `StrategyResult.metric_start_idx=trade_start_idx` and
 `metric_initial_equity=initial_capital`; adapters must not replace or reinterpret
 those boundary facts.
+
+## Typed selected Slow metrics
+
+`V2RunResult` retains the complete required `BasicMetrics` and
+`AdvancedMetrics` snapshots returned by its one reference enrichment call.
+Selected Slow consumers must read those objects directly; do not reconstruct
+metrics from `StrategyResult`, add fallback defaults, or recalculate them.
+Fast-row ownership is unchanged, and an undefined Sortino remains `None`.

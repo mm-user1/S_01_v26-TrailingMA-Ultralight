@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,11 +17,11 @@ from core.grid_engine import (
 )
 from core.engine_v2.compiled_kernel import compiled_batch_available
 from core.engine_v2.contracts import GuardrailSummary
-from core.engine_v2.runner import V2RunResult
 from core.optuna_engine import MultiObjectiveConfig, OptimizationConfig, OptimizationResult
 from core.storage import (
     create_new_db,
     get_active_db_name,
+    get_db_connection,
     load_study_from_db,
     set_active_db,
 )
@@ -150,15 +151,13 @@ def test_grid_v2_selected_guardrail_summary_comes_from_slow_reference(monkeypatc
 
     def sentinel_slow_runner(*args, **kwargs):
         run = original_slow_runner(*args, **kwargs)
-        return V2RunResult(
-            strategy_result=run.strategy_result,
+        return replace(
+            run,
             guardrail_summary=GuardrailSummary(
                 invalid_stop_distance_count=123,
                 max_required_leverage=7.5,
                 flags=456,
             ),
-            standing_state=run.standing_state,
-            kernel_result=run.kernel_result,
         )
 
     monkeypatch.setattr(runner_module, "run_v2_strategy", sentinel_slow_runner)
@@ -170,6 +169,93 @@ def test_grid_v2_selected_guardrail_summary_comes_from_slow_reference(monkeypatc
     assert all(result.guardrail_summary["invalid_stop_distance_count"] == 123 for result in results)
     assert all(result.guardrail_summary["max_required_leverage"] == 7.5 for result in results)
     assert all(result.guardrail_summary["flags"] == 456 for result in results)
+
+
+def test_grid_v2_selected_result_uses_typed_snapshots_with_refinement_off(monkeypatch):
+    import core.engine_v2.runner as runner_module
+
+    original = runner_module.run_v2_strategy
+    captured = []
+
+    def capture_run(*args, **kwargs):
+        run = original(*args, **kwargs)
+        captured.append(run)
+        return run
+
+    monkeypatch.setattr(runner_module, "run_v2_strategy", capture_run)
+
+    config = _v2_grid_config()
+    config.grid_top_candidates = 1
+    results, _ = run_grid_optimization(config, save_study=False)
+
+    assert len(results) == 1
+    assert captured
+    result = results[0]
+    run = captured[-1]
+    basic = run.basic_metrics
+    advanced = run.advanced_metrics
+    expected = {
+        "net_profit_pct": basic.net_profit_pct,
+        "max_drawdown_pct": basic.max_drawdown_pct,
+        "total_trades": basic.total_trades,
+        "winning_trades": basic.winning_trades,
+        "losing_trades": basic.losing_trades,
+        "win_rate": basic.win_rate,
+        "gross_profit": basic.gross_profit,
+        "gross_loss": basic.gross_loss,
+        "max_consecutive_losses": basic.max_consecutive_losses,
+        "avg_win": basic.avg_win,
+        "avg_loss": basic.avg_loss,
+        "romad": advanced.romad,
+        "profit_factor": advanced.profit_factor,
+        "sharpe_ratio": advanced.sharpe_ratio,
+        "sortino_ratio": advanced.sortino_ratio,
+        "sqn": advanced.sqn,
+        "ulcer_index": advanced.ulcer_index,
+        "consistency_score": advanced.consistency_score,
+    }
+    for name, value in expected.items():
+        if value is None:
+            assert getattr(result, name) is None
+        else:
+            assert getattr(result, name) == pytest.approx(value)
+    assert result.sortino_ratio is not None
+    assert result.metric_tier == "slow_public_v2"
+    assert result.validation_status == "passed"
+    assert result.fast_metrics
+    assert result.candidate_id > 0
+    assert result.semantic_key
+    assert result.canonical_identity
+    assert config.grid_summary["grid_slow_refinement_enabled"] is False
+
+
+def test_grid_v2_sortino_is_supported_as_slow_primary_objective():
+    config = _v2_grid_config(save_size=True)
+    config.grid_slow_refinement_enabled = True
+    config.grid_slow_objectives = ["sortino_ratio", "net_profit_pct"]
+    config.grid_slow_primary_objective = "sortino_ratio"
+
+    results, _ = run_grid_optimization(config, save_study=False)
+
+    assert len(results) == 2
+    assert all(result.sortino_ratio is not None for result in results)
+    assert results[0].sortino_ratio == max(result.sortino_ratio for result in results)
+    assert config.grid_summary["selection_primary_objective"] == "sortino_ratio"
+    assert config.grid_summary["grid_slow_refinement_enabled"] is True
+    assert all(getattr(result, "slow_refinement_rank", None) for result in results)
+
+
+def test_grid_v2_undefined_sortino_stays_unusable_as_slow_objective():
+    config = _v2_grid_config()
+    config.fixed_params["end"] = "2025-10-01T00:00:00Z"
+    config.grid_slow_refinement_enabled = True
+    config.grid_slow_objectives = ["sortino_ratio"]
+
+    with pytest.raises(
+        ValueError,
+        match="Grid V2 slow refinement produced no candidates with usable objective values",
+    ):
+        run_grid_optimization(config, save_study=False)
 
 
 def test_grid_v2_dsr_request_fails_clearly():
@@ -289,6 +375,14 @@ def test_grid_v2_storage_roundtrip_uses_existing_grid_schema():
         config = _v2_grid_config(save_size=True)
         results, study_id = run_grid_optimization(config, save_study=True)
         loaded = load_study_from_db(study_id)
+        with get_db_connection() as conn:
+            stored_sortino = conn.execute(
+                "SELECT sortino_ratio FROM trials WHERE study_id = ? ORDER BY id",
+                (study_id,),
+            ).fetchall()
+            conn.execute("UPDATE trials SET sortino_ratio = NULL WHERE study_id = ?", (study_id,))
+            conn.commit()
+        historical_null = load_study_from_db(study_id)
 
     assert study_id
     assert len(results) == 2
@@ -301,6 +395,14 @@ def test_grid_v2_storage_roundtrip_uses_existing_grid_schema():
     assert len(loaded["trials"]) == 2
     assert all(trial["candidate_id"] for trial in loaded["trials"])
     assert all(trial["semantic_key"] for trial in loaded["trials"])
+    assert all(result.sortino_ratio is not None for result in results)
+    assert [row[0] for row in stored_sortino] == pytest.approx(
+        [result.sortino_ratio for result in results]
+    )
+    assert [trial["sortino_ratio"] for trial in loaded["trials"]] == pytest.approx(
+        [result.sortino_ratio for result in results]
+    )
+    assert all(trial["sortino_ratio"] is None for trial in historical_null["trials"])
 
 
 def test_grid_v2_budgeted_dispatch_and_storage_roundtrip_are_factual():

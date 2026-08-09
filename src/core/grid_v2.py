@@ -4260,24 +4260,25 @@ def _slow_enrich_selected(
         params=normalized_params,
         trade_start_idx=trade_start_idx,
     )
-    strategy_result = run.strategy_result
+    basic_metrics = run.basic_metrics
+    advanced_metrics = run.advanced_metrics
     metrics = {
-        "net_profit_pct": getattr(strategy_result, "net_profit_pct", None),
-        "max_drawdown_pct": getattr(strategy_result, "max_drawdown_pct", None),
-        "romad": getattr(strategy_result, "romad", None),
-        "profit_factor": getattr(strategy_result, "profit_factor", None),
-        "win_rate_pct": getattr(strategy_result, "win_rate", None),
-        "total_trades": getattr(strategy_result, "total_trades", None),
-        "winning_trades": getattr(strategy_result, "winning_trades", None),
-        "losing_trades": getattr(strategy_result, "losing_trades", None),
-        "gross_profit": getattr(strategy_result, "gross_profit", None),
-        "gross_loss": getattr(strategy_result, "gross_loss", None),
-        "max_consecutive_losses": _max_consecutive_losses(strategy_result.trades),
-        "sharpe_ratio": getattr(strategy_result, "sharpe_ratio", None),
-        "sortino_ratio": getattr(strategy_result, "sortino_ratio", None),
-        "sqn": getattr(strategy_result, "sqn", None),
-        "ulcer_index": getattr(strategy_result, "ulcer_index", None),
-        "consistency_score": getattr(strategy_result, "consistency_score", None),
+        "net_profit_pct": basic_metrics.net_profit_pct,
+        "max_drawdown_pct": basic_metrics.max_drawdown_pct,
+        "romad": advanced_metrics.romad,
+        "profit_factor": advanced_metrics.profit_factor,
+        "win_rate_pct": basic_metrics.win_rate,
+        "total_trades": basic_metrics.total_trades,
+        "winning_trades": basic_metrics.winning_trades,
+        "losing_trades": basic_metrics.losing_trades,
+        "gross_profit": basic_metrics.gross_profit,
+        "gross_loss": basic_metrics.gross_loss,
+        "max_consecutive_losses": basic_metrics.max_consecutive_losses,
+        "sharpe_ratio": advanced_metrics.sharpe_ratio,
+        "sortino_ratio": advanced_metrics.sortino_ratio,
+        "sqn": advanced_metrics.sqn,
+        "ulcer_index": advanced_metrics.ulcer_index,
+        "consistency_score": advanced_metrics.consistency_score,
     }
     return GridV2SelectedResult(
         row=row,

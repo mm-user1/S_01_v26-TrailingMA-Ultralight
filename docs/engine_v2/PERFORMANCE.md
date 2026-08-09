@@ -770,3 +770,5 @@ The S06 full population remains 48,480. Disabled and enabled runs retained
 candidate IDs 18,436 and 18,981 respectively. The signal run produced 4,096
 rows; all 4,096 enabled rows had usable Sharpe and SQN. No disabled-path
 regression or material enabled-path regression was observed.
+
+TZ-11 only retains existing reference-enrichment snapshots for selected Slow consumers; Fast code is unchanged, so the existing Fast baselines remain applicable.

@@ -9,6 +9,7 @@ import pandas as pd
 
 from core import metrics
 from core.backtest_engine import StrategyResult
+from core.metrics import AdvancedMetrics, BasicMetrics
 
 from .contracts import GuardrailSummary, StandingState
 from .kernel import ExecutionData, KernelConfig, KernelResult, run_reference_kernel
@@ -23,6 +24,8 @@ class V2RunResult:
     """High-level V2 run output with compact execution telemetry."""
 
     strategy_result: StrategyResult
+    basic_metrics: BasicMetrics
+    advanced_metrics: AdvancedMetrics
     guardrail_summary: GuardrailSummary
     standing_state: StandingState
     kernel_result: KernelResult
@@ -167,13 +170,15 @@ def run_v2_strategy(
         metric_start_idx=trade_start_idx,
         metric_initial_equity=initial_balance,
     )
-    metrics.enrich_strategy_result(
+    basic_metrics, advanced_metrics = metrics.enrich_strategy_result(
         strategy_result,
         initial_balance=initial_balance,
         risk_free_rate=0.02,
     )
     return V2RunResult(
         strategy_result=strategy_result,
+        basic_metrics=basic_metrics,
+        advanced_metrics=advanced_metrics,
         guardrail_summary=kernel_result.guardrail_summary,
         standing_state=kernel_result.standing_state,
         kernel_result=kernel_result,

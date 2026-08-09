@@ -1907,6 +1907,7 @@ def _grid_post_process_engine(*, dsr: bool = False, ft: bool = False, st: bool =
 def test_grid_wfa_optuna_is_trials_include_grid_audit_module_metrics():
     engine = _grid_post_process_engine()
     grid_result = _grid_post_process_result(3, "objective", grid_rank=123)
+    grid_result.sortino_ratio = 2.75
     grid_result.slow_refinement_rank = 4
     grid_result.grid_mode_name = "both"
     grid_result.grid_generation_mode = "lhs"
@@ -1916,6 +1917,7 @@ def test_grid_wfa_optuna_is_trials_include_grid_audit_module_metrics():
     trials = engine._convert_optuna_results_for_storage([grid_result], 1)
     module_metrics = trials[0]["module_metrics"]
 
+    assert trials[0]["sortino_ratio"] == pytest.approx(2.75)
     assert module_metrics == {
         "grid_rank": 123,
         "slow_refinement_rank": 4,
