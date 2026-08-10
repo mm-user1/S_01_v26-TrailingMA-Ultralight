@@ -621,16 +621,20 @@ Sortino remains `None` and is still unusable as a sole Slow objective.
 All three certified adapters across the position/bracket and signal-reversal
 families preserve disabled behavior and transport the exact typed snapshots
 from one runner enrichment. When explicitly requested, Daily Sharpe uses the
-evaluation-only mark-to-market curve, int32 UTC day IDs, fractional returns,
-the canonical anchor, arithmetic `rf/365`, population variance, and
-`sqrt(365)`. Monthly Sharpe remains unannualized and unchanged, so thresholds
-cannot be shared between the two metrics.
+evaluation-only mark-to-market curve, resolution-independent int32 UTC days
+since the Unix epoch, fractional returns, the canonical anchor, arithmetic
+`rf/365`, population variance, and `sqrt(365)`. Monthly Sharpe remains
+unannualized and unchanged, so thresholds cannot be shared between the two
+metrics. Any non-finite evaluation equity observation invalidates the complete
+Daily Sharpe series, including a non-closing intraday observation.
 
 Synthetic and committed-fixture certification covers first/new-day ownership,
 partial edges, inclusive-midnight one-bar final days, absent dates, warmup
 exclusion, invalid-series suppression, zero-trade diagnostics, and independent
-literal-loop parity. Observation and active-day counts are optional facts; no
-active-day gate exists. Sparse delayed-OOS endpoints produce only represented
-daily observations, never implicit calendar rows. Phase 1 does not enable this
-metric in Fast Grid, selected-Slow payloads, WFA production, UI, storage, or
-DSR; those surfaces require an explicit Phase 2 decision.
+literal-loop parity. Both diagnostics are `None` when disabled or structurally
+invalid and are integers, including genuine zero, for a valid series; the ratio
+can remain `None` for no completed trades, insufficient observations, or zero
+variance. No active-day gate exists. Sparse delayed-OOS endpoints produce only
+represented daily observations, never implicit calendar rows. Phase 1 does not
+enable this metric in Fast Grid, selected-Slow payloads, WFA production, UI,
+storage, or DSR; those surfaces require an explicit Phase 2 decision.

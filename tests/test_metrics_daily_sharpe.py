@@ -10,6 +10,7 @@ import pytest
 
 from core.backtest_engine import StrategyResult, TradeRecord
 from core.metrics import (
+    _advanced_metric_view,
     _calculate_daily_returns,
     _calculate_sharpe_daily_value,
     _utc_day_ids,
@@ -77,10 +78,44 @@ def test_utc_day_ids_normalize_naive_and_aware_timestamps_exactly():
         "2025-01-02T00:00:00Z",
     ]
     ids = _utc_day_ids(timestamps)
-    expected_first = pd.Timestamp("2025-01-01T00:00:00Z").value // 86_400_000_000_000
 
     assert ids.dtype == np.int32
-    assert ids.tolist() == [expected_first, expected_first, expected_first + 1]
+    assert ids.tolist() == [20089, 20089, 20090]
+
+
+@pytest.mark.parametrize(
+    "representation",
+    [
+        pytest.param("datetime_index_ns", id="datetime-index-ns"),
+        pytest.param("datetime_index_us", id="datetime-index-us"),
+        pytest.param("datetime_index_s", id="datetime-index-s"),
+        pytest.param("numpy_s", id="numpy-datetime64-s"),
+        pytest.param("timestamp_list", id="production-timestamp-list"),
+    ],
+)
+def test_utc_day_ids_are_resolution_and_representation_independent(representation):
+    timestamp_text = [
+        "1969-12-31T23:59:59",
+        "1970-01-01T00:00:00",
+        "2025-01-01T23:59:59",
+        "2025-01-02T00:00:00",
+    ]
+    datetime_index = pd.DatetimeIndex(timestamp_text)
+    if representation == "datetime_index_ns":
+        timestamps = datetime_index.as_unit("ns")
+    elif representation == "datetime_index_us":
+        timestamps = datetime_index.as_unit("us")
+    elif representation == "datetime_index_s":
+        timestamps = datetime_index.as_unit("s")
+    elif representation == "numpy_s":
+        timestamps = np.asarray(timestamp_text, dtype="datetime64[s]")
+    else:
+        timestamps = [pd.Timestamp(value) for value in timestamp_text]
+
+    ids = _utc_day_ids(timestamps)
+
+    assert ids.dtype == np.int32
+    assert ids.tolist() == [-1, 0, 20089, 20090]
 
 
 @pytest.mark.parametrize(
@@ -206,6 +241,80 @@ def test_metric_boundary_excludes_warmup_days_and_uses_canonical_anchor():
     assert advanced.sharpe_daily == pytest.approx(expected)
     assert advanced.sharpe_daily_observations == 2
     assert advanced.sharpe_daily_active_days == 2
+
+
+def test_daily_sharpe_is_exactly_invariant_to_technical_warmup_prefix():
+    evaluation_timestamps = pd.to_datetime(
+        [
+            "2025-03-01T00:00:00Z",
+            "2025-03-31T23:30:00Z",
+            "2025-04-01T00:00:00Z",
+            "2025-05-15T00:00:00Z",
+        ]
+    )
+    evaluation_equity = [99.5, 105.0, 102.0, 115.0]
+    snapshots = []
+    for prefix_len, frequency in ((0, "30min"), (100, "15min"), (1000, "1D")):
+        prefix_timestamps = (
+            pd.date_range(
+                end=evaluation_timestamps[0] - pd.Timedelta(frequency),
+                periods=prefix_len,
+                freq=frequency,
+            )
+            if prefix_len
+            else pd.DatetimeIndex([])
+        )
+        result = _result(
+            [100.0] * prefix_len + evaluation_equity,
+            list(prefix_timestamps) + list(evaluation_timestamps),
+            metric_start_idx=prefix_len,
+        )
+        view = _advanced_metric_view(result)
+        advanced = calculate_advanced(result, compute_sharpe_daily=True)
+
+        assert view.initial_equity == 100.0
+        assert np.array_equal(view.equity_observations, evaluation_equity)
+        assert list(view.timestamps) == list(evaluation_timestamps)
+        snapshots.append(
+            (
+                advanced.sharpe_daily,
+                advanced.sharpe_daily_observations,
+                advanced.sharpe_daily_active_days,
+            )
+        )
+
+    assert snapshots[1] == snapshots[0]
+    assert snapshots[2] == snapshots[0]
+
+
+def test_nonfinite_nonclosing_intraday_equity_invalidates_complete_daily_series():
+    timestamps = pd.to_datetime(
+        [
+            "2025-01-30T12:00:00Z",
+            "2025-01-30T18:00:00Z",
+            "2025-01-30T23:00:00Z",
+            "2025-01-31T23:00:00Z",
+            "2025-02-01T12:00:00Z",
+            "2025-02-28T23:00:00Z",
+            "2025-03-01T12:00:00Z",
+        ]
+    )
+    result = _result([101.0, math.nan, 102.0, 103.0, 104.0, 105.0, 106.0], timestamps)
+
+    disabled = calculate_advanced(result)
+    enabled = calculate_advanced(result, compute_sharpe_daily=True)
+
+    assert enabled.sharpe_daily is None
+    assert enabled.sharpe_daily_observations is None
+    assert enabled.sharpe_daily_active_days is None
+    for name, expected in disabled.to_dict().items():
+        if name.startswith("sharpe_daily"):
+            continue
+        actual = getattr(enabled, name)
+        if isinstance(expected, float) and math.isnan(expected):
+            assert isinstance(actual, float) and math.isnan(actual)
+        else:
+            assert actual == expected
 
 
 def test_explicit_anchor_captures_first_bar_loss_and_inclusive_midnight_last_day():

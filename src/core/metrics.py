@@ -303,7 +303,6 @@ def _calculate_monthly_returns(
     return monthly_returns
 
 
-_NANOSECONDS_PER_UTC_DAY = 86_400_000_000_000
 _DAILY_ACTIVE_RETURN_TOLERANCE = 1e-12
 _DAILY_COMPOUNDING_TOLERANCE = 1e-12
 
@@ -322,7 +321,7 @@ def _utc_day_ids(time_index: Sequence[Any]) -> np.ndarray:
     if calendar_index.hasnans:
         raise ValueError("Daily Sharpe timestamps must not contain NaT values.")
 
-    day_ids_64 = np.floor_divide(calendar_index.asi8, _NANOSECONDS_PER_UTC_DAY)
+    day_ids_64 = calendar_index.values.astype("datetime64[D]").astype(np.int64)
     int32_info = np.iinfo(np.int32)
     if np.any(day_ids_64 < int32_info.min) or np.any(day_ids_64 > int32_info.max):
         raise ValueError("Daily Sharpe UTC day identifiers exceed the int32 range.")
