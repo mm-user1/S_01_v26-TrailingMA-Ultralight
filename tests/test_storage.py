@@ -39,6 +39,7 @@ from core.storage import (
 from core.metrics import _calculate_r2_consistency
 from core.grid_engine import GRID_V2_SUPPORTED_FAST_OBJECTIVES, GridSettings
 from core.engine_v2 import V2ValidationError, build_v2_runtime_metadata
+from core.optuna_engine import OBJECTIVE_DIRECTIONS as CORE_OBJECTIVE_DIRECTIONS
 from core.optuna_engine import OptimizationConfig, OptimizationResult
 from core.post_process import DSRConfig, DSRResult, PostProcessConfig, StressTestConfig
 from core.walkforward_engine import OOSStitchedResult, WFConfig, WFResult, WindowResult
@@ -155,7 +156,13 @@ def _build_dummy_wfa_result():
         is_pareto_optimal=True,
         constraints_satisfied=False,
         is_win_rate=50.0,
+        is_sharpe_daily=1.25,
+        is_sharpe_daily_observations=7,
+        is_sharpe_daily_active_days=0,
         oos_win_rate=50.0,
+        oos_sharpe_daily=None,
+        oos_sharpe_daily_observations=4,
+        oos_sharpe_daily_active_days=0,
         optuna_is_trials=[
             {
                 "trial_number": 1,
@@ -165,6 +172,9 @@ def _build_dummy_wfa_result():
                 "max_drawdown_pct": 0.5,
                 "total_trades": 1,
                 "win_rate": 50.0,
+                "sharpe_daily": 1.25,
+                "sharpe_daily_observations": 7,
+                "sharpe_daily_active_days": 0,
                 "is_selected": True,
             }
         ],
@@ -344,6 +354,52 @@ def test_malformed_runtime_metadata_creates_no_study_row(tmp_path):
             assert conn.execute("SELECT COUNT(*) FROM studies").fetchone()[0] == 0
 
 
+def test_optuna_daily_sharpe_trial_storage_roundtrip(tmp_path):
+    csv_path = tmp_path / "daily.csv"
+    csv_path.write_text("timestamp,open,high,low,close,volume\n", encoding="utf-8")
+    config = _storage_optimization_config(strategy_id="s03_reversal_v10")
+    result = OptimizationResult(
+        params={"x": 1},
+        net_profit_pct=1.0,
+        max_drawdown_pct=0.5,
+        total_trades=0,
+        sharpe_daily=None,
+        sharpe_daily_observations=9,
+        sharpe_daily_active_days=0,
+        objective_values=[1.0],
+        optuna_trial_number=1,
+    )
+    optuna_config = SimpleNamespace(
+        objectives=["net_profit_pct"],
+        primary_objective=None,
+        constraints=[],
+        sampler_config={},
+        budget_mode="trials",
+        n_trials=1,
+        time_limit=None,
+        convergence_patience=None,
+        sanitize_enabled=True,
+        sanitize_trades_threshold=0,
+    )
+
+    with _temporary_active_db(f"daily_trial_{uuid.uuid4().hex[:8]}"):
+        study_id = save_optuna_study_to_db(
+            None,
+            config,
+            optuna_config,
+            [result],
+            str(csv_path),
+            time.time(),
+        )
+        trial = load_study_from_db(study_id)["trials"][0]
+
+    assert trial["sharpe_daily"] is None
+    assert trial["sharpe_daily_observations"] == 9
+    assert trial["sharpe_daily_active_days"] == 0
+    assert isinstance(trial["sharpe_daily_observations"], int)
+    assert isinstance(trial["sharpe_daily_active_days"], int)
+
+
 def _build_grid_storage_config(csv_path: Path) -> OptimizationConfig:
     return OptimizationConfig(
         csv_file=str(csv_path),
@@ -401,6 +457,7 @@ def test_storage_objective_directions_cover_grid_v2_fast_objectives():
     assert missing == []
     assert storage.OBJECTIVE_DIRECTIONS["total_trades"] == "maximize"
     assert storage.OBJECTIVE_DIRECTIONS["max_consecutive_losses"] == "minimize"
+    assert storage.OBJECTIVE_DIRECTIONS == CORE_OBJECTIVE_DIRECTIONS
 
 
 def test_save_grid_study_persists_grid_v2_objective_directions(tmp_path):
@@ -418,6 +475,9 @@ def test_save_grid_study_persists_grid_v2_objective_directions(tmp_path):
     result.objective_values = [3, 10]
     result.max_consecutive_losses = 3
     result.total_trades = 10
+    result.sharpe_daily = 1.75
+    result.sharpe_daily_observations = 8
+    result.sharpe_daily_active_days = 0
     summary = {
         "requested_budget": 1,
         "actual_budget": 1,
@@ -438,6 +498,9 @@ def test_save_grid_study_persists_grid_v2_objective_directions(tmp_path):
 
     assert loaded["study"]["objectives"] == ["max_consecutive_losses", "total_trades"]
     assert loaded["study"]["directions"] == ["minimize", "maximize"]
+    assert loaded["trials"][0]["sharpe_daily"] == 1.75
+    assert loaded["trials"][0]["sharpe_daily_observations"] == 8
+    assert loaded["trials"][0]["sharpe_daily_active_days"] == 0
 
 
 def test_load_study_sort_fallback_minimizes_max_consecutive_losses():
@@ -573,6 +636,73 @@ def test_wfa_window_new_columns():
     assert "grid_dsr_sr0" in columns
     assert "grid_valid_candidate_count" in columns
     assert "grid_selected_candidate_count" in columns
+    assert "is_sharpe_daily" in columns
+    assert "is_sharpe_daily_observations" in columns
+    assert "is_sharpe_daily_active_days" in columns
+    assert "oos_sharpe_daily" in columns
+    assert "oos_sharpe_daily_observations" in columns
+    assert "oos_sharpe_daily_active_days" in columns
+
+
+def test_daily_sharpe_schema_is_additive_idempotent_for_legacy_window_trials():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE wfa_windows (
+            window_id TEXT PRIMARY KEY,
+            study_id TEXT NOT NULL,
+            window_number INTEGER NOT NULL,
+            best_params_json TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE wfa_window_trials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            window_id TEXT NOT NULL,
+            module_type TEXT NOT NULL,
+            trial_number INTEGER NOT NULL,
+            params_json TEXT NOT NULL,
+            source_rank INTEGER,
+            module_rank INTEGER,
+            is_selected INTEGER DEFAULT 0
+        )
+        """
+    )
+
+    storage._ensure_wfa_schema_updated(conn)
+    storage._ensure_wfa_schema_updated(conn)
+
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(wfa_window_trials)").fetchall()
+    }
+    assert {
+        "sharpe_daily",
+        "sharpe_daily_observations",
+        "sharpe_daily_active_days",
+    } <= columns
+    conn.execute(
+        "INSERT INTO wfa_windows (window_id, study_id, window_number, best_params_json) "
+        "VALUES ('w1', 's1', 1, '{}')"
+    )
+    conn.execute(
+        """
+        INSERT INTO wfa_window_trials (
+            window_id, module_type, trial_number, params_json,
+            sharpe_daily, sharpe_daily_observations, sharpe_daily_active_days
+        ) VALUES ('w1', 'optuna_is', 1, '{}', 1.5, 4, 0)
+        """
+    )
+    saved = conn.execute(
+        "SELECT sharpe_daily, sharpe_daily_observations, sharpe_daily_active_days "
+        "FROM wfa_window_trials"
+    ).fetchone()
+    assert tuple(saved) == (1.5, 4, 0)
+    assert isinstance(saved[1], int)
+    assert isinstance(saved[2], int)
+    conn.close()
 
 
 def test_studies_stitched_columns():
@@ -1558,6 +1688,17 @@ def test_save_wfa_study_persists_optuna_and_wfa_metadata():
     assert window.get("ft_retry_attempts_used") == 1
     assert window.get("remaining_oos_days_at_entry") == 3.0
     assert window.get("window_status") == "traded"
+    assert window.get("is_sharpe_daily") == 1.25
+    assert window.get("is_sharpe_daily_observations") == 7
+    assert window.get("is_sharpe_daily_active_days") == 0
+    assert window.get("oos_sharpe_daily") is None
+    assert window.get("oos_sharpe_daily_observations") == 4
+    assert window.get("oos_sharpe_daily_active_days") == 0
+
+    window_trials = load_wfa_window_trials(window["window_id"])["optuna_is"]
+    assert window_trials[0]["sharpe_daily"] == 1.25
+    assert window_trials[0]["sharpe_daily_observations"] == 7
+    assert window_trials[0]["sharpe_daily_active_days"] == 0
 
 
 def test_save_wfa_study_persists_runtime_seconds():
@@ -1577,6 +1718,21 @@ def test_save_wfa_study_persists_runtime_seconds():
     assert runtime is not None
     assert runtime >= 0
     assert runtime < 600
+
+
+@pytest.mark.parametrize("invalid", [1.5, "7", True, -1])
+def test_wfa_storage_rejects_malformed_daily_diagnostics(invalid):
+    wf_result = _build_dummy_wfa_result()
+    wf_result.windows[0].is_sharpe_daily_observations = invalid
+
+    with pytest.raises(RuntimeError, match="is_sharpe_daily_observations"):
+        save_wfa_study_to_db(
+            wf_result=wf_result,
+            config={},
+            csv_file_path="",
+            start_time=0.0,
+            score_config=None,
+        )
 
 
 def test_load_wfa_window_trials():

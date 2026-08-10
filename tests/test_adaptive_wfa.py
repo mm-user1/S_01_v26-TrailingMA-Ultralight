@@ -493,6 +493,11 @@ def test_adaptive_ft_retry_delays_entry_before_live_oos(monkeypatch):
     assert first_window.trade_start == pd.Timestamp("2025-01-24", tz="UTC")
     assert first_window.oos_actual_days == pytest.approx(7.0)
     assert first_window.oos_elapsed_days == pytest.approx(10.0)
+    assert first_window.is_sharpe_daily_observations == 2
+    assert first_window.is_sharpe_daily_active_days == 0
+    assert first_window.oos_sharpe_daily is None
+    assert first_window.oos_sharpe_daily_observations is None
+    assert first_window.oos_sharpe_daily_active_days is None
 
 
 def test_adaptive_does_not_append_zero_day_last_window(monkeypatch):

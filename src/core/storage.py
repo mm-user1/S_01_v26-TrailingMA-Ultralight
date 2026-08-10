@@ -11,6 +11,7 @@ import statistics
 import threading
 import time
 import uuid
+from numbers import Integral
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -23,6 +24,7 @@ OBJECTIVE_DIRECTIONS: Dict[str, str] = {
     "net_profit_pct": "maximize",
     "max_drawdown_pct": "minimize",
     "sharpe_ratio": "maximize",
+    "sharpe_daily": "maximize",
     "sortino_ratio": "maximize",
     "romad": "maximize",
     "profit_factor": "maximize",
@@ -51,6 +53,17 @@ JOURNAL_DIR = STORAGE_DIR / "journals"
 _active_db_path: Path = STORAGE_DIR / "studies.db"
 
 _INVALID_DB_LABEL_CHARS = re.compile(r'[<>:"/\\|?*]')
+
+
+def _nullable_diagnostic_int(value: Any, field_name: str) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, Integral):
+        raise ValueError(f"{field_name} must be an integer or None.")
+    result = int(value)
+    if result < 0:
+        raise ValueError(f"{field_name} must be non-negative.")
+    return result
 
 
 def _sanitize_db_label(label: str) -> str:
@@ -285,6 +298,9 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             gross_profit REAL,
             gross_loss REAL,
             sharpe_ratio REAL,
+            sharpe_daily REAL,
+            sharpe_daily_observations INTEGER,
+            sharpe_daily_active_days INTEGER,
             sortino_ratio REAL,
             romad REAL,
             profit_factor REAL,
@@ -409,6 +425,9 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             is_total_trades INTEGER,
             is_best_trial_number INTEGER,
             is_equity_curve TEXT,
+            is_sharpe_daily REAL,
+            is_sharpe_daily_observations INTEGER,
+            is_sharpe_daily_active_days INTEGER,
 
             oos_start_date TEXT,
             oos_end_date TEXT,
@@ -419,6 +438,9 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             oos_total_trades INTEGER,
             oos_winning_trades INTEGER,
             oos_equity_curve TEXT,
+            oos_sharpe_daily REAL,
+            oos_sharpe_daily_observations INTEGER,
+            oos_sharpe_daily_active_days INTEGER,
             trigger_type TEXT,
             cusum_final REAL,
             cusum_threshold REAL,
@@ -531,6 +553,9 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
     ensure("studies", "grid_summary_json", "TEXT")
 
     ensure("trials", "max_consecutive_losses", "INTEGER")
+    ensure("trials", "sharpe_daily", "REAL")
+    ensure("trials", "sharpe_daily_observations", "INTEGER")
+    ensure("trials", "sharpe_daily_active_days", "INTEGER")
     ensure("trials", "ft_max_consecutive_losses", "INTEGER")
     ensure("trials", "ft_passes_threshold", "INTEGER")
     ensure("trials", "dsr_probability", "REAL")
@@ -610,6 +635,9 @@ def _ensure_wfa_schema_updated(conn: sqlite3.Connection) -> None:
             profit_factor REAL,
             romad REAL,
             sharpe_ratio REAL,
+            sharpe_daily REAL,
+            sharpe_daily_observations INTEGER,
+            sharpe_daily_active_days INTEGER,
             sortino_ratio REAL,
             sqn REAL,
             ulcer_index REAL,
@@ -642,6 +670,16 @@ def _ensure_wfa_schema_updated(conn: sqlite3.Connection) -> None:
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_wfa_window_trials_selected ON wfa_window_trials(window_id, module_type, is_selected);"
     )
+
+    cur.execute("PRAGMA table_info(wfa_window_trials);")
+    existing_trial_columns = {row[1] for row in cur.fetchall()}
+    for column, definition in (
+        ("sharpe_daily", "REAL"),
+        ("sharpe_daily_observations", "INTEGER"),
+        ("sharpe_daily_active_days", "INTEGER"),
+    ):
+        if column not in existing_trial_columns:
+            cur.execute(f"ALTER TABLE wfa_window_trials ADD COLUMN {column} {definition};")
 
     cur.execute("PRAGMA table_info(wfa_windows);")
     existing = {row[1] for row in cur.fetchall()}
@@ -677,6 +715,15 @@ def _ensure_wfa_schema_updated(conn: sqlite3.Connection) -> None:
     add_col("ALTER TABLE wfa_windows ADD COLUMN is_max_consecutive_losses INTEGER;", "is_max_consecutive_losses")
     add_col("ALTER TABLE wfa_windows ADD COLUMN is_romad REAL;", "is_romad")
     add_col("ALTER TABLE wfa_windows ADD COLUMN is_sharpe_ratio REAL;", "is_sharpe_ratio")
+    add_col("ALTER TABLE wfa_windows ADD COLUMN is_sharpe_daily REAL;", "is_sharpe_daily")
+    add_col(
+        "ALTER TABLE wfa_windows ADD COLUMN is_sharpe_daily_observations INTEGER;",
+        "is_sharpe_daily_observations",
+    )
+    add_col(
+        "ALTER TABLE wfa_windows ADD COLUMN is_sharpe_daily_active_days INTEGER;",
+        "is_sharpe_daily_active_days",
+    )
     add_col("ALTER TABLE wfa_windows ADD COLUMN is_profit_factor REAL;", "is_profit_factor")
     add_col("ALTER TABLE wfa_windows ADD COLUMN is_sqn REAL;", "is_sqn")
     add_col("ALTER TABLE wfa_windows ADD COLUMN is_ulcer_index REAL;", "is_ulcer_index")
@@ -688,6 +735,15 @@ def _ensure_wfa_schema_updated(conn: sqlite3.Connection) -> None:
     add_col("ALTER TABLE wfa_windows ADD COLUMN oos_max_consecutive_losses INTEGER;", "oos_max_consecutive_losses")
     add_col("ALTER TABLE wfa_windows ADD COLUMN oos_romad REAL;", "oos_romad")
     add_col("ALTER TABLE wfa_windows ADD COLUMN oos_sharpe_ratio REAL;", "oos_sharpe_ratio")
+    add_col("ALTER TABLE wfa_windows ADD COLUMN oos_sharpe_daily REAL;", "oos_sharpe_daily")
+    add_col(
+        "ALTER TABLE wfa_windows ADD COLUMN oos_sharpe_daily_observations INTEGER;",
+        "oos_sharpe_daily_observations",
+    )
+    add_col(
+        "ALTER TABLE wfa_windows ADD COLUMN oos_sharpe_daily_active_days INTEGER;",
+        "oos_sharpe_daily_active_days",
+    )
     add_col("ALTER TABLE wfa_windows ADD COLUMN oos_profit_factor REAL;", "oos_profit_factor")
     add_col("ALTER TABLE wfa_windows ADD COLUMN oos_sqn REAL;", "oos_sqn")
     add_col("ALTER TABLE wfa_windows ADD COLUMN oos_ulcer_index REAL;", "oos_ulcer_index")
@@ -2451,6 +2507,15 @@ def save_optuna_study_to_db(
                         result.gross_loss,
                         result.romad,
                         result.sharpe_ratio,
+                        result.sharpe_daily,
+                        _nullable_diagnostic_int(
+                            result.sharpe_daily_observations,
+                            "sharpe_daily_observations",
+                        ),
+                        _nullable_diagnostic_int(
+                            result.sharpe_daily_active_days,
+                            "sharpe_daily_active_days",
+                        ),
                         result.sortino_ratio,
                         result.profit_factor,
                         result.ulcer_index,
@@ -2483,13 +2548,14 @@ def save_optuna_study_to_db(
                         constraints_satisfied, constraint_values_json,
                         net_profit_pct, max_drawdown_pct, total_trades, win_rate, max_consecutive_losses, avg_win, avg_loss,
                         gross_profit, gross_loss,
-                        romad, sharpe_ratio, sortino_ratio, profit_factor, ulcer_index, sqn,
+                        romad, sharpe_ratio, sharpe_daily, sharpe_daily_observations,
+                        sharpe_daily_active_days, sortino_ratio, profit_factor, ulcer_index, sqn,
                         consistency_score, composite_score,
                         ft_net_profit_pct, ft_max_drawdown_pct, ft_total_trades, ft_win_rate,
                         ft_sharpe_ratio, ft_sortino_ratio, ft_romad, ft_profit_factor,
                         ft_ulcer_index, ft_sqn, ft_consistency_score, profit_degradation, ft_rank,
                         ft_passes_threshold
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     trial_rows,
                 )
@@ -2710,6 +2776,15 @@ def save_grid_study_to_db(
                         result.gross_loss,
                         result.romad,
                         result.sharpe_ratio,
+                        result.sharpe_daily,
+                        _nullable_diagnostic_int(
+                            result.sharpe_daily_observations,
+                            "sharpe_daily_observations",
+                        ),
+                        _nullable_diagnostic_int(
+                            result.sharpe_daily_active_days,
+                            "sharpe_daily_active_days",
+                        ),
                         result.sortino_ratio,
                         result.profit_factor,
                         result.ulcer_index,
@@ -2746,14 +2821,15 @@ def save_grid_study_to_db(
                         constraints_satisfied, constraint_values_json,
                         net_profit_pct, max_drawdown_pct, total_trades, win_rate, max_consecutive_losses,
                         avg_win, avg_loss, gross_profit, gross_loss,
-                        romad, sharpe_ratio, sortino_ratio, profit_factor, ulcer_index, sqn,
+                        romad, sharpe_ratio, sharpe_daily, sharpe_daily_observations,
+                        sharpe_daily_active_days, sortino_ratio, profit_factor, ulcer_index, sqn,
                         consistency_score, composite_score,
                         dsr_probability, dsr_rank, dsr_skewness, dsr_kurtosis, dsr_track_length,
                         dsr_luck_share_pct, selection_sources_json,
                         optimizer_mode, candidate_id, semantic_key, param_key, grid_rank,
                         grid_mode_name, grid_generation_mode, diversity_group, validation_status,
                         fast_metrics_json, validation_diffs_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     rows,
                 )
@@ -3217,6 +3293,15 @@ def save_wfa_study_to_db(
                         getattr(window, "is_max_consecutive_losses", None),
                         getattr(window, "is_romad", None),
                         getattr(window, "is_sharpe_ratio", None),
+                        getattr(window, "is_sharpe_daily", None),
+                        _nullable_diagnostic_int(
+                            getattr(window, "is_sharpe_daily_observations", None),
+                            "is_sharpe_daily_observations",
+                        ),
+                        _nullable_diagnostic_int(
+                            getattr(window, "is_sharpe_daily_active_days", None),
+                            "is_sharpe_daily_active_days",
+                        ),
                         getattr(window, "is_profit_factor", None),
                         getattr(window, "is_sqn", None),
                         getattr(window, "is_ulcer_index", None),
@@ -3236,6 +3321,15 @@ def save_wfa_study_to_db(
                         getattr(window, "oos_max_consecutive_losses", None),
                         getattr(window, "oos_romad", None),
                         getattr(window, "oos_sharpe_ratio", None),
+                        getattr(window, "oos_sharpe_daily", None),
+                        _nullable_diagnostic_int(
+                            getattr(window, "oos_sharpe_daily_observations", None),
+                            "oos_sharpe_daily_observations",
+                        ),
+                        _nullable_diagnostic_int(
+                            getattr(window, "oos_sharpe_daily_active_days", None),
+                            "oos_sharpe_daily_active_days",
+                        ),
                         getattr(window, "oos_profit_factor", None),
                         getattr(window, "oos_sqn", None),
                         getattr(window, "oos_ulcer_index", None),
@@ -3280,6 +3374,7 @@ def save_wfa_study_to_db(
                     "is_net_profit_pct", "is_max_drawdown_pct", "is_total_trades", "is_best_trial_number",
                     "is_equity_curve",
                     "is_win_rate", "is_max_consecutive_losses", "is_romad", "is_sharpe_ratio",
+                    "is_sharpe_daily", "is_sharpe_daily_observations", "is_sharpe_daily_active_days",
                     "is_profit_factor", "is_sqn", "is_ulcer_index", "is_consistency_score", "is_composite_score",
                     "oos_start_date", "oos_end_date",
                     "oos_start_ts", "oos_end_ts",
@@ -3287,6 +3382,7 @@ def save_wfa_study_to_db(
                     "oos_winning_trades",
                     "oos_equity_curve", "oos_timestamps_json",
                     "oos_win_rate", "oos_max_consecutive_losses", "oos_romad", "oos_sharpe_ratio",
+                    "oos_sharpe_daily", "oos_sharpe_daily_observations", "oos_sharpe_daily_active_days",
                     "oos_profit_factor", "oos_sqn", "oos_ulcer_index", "oos_consistency_score",
                     "trigger_type", "cusum_final", "cusum_threshold", "dd_threshold", "oos_actual_days",
                     "cooldown_days_applied", "oos_elapsed_days",
@@ -3352,6 +3448,15 @@ def _save_window_trials(
                 trial.get("profit_factor"),
                 trial.get("romad"),
                 trial.get("sharpe_ratio"),
+                trial.get("sharpe_daily"),
+                _nullable_diagnostic_int(
+                    trial.get("sharpe_daily_observations"),
+                    "sharpe_daily_observations",
+                ),
+                _nullable_diagnostic_int(
+                    trial.get("sharpe_daily_active_days"),
+                    "sharpe_daily_active_days",
+                ),
                 trial.get("sortino_ratio"),
                 trial.get("sqn"),
                 trial.get("ulcer_index"),
@@ -3376,12 +3481,13 @@ def _save_window_trials(
             params_json, param_id,
             source_rank, module_rank,
             net_profit_pct, max_drawdown_pct, total_trades, win_rate, profit_factor,
-            romad, sharpe_ratio, sortino_ratio, sqn, ulcer_index, consistency_score,
+            romad, sharpe_ratio, sharpe_daily, sharpe_daily_observations,
+            sharpe_daily_active_days, sortino_ratio, sqn, ulcer_index, consistency_score,
             max_consecutive_losses,
             composite_score, objective_values_json, constraint_values_json,
             constraints_satisfied, is_pareto_optimal, dominance_rank,
             status, is_selected, module_metrics_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
     )
@@ -3414,6 +3520,9 @@ def load_wfa_window_trials(window_id: str) -> Dict[str, List[Dict[str, Any]]]:
                 profit_factor,
                 romad,
                 sharpe_ratio,
+                sharpe_daily,
+                sharpe_daily_observations,
+                sharpe_daily_active_days,
                 sortino_ratio,
                 sqn,
                 ulcer_index,

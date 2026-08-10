@@ -369,6 +369,9 @@ class WindowResult:
     is_max_consecutive_losses: Optional[int] = None
     is_romad: Optional[float] = None
     is_sharpe_ratio: Optional[float] = None
+    is_sharpe_daily: Optional[float] = None
+    is_sharpe_daily_observations: Optional[int] = None
+    is_sharpe_daily_active_days: Optional[int] = None
     is_profit_factor: Optional[float] = None
     is_sqn: Optional[float] = None
     is_ulcer_index: Optional[float] = None
@@ -380,6 +383,9 @@ class WindowResult:
     oos_max_consecutive_losses: Optional[int] = None
     oos_romad: Optional[float] = None
     oos_sharpe_ratio: Optional[float] = None
+    oos_sharpe_daily: Optional[float] = None
+    oos_sharpe_daily_observations: Optional[int] = None
+    oos_sharpe_daily_active_days: Optional[int] = None
     oos_profit_factor: Optional[float] = None
     oos_sqn: Optional[float] = None
     oos_ulcer_index: Optional[float] = None
@@ -781,7 +787,11 @@ class WalkForwardEngine:
                 params=is_pipeline.best_params,
             )
             is_basic = metrics.calculate_basic(is_result, initial_balance=100.0)
-            is_adv = metrics.calculate_advanced(is_result, initial_balance=100.0)
+            is_adv = metrics.calculate_advanced(
+                is_result,
+                initial_balance=100.0,
+                compute_sharpe_daily=True,
+            )
 
             if execution_plan.window_status == "no_trade":
                 print(
@@ -810,7 +820,15 @@ class WalkForwardEngine:
                 trade_end = window.oos_end
 
             oos_basic = metrics.calculate_basic(prefixed_oos_result, initial_balance=100.0)
-            oos_adv = metrics.calculate_advanced(prefixed_oos_result, initial_balance=100.0)
+            oos_daily_available = self._should_compute_oos_daily(
+                execution_plan,
+                window.oos_start,
+            )
+            oos_adv = metrics.calculate_advanced(
+                prefixed_oos_result,
+                initial_balance=100.0,
+                compute_sharpe_daily=oos_daily_available,
+            )
 
             if oos_basic.total_trades == 0:
                 print(
@@ -890,6 +908,9 @@ class WalkForwardEngine:
                     is_max_consecutive_losses=is_basic.max_consecutive_losses,
                     is_romad=is_adv.romad,
                     is_sharpe_ratio=is_adv.sharpe_ratio,
+                    is_sharpe_daily=is_adv.sharpe_daily,
+                    is_sharpe_daily_observations=is_adv.sharpe_daily_observations,
+                    is_sharpe_daily_active_days=is_adv.sharpe_daily_active_days,
                     is_profit_factor=is_adv.profit_factor,
                     is_sqn=is_adv.sqn,
                     is_ulcer_index=is_adv.ulcer_index,
@@ -899,6 +920,9 @@ class WalkForwardEngine:
                     oos_max_consecutive_losses=oos_basic.max_consecutive_losses,
                     oos_romad=oos_adv.romad,
                     oos_sharpe_ratio=oos_adv.sharpe_ratio,
+                    oos_sharpe_daily=oos_adv.sharpe_daily,
+                    oos_sharpe_daily_observations=oos_adv.sharpe_daily_observations,
+                    oos_sharpe_daily_active_days=oos_adv.sharpe_daily_active_days,
                     oos_profit_factor=oos_adv.profit_factor,
                     oos_sqn=oos_adv.sqn,
                     oos_ulcer_index=oos_adv.ulcer_index,
@@ -1627,6 +1651,16 @@ class WalkForwardEngine:
             metric_initial_equity=anchor,
         )
 
+    @staticmethod
+    def _should_compute_oos_daily(
+        execution_plan: WindowExecutionPlan,
+        scheduled_oos_start: pd.Timestamp,
+    ) -> bool:
+        return (
+            execution_plan.window_status != "no_trade"
+            and (execution_plan.trade_start or scheduled_oos_start) <= scheduled_oos_start
+        )
+
     def _annotate_execution_plan(
         self,
         plan: WindowExecutionPlan,
@@ -2318,7 +2352,11 @@ class WalkForwardEngine:
                 params=is_pipeline.best_params,
             )
             is_basic = metrics.calculate_basic(is_result, initial_balance=100.0)
-            is_adv = metrics.calculate_advanced(is_result, initial_balance=100.0)
+            is_adv = metrics.calculate_advanced(
+                is_result,
+                initial_balance=100.0,
+                compute_sharpe_daily=True,
+            )
             baseline = self._compute_is_baseline(is_result, self.config.is_period_days)
 
             if not (
@@ -2388,7 +2426,14 @@ class WalkForwardEngine:
                 )
                 oos_elapsed_days = self._duration_days(oos_start, adaptive_roll_end)
                 oos_basic = metrics.calculate_basic(prefixed_oos_result, initial_balance=100.0)
-                oos_adv = metrics.calculate_advanced(prefixed_oos_result, initial_balance=100.0)
+                oos_adv = metrics.calculate_advanced(
+                    prefixed_oos_result,
+                    initial_balance=100.0,
+                    compute_sharpe_daily=self._should_compute_oos_daily(
+                        execution_plan,
+                        oos_start,
+                    ),
+                )
                 trigger_type = trigger_result.trigger_type
                 cusum_final = trigger_result.cusum_final
                 trigger_cusum_threshold = trigger_result.cusum_threshold
@@ -2477,6 +2522,9 @@ class WalkForwardEngine:
                     is_max_consecutive_losses=is_basic.max_consecutive_losses,
                     is_romad=is_adv.romad,
                     is_sharpe_ratio=is_adv.sharpe_ratio,
+                    is_sharpe_daily=is_adv.sharpe_daily,
+                    is_sharpe_daily_observations=is_adv.sharpe_daily_observations,
+                    is_sharpe_daily_active_days=is_adv.sharpe_daily_active_days,
                     is_profit_factor=is_adv.profit_factor,
                     is_sqn=is_adv.sqn,
                     is_ulcer_index=is_adv.ulcer_index,
@@ -2486,6 +2534,9 @@ class WalkForwardEngine:
                     oos_max_consecutive_losses=oos_basic.max_consecutive_losses,
                     oos_romad=oos_adv.romad,
                     oos_sharpe_ratio=oos_adv.sharpe_ratio,
+                    oos_sharpe_daily=oos_adv.sharpe_daily,
+                    oos_sharpe_daily_observations=oos_adv.sharpe_daily_observations,
+                    oos_sharpe_daily_active_days=oos_adv.sharpe_daily_active_days,
                     oos_profit_factor=oos_adv.profit_factor,
                     oos_sqn=oos_adv.sqn,
                     oos_ulcer_index=oos_adv.ulcer_index,
@@ -2779,6 +2830,13 @@ class WalkForwardEngine:
                 "profit_factor": getattr(result, "profit_factor", None),
                 "romad": getattr(result, "romad", None),
                 "sharpe_ratio": getattr(result, "sharpe_ratio", None),
+                "sharpe_daily": getattr(result, "sharpe_daily", None),
+                "sharpe_daily_observations": getattr(
+                    result, "sharpe_daily_observations", None
+                ),
+                "sharpe_daily_active_days": getattr(
+                    result, "sharpe_daily_active_days", None
+                ),
                 "sortino_ratio": getattr(result, "sortino_ratio", None),
                 "sqn": getattr(result, "sqn", None),
                 "ulcer_index": getattr(result, "ulcer_index", None),
@@ -2847,6 +2905,13 @@ class WalkForwardEngine:
                     "profit_factor": getattr(original, "profit_factor", None),
                     "romad": getattr(original, "romad", None),
                     "sharpe_ratio": getattr(original, "sharpe_ratio", None),
+                    "sharpe_daily": getattr(original, "sharpe_daily", None),
+                    "sharpe_daily_observations": getattr(
+                        original, "sharpe_daily_observations", None
+                    ),
+                    "sharpe_daily_active_days": getattr(
+                        original, "sharpe_daily_active_days", None
+                    ),
                     "sortino_ratio": getattr(original, "sortino_ratio", None),
                     "sqn": getattr(original, "sqn", None),
                     "ulcer_index": getattr(original, "ulcer_index", None),
@@ -2896,6 +2961,13 @@ class WalkForwardEngine:
                     "profit_factor": getattr(result, "ft_profit_factor", None),
                     "romad": getattr(result, "ft_romad", None),
                     "sharpe_ratio": getattr(result, "ft_sharpe_ratio", None),
+                    "sharpe_daily": getattr(result, "ft_sharpe_daily", None),
+                    "sharpe_daily_observations": getattr(
+                        result, "ft_sharpe_daily_observations", None
+                    ),
+                    "sharpe_daily_active_days": getattr(
+                        result, "ft_sharpe_daily_active_days", None
+                    ),
                     "sortino_ratio": getattr(result, "ft_sortino_ratio", None),
                     "sqn": getattr(result, "ft_sqn", None),
                     "ulcer_index": getattr(result, "ft_ulcer_index", None),
@@ -2963,6 +3035,19 @@ class WalkForwardEngine:
                     "sharpe_ratio": getattr(optuna_result, "sharpe_ratio", None)
                     if optuna_result is not None
                     else getattr(result, "base_sharpe_ratio", None),
+                    "sharpe_daily": getattr(optuna_result, "sharpe_daily", None)
+                    if optuna_result is not None
+                    else None,
+                    "sharpe_daily_observations": getattr(
+                        optuna_result, "sharpe_daily_observations", None
+                    )
+                    if optuna_result is not None
+                    else None,
+                    "sharpe_daily_active_days": getattr(
+                        optuna_result, "sharpe_daily_active_days", None
+                    )
+                    if optuna_result is not None
+                    else None,
                     "sortino_ratio": getattr(optuna_result, "sortino_ratio", None)
                     if optuna_result is not None
                     else None,

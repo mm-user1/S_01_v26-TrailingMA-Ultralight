@@ -90,6 +90,24 @@ def test_non_delayed_oos_prefix_is_bit_identical_object():
     ) is result
 
 
+@pytest.mark.parametrize(
+    ("status", "trade_start", "expected"),
+    [
+        ("traded", pd.Timestamp("2025-02-01T00:00:00Z"), True),
+        ("traded", None, True),
+        ("traded", pd.Timestamp("2025-02-02T00:00:00Z"), False),
+        ("no_trade", pd.Timestamp("2025-02-01T00:00:00Z"), False),
+    ],
+)
+def test_wfa_oos_daily_request_uses_authoritative_plan_facts(status, trade_start, expected):
+    plan = SimpleNamespace(window_status=status, trade_start=trade_start)
+
+    assert WalkForwardEngine._should_compute_oos_daily(
+        plan,
+        pd.Timestamp("2025-02-01T00:00:00Z"),
+    ) is expected
+
+
 def _build_params_from_config(strategy_id: str):
     config = get_strategy_config(strategy_id)
     parameters = config.get("parameters", {}) if isinstance(config, dict) else {}
@@ -1294,7 +1312,7 @@ def test_run_optuna_on_window_multiprocess_uses_in_memory_worker_csv():
 
 
 def test_best_params_source_tracked(monkeypatch):
-    index = pd.date_range("2025-01-01", periods=40, freq="D", tz="UTC")
+    index = pd.date_range("2025-01-15", "2025-06-14", freq="D", tz="UTC")
     base_row = {"Open": 1.0, "High": 1.1, "Low": 0.9, "Close": 1.0, "Volume": 100}
     df = pd.DataFrame([base_row for _ in range(len(index))], index=index)
 
@@ -1327,13 +1345,16 @@ def test_best_params_source_tracked(monkeypatch):
 
     wf_config = WFConfig(
         strategy_id="s01_trailing_ma",
-        is_period_days=10,
-        oos_period_days=5,
+        period_unit="months",
+        is_period_days=None,
+        oos_period_days=None,
+        is_period_months=1,
+        oos_period_months=1,
         warmup_bars=5,
         dsr_config=DSRConfig(enabled=True, top_k=1),
     )
     base_template = {
-        "fixed_params": {"dateFilter": False},
+        "fixed_params": {"dateFilter": True, "start": "2025-01-15"},
         "risk_per_trade_pct": 2.0,
         "contract_size": 0.01,
         "commission_rate": 0.0005,
@@ -1343,6 +1364,15 @@ def test_best_params_source_tracked(monkeypatch):
         "score_config": {},
     }
     engine = WalkForwardEngine(wf_config, base_template, {})
+
+    advanced_calls = []
+    calculate_advanced = metrics.calculate_advanced
+
+    def capture_advanced(*args, **kwargs):
+        advanced_calls.append(kwargs.get("compute_sharpe_daily", False))
+        return calculate_advanced(*args, **kwargs)
+
+    monkeypatch.setattr(metrics, "calculate_advanced", capture_advanced)
 
     class FakeStrategy:
         @staticmethod
@@ -1360,6 +1390,13 @@ def test_best_params_source_tracked(monkeypatch):
     assert result.windows[0].best_params_source == "dsr"
     assert result.windows[0].is_pareto_optimal is True
     assert result.windows[0].constraints_satisfied is False
+    assert result.windows[0].is_start == pd.Timestamp("2025-01-15", tz="UTC")
+    assert result.windows[0].oos_start == pd.Timestamp("2025-02-15", tz="UTC")
+    assert result.windows[0].is_sharpe_daily_observations == 1
+    assert result.windows[0].is_sharpe_daily_active_days == 0
+    assert result.windows[0].oos_sharpe_daily_observations == 1
+    assert result.windows[0].oos_sharpe_daily_active_days == 0
+    assert advanced_calls == [True, True] * len(result.windows)
 
 
 def test_grid_wfa_dsr_candidate_replaces_objective_winner(monkeypatch):
@@ -2226,6 +2263,11 @@ def test_fixed_wfa_ft_retry_delays_entry_and_trades_remaining_window(monkeypatch
     assert first_window.ft_retry_attempts_used == 1
     assert first_window.trade_start == pd.Timestamp("2025-01-26", tz="UTC")
     assert first_window.is_end == pd.Timestamp("2025-01-25", tz="UTC")
+    assert first_window.is_sharpe_daily_observations == 2
+    assert first_window.is_sharpe_daily_active_days == 1
+    assert first_window.oos_sharpe_daily is None
+    assert first_window.oos_sharpe_daily_observations is None
+    assert first_window.oos_sharpe_daily_active_days is None
     assert call_counter["count"] >= 2
 
 def test_walkforward_integration_with_sample_data(monkeypatch):

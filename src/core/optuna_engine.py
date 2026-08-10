@@ -35,6 +35,14 @@ _DUPLICATE_SKIP_REASON_ATTR = "merlin.duplicate_skip_reason"
 _UNSET = object()
 
 
+def _optional_daily_diagnostic(value: Any, field_name: str) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer or None.")
+    return value
+
+
 class InMemoryJournalBackend(BaseJournalBackend):
     """Process-shared in-memory journal backend for multiprocess Optuna."""
 
@@ -240,6 +248,7 @@ OBJECTIVE_DIRECTIONS: Dict[str, str] = {
     "net_profit_pct": "maximize",
     "max_drawdown_pct": "minimize",
     "sharpe_ratio": "maximize",
+    "sharpe_daily": "maximize",
     "sortino_ratio": "maximize",
     "romad": "maximize",
     "profit_factor": "maximize",
@@ -257,6 +266,7 @@ OBJECTIVE_DISPLAY_NAMES: Dict[str, str] = {
     "net_profit_pct": "Net Profit %",
     "max_drawdown_pct": "Min Drawdown %",
     "sharpe_ratio": "Sharpe Ratio",
+    "sharpe_daily": "Daily Sharpe",
     "sortino_ratio": "Sortino Ratio",
     "romad": "RoMaD",
     "profit_factor": "Profit Factor",
@@ -1202,6 +1212,15 @@ def _result_from_trial(trial: optuna.trial.FrozenTrial) -> OptimizationResult:
         max_consecutive_losses=int(all_metrics.get("max_consecutive_losses", 0) or 0),
         romad=all_metrics.get("romad"),
         sharpe_ratio=all_metrics.get("sharpe_ratio"),
+        sharpe_daily=all_metrics.get("sharpe_daily"),
+        sharpe_daily_observations=_optional_daily_diagnostic(
+            all_metrics.get("sharpe_daily_observations"),
+            "sharpe_daily_observations",
+        ),
+        sharpe_daily_active_days=_optional_daily_diagnostic(
+            all_metrics.get("sharpe_daily_active_days"),
+            "sharpe_daily_active_days",
+        ),
         sortino_ratio=all_metrics.get("sortino_ratio"),
         profit_factor=all_metrics.get("profit_factor"),
         ulcer_index=all_metrics.get("ulcer_index"),
@@ -2119,7 +2138,14 @@ class OptunaOptimizer:
         if self.df is None or self.strategy_class is None:
             raise RuntimeError("Data and strategy must be prepared before evaluation.")
 
-        args = (params_dict, self.df, self.trade_start_idx, self.strategy_class, False)
+        compute_sharpe_daily = "sharpe_daily" in self.mo_config.objectives
+        args = (
+            params_dict,
+            self.df,
+            self.trade_start_idx,
+            self.strategy_class,
+            compute_sharpe_daily,
+        )
         return _run_single_combination(args)
 
     def _evaluate_trial_payload(self, params_dict: Dict[str, Any]) -> Dict[str, Any]:
@@ -2351,6 +2377,9 @@ class OptunaOptimizer:
             "gross_profit": result.gross_profit,
             "gross_loss": result.gross_loss,
             "sharpe_ratio": result.sharpe_ratio,
+            "sharpe_daily": result.sharpe_daily,
+            "sharpe_daily_observations": result.sharpe_daily_observations,
+            "sharpe_daily_active_days": result.sharpe_daily_active_days,
             "sortino_ratio": result.sortino_ratio,
             "romad": result.romad,
             "profit_factor": result.profit_factor,

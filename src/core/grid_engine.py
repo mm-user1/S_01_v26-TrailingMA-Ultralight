@@ -53,10 +53,13 @@ GRID_SUPPORTED_FAST_OBJECTIVES = {
     "profit_factor",
     "win_rate",
     "sharpe_ratio",
+    "sharpe_daily",
     "sqn",
 }
+GRID_FAST_ONLY_OBJECTIVES = {"sharpe_daily"}
+GRID_MAX_FAST_OBJECTIVES = 6
 GRID_SUPPORTED_OBJECTIVES = GRID_SUPPORTED_FAST_OBJECTIVES
-GRID_SUPPORTED_SLOW_OBJECTIVES = GRID_SUPPORTED_FAST_OBJECTIVES | {
+GRID_SUPPORTED_SLOW_OBJECTIVES = (GRID_SUPPORTED_FAST_OBJECTIVES - GRID_FAST_ONLY_OBJECTIVES) | {
     "sharpe_ratio",
     "sortino_ratio",
     "sqn",
@@ -809,6 +812,13 @@ def _validate_objective_set(
         raise ValueError(f"Primary Grid {stage} objective must be one of the selected objectives.")
 
 
+def _validate_fast_objective_limit(objectives: Sequence[str]) -> None:
+    if len(objectives) > GRID_MAX_FAST_OBJECTIVES:
+        raise ValueError(
+            f"Maximum {GRID_MAX_FAST_OBJECTIVES} Grid Fast Objectives allowed."
+        )
+
+
 def validate_grid_config(config: OptimizationConfig) -> None:
     if not supports_fast_grid(config.strategy_id):
         raise ValueError(f"Grid mode is not supported for strategy '{config.strategy_id}'.")
@@ -819,6 +829,7 @@ def validate_grid_config(config: OptimizationConfig) -> None:
         raise ValueError(f"Grid mode requires Numba: {reason}")
 
     selection = resolve_grid_selection_config(config)
+    _validate_fast_objective_limit(selection.fast_objectives)
     _validate_objective_set(
         stage="fast screening",
         objectives=selection.fast_objectives,
@@ -1016,6 +1027,11 @@ def rank_grid_results(
             sharpe_hint = (
                 ". Sharpe is undefined with insufficient real calendar observations, "
                 "no completed trades, or unusable monthly variance"
+            )
+        if "sharpe_daily" in objectives:
+            sharpe_hint += (
+                ". Daily Sharpe is unavailable with no evaluation observations, "
+                "insufficient daily returns, zero variance, or invalid equity values"
             )
         raise ValueError(
             f"{stage_label} produced no candidates with usable objective values"
@@ -2128,6 +2144,8 @@ def run_grid_optimization(
     grid_v2_plan_cache: Any | None = None,
 ) -> Tuple[List[OptimizationResult], Optional[str]]:
     if supports_grid_v2(config.strategy_id):
+        selection = resolve_grid_selection_config(config)
+        _validate_fast_objective_limit(selection.fast_objectives)
         return _run_grid_v2_optimization(
             config,
             save_study=save_study,

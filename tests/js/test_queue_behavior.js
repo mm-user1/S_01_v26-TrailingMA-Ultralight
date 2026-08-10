@@ -120,6 +120,16 @@ async function main() {
   assert.equal(typeof context.saveQueueStateRequest, 'function');
   assert.equal(typeof context.clearQueueStateRequest, 'function');
 
+  const dailyItem = sourceItem('daily');
+  dailyItem.config.grid_fast_objectives = ['sharpe_daily', 'sharpe_ratio'];
+  dailyItem.config.grid_fast_primary_objective = 'sharpe_daily';
+  const dailyState = context.__queueTest.buildStateForItem(dailyItem, 'running');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(dailyState.grid.fastObjectives)),
+    ['sharpe_daily', 'sharpe_ratio'],
+  );
+  assert.equal(dailyState.grid.fastPrimaryObjective, 'sharpe_daily');
+
   const present = captureFormData();
   context.__queueTest.appendQueueWarmupField(present, {warmupBars: 1500});
   assert.deepEqual(present.entries, [['warmupBars', '1500']]);

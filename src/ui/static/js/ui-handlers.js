@@ -39,11 +39,13 @@ const GRID_SUPPORTED_OBJECTIVES = new Set([
   'profit_factor',
   'win_rate',
   'sharpe_ratio',
+  'sharpe_daily',
   'sqn'
 ]);
+const GRID_FAST_ONLY_OBJECTIVES = new Set(['sharpe_daily']);
 const GRID_MAX_FAST_OBJECTIVES = 6;
 const GRID_SUPPORTED_SLOW_OBJECTIVES = new Set([
-  ...GRID_SUPPORTED_OBJECTIVES,
+  ...[...GRID_SUPPORTED_OBJECTIVES].filter((objective) => !GRID_FAST_ONLY_OBJECTIVES.has(objective)),
   'sharpe_ratio',
   'sortino_ratio',
   'sqn',
@@ -54,6 +56,7 @@ const GRID_OBJECTIVE_LABELS = {
   net_profit_pct: 'Net Profit %',
   max_drawdown_pct: 'Max DD %',
   sharpe_ratio: 'Sharpe Ratio',
+  sharpe_daily: 'Daily Sharpe',
   sortino_ratio: 'Sortino Ratio',
   romad: 'RoMaD',
   profit_factor: 'Profit Factor',

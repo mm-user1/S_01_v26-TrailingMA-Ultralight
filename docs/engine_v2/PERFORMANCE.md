@@ -825,3 +825,28 @@ for 4,096 rows (+98,304). Requested day IDs add exactly one shared int32 per
 bar: 27,428 bytes for S06 and 74,084 bytes for the signal sample. Both measured
 plans remained single-chunk. No per-candidate daily arrays or dictionaries are
 allocated.
+
+## TZ-14-2 Stage 2 public-objective measurement (2026-08-10)
+
+Windows 10, Python 3.13.7, NumPy 2.3.3, Numba 0.65.1, task-local Numba
+caches. The production-sized S06 Grid V2 plan used 48,480 candidates, 6,857
+bars, six workers, one warmup, and two measured runs. The comparison preserves
+the accepted Stage 1 kernels and measures the Stage 2 request path only.
+
+| Request | Median wall | Median total | Median Fast evaluation | Valid objective rows |
+|---|---:|---:|---:|---:|
+| Daily disabled, before Stage 2 | 11.012s | 10.947s | 6.048s | 48,480 |
+| Daily disabled, after Stage 2 | 10.762s | 10.704s | 5.991s | 48,480 |
+| Daily Sharpe objective | 11.094s | 11.030s | 6.314s | 46,056 |
+
+The disabled after/before medians changed by -2.27% wall, -2.22% total, and
+-0.93% Fast evaluation (measurement noise, with no regression). Enabling the
+Daily objective added 0.332s wall (+3.09%) and 0.323s total (+3.02%) relative
+to the same-host disabled-after median. Candidate 18,436 remained selected in
+all runs, with `net_profit_pct=45.74422762364992`,
+`max_drawdown_pct=14.133826459897126`, and 55 trades; its Daily objective was
+`2.6399771876928075` when enabled.
+
+All runs retained the 48,480-row population and one chunk. The fixed 26-column
+output remained 10,083,840 bytes. Daily enabled only the shared contiguous
+27,428-byte `int32` day-ID array; disabled runs retained zero day-ID bytes.

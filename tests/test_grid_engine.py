@@ -6,7 +6,10 @@ import pandas as pd
 import pytest
 
 from core.grid_engine import (
+    GRID_FAST_ONLY_OBJECTIVES,
+    GRID_MAX_FAST_OBJECTIVES,
     GRID_SUPPORTED_FAST_OBJECTIVES,
+    GRID_SUPPORTED_SLOW_OBJECTIVES,
     GRID_V2_SUPPORTED_FAST_OBJECTIVES,
     GridSettings,
     FastMetricRequest,
@@ -36,14 +39,16 @@ from core.optuna_engine import (
     OptimizationResult,
 )
 from core.storage import load_study_from_db, save_grid_study_to_db
-from ui.server_services import _build_optimization_config
+from ui.server_services import _build_optimization_config, validate_objectives_config
 from strategies.s03_reversal_v10 import fast_grid
 
 
-def test_grid_fast_objective_allowlists_include_conditional_sharpe_and_sqn():
-    for objective in ("sharpe_ratio", "sqn"):
+def test_grid_fast_objective_allowlists_include_conditional_metrics():
+    for objective in ("sharpe_ratio", "sharpe_daily", "sqn"):
         assert objective in GRID_SUPPORTED_FAST_OBJECTIVES
         assert objective in GRID_V2_SUPPORTED_FAST_OBJECTIVES
+    assert GRID_FAST_ONLY_OBJECTIVES == {"sharpe_daily"}
+    assert "sharpe_daily" not in GRID_SUPPORTED_SLOW_OBJECTIVES
 
 
 def _grid_config(**overrides):
@@ -668,7 +673,7 @@ def test_grid_selection_config_accepts_conditional_fast_metrics_and_rejects_comp
         lambda strategy_id: SimpleNamespace(NUMBA_AVAILABLE=True, NUMBA_IMPORT_ERROR=None),
     )
 
-    for objective in ("sharpe_ratio", "sqn"):
+    for objective in ("sharpe_ratio", "sharpe_daily", "sqn"):
         validate_grid_config(_grid_config(grid_fast_objectives=[objective]))
 
     with pytest.raises(ValueError, match="Composite Score"):
@@ -688,8 +693,102 @@ def test_grid_selection_config_accepts_conditional_fast_metrics_and_rejects_comp
     assert selection.final_objectives == ["sharpe_ratio", "ulcer_index"]
     validate_grid_config(config)
 
+    with pytest.raises(
+        ValueError,
+        match="Grid slow refinement objective is not available: sharpe_daily",
+    ):
+        validate_grid_config(
+            _grid_config(
+                grid_slow_refinement_enabled=True,
+                grid_slow_objectives=["sharpe_daily"],
+            )
+        )
 
-@pytest.mark.parametrize("objective", ["sharpe_ratio", "sqn"])
+
+@pytest.mark.parametrize(
+    ("engine", "objective_count"),
+    [("v1", 6), ("v1", 7), ("v2", 6), ("v2", 7)],
+)
+def test_core_grid_fast_objective_limit(monkeypatch, engine, objective_count):
+    import core.grid_engine as grid_engine
+
+    objectives = [
+        "net_profit_pct",
+        "max_drawdown_pct",
+        "romad",
+        "profit_factor",
+        "win_rate",
+        "sharpe_daily",
+        "sharpe_ratio",
+    ][:objective_count]
+    config = _grid_config(
+        strategy_id="v2-test-strategy" if engine == "v2" else "s03_reversal_v10",
+        grid_fast_objectives=objectives,
+        grid_fast_primary_objective="sharpe_daily",
+    )
+    calls = []
+    if engine == "v1":
+        monkeypatch.setattr(
+            grid_engine,
+            "_load_backend",
+            lambda strategy_id: SimpleNamespace(NUMBA_AVAILABLE=True, NUMBA_IMPORT_ERROR=None),
+        )
+        action = lambda: validate_grid_config(config)
+    else:
+        monkeypatch.setattr(grid_engine, "supports_grid_v2", lambda strategy_id: True)
+        monkeypatch.setattr(
+            grid_engine,
+            "_run_grid_v2_optimization",
+            lambda received, **kwargs: (calls.append((received, kwargs)) or ([], None)),
+        )
+        action = lambda: run_grid_optimization(config, save_study=False)
+
+    if objective_count > GRID_MAX_FAST_OBJECTIVES:
+        with pytest.raises(
+            ValueError,
+            match=rf"Maximum {GRID_MAX_FAST_OBJECTIVES} Grid Fast Objectives allowed",
+        ):
+            action()
+        assert calls == []
+    else:
+        action()
+        if engine == "v2":
+            assert calls == [(config, {"save_study": False, "grid_v2_plan_cache": None})]
+
+
+def test_fast_limit_does_not_apply_to_slow_objectives_or_change_optuna_limit(monkeypatch):
+    import core.grid_engine as grid_engine
+
+    monkeypatch.setattr(
+        grid_engine,
+        "_load_backend",
+        lambda strategy_id: SimpleNamespace(NUMBA_AVAILABLE=True, NUMBA_IMPORT_ERROR=None),
+    )
+    slow_objectives = [
+        "net_profit_pct",
+        "max_drawdown_pct",
+        "romad",
+        "profit_factor",
+        "win_rate",
+        "sharpe_ratio",
+        "sqn",
+    ]
+    validate_grid_config(
+        _grid_config(
+            grid_slow_refinement_enabled=True,
+            grid_slow_objectives=slow_objectives,
+            grid_slow_primary_objective="sqn",
+        )
+    )
+
+    assert validate_objectives_config(slow_objectives[:6], "sharpe_ratio") == (True, None)
+    assert validate_objectives_config(slow_objectives, "sharpe_ratio") == (
+        False,
+        "Maximum 6 objectives allowed.",
+    )
+
+
+@pytest.mark.parametrize("objective", ["sharpe_ratio", "sharpe_daily", "sqn"])
 def test_internal_fast_metric_ranking_excludes_undefined_and_errors_when_all_undefined(objective):
     undefined = _synthetic_grid_result(1, net_profit=10.0)
     finite = _synthetic_grid_result(2, net_profit=5.0)
@@ -716,6 +815,8 @@ def test_internal_fast_metric_ranking_excludes_undefined_and_errors_when_all_und
         )
     if objective == "sharpe_ratio":
         assert "insufficient real calendar observations" in str(excinfo.value)
+    elif objective == "sharpe_daily":
+        assert "Daily Sharpe is unavailable" in str(excinfo.value)
 
 
 def test_fast_metric_request_separates_sharpe_and_sqn_from_dsr():
@@ -727,6 +828,13 @@ def test_fast_metric_request_separates_sharpe_and_sqn_from_dsr():
         compute_sharpe=True,
         compute_sqn=True,
         compute_dsr_higher_moments=False,
+    )
+
+    daily_selection = resolve_grid_selection_config(
+        _grid_config(grid_fast_objectives=["sharpe_daily"])
+    )
+    assert resolve_fast_metric_request(daily_selection, needs_dsr=False) == FastMetricRequest(
+        compute_sharpe_daily=True,
     )
     dsr_selection = resolve_grid_selection_config(
         _grid_config(grid_fast_objectives=["net_profit_pct"])

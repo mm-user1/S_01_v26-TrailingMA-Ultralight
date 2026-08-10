@@ -35,9 +35,11 @@ const objectives = [
   'profit_factor',
   'win_rate',
   'sharpe_ratio',
+  'sharpe_daily',
   'sqn',
 ];
 const checkboxes = objectives.map(checkbox);
+checkboxes[7].checked = false;
 const alerts = [];
 const context = {
   document: {
@@ -60,6 +62,11 @@ assert.equal(context.testApi.enforceGridFastObjectiveLimit(checkboxes[6]), false
 assert.equal(checkboxes[6].checked, false);
 assert.deepEqual(alerts, ['Select no more than 6 Grid fast objectives.']);
 assert.equal(context.testApi.collectGridObjectiveSelection('fast').objectives.length, 6);
+
+const fastOnly = vm.runInContext('GRID_FAST_ONLY_OBJECTIVES', context);
+const slowSupported = vm.runInContext('GRID_SUPPORTED_SLOW_OBJECTIVES', context);
+assert.equal(fastOnly.has('sharpe_daily'), true);
+assert.equal(slowSupported.has('sharpe_daily'), false);
 
 checkboxes[5].checked = false;
 checkboxes[6].checked = true;

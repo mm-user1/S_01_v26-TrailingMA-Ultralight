@@ -667,3 +667,24 @@ and plan fingerprint
 `0f8d001c380df5ee95d34ca4e25910c674e20e9e8f34886a1bd2f1c261f019b2`.
 Public objective registration, WFA behavior, UI, Queue, persistence, Results,
 Analytics, DSR, and all existing metric formulas remain outside this stage.
+
+## Public Daily Sharpe integration certification (TZ-14-2 Stage 2)
+
+Daily Sharpe is registered as a maximize Optuna objective and an explicit
+Fast-only Grid objective for V1 and V2. Optuna and Grid derive the execution
+request from their authoritative objective arrays; unrelated candidates retain
+the disabled path, and the existing independent six-objective limits are
+unchanged. A selected Daily objective may reduce the rankable population;
+unavailable values are excluded or fail the Optuna trial contract and are never
+fabricated as zero.
+
+Fixed and Adaptive WFA final selections compute the canonical metric for each
+real IS series and real undelayed dense OOS series regardless of the ranking
+objective. A delayed `trade_start` or authoritative `no_trade` plan suppresses
+all three OOS fields without applying the helper to a synthetic flat prefix;
+this preserves missing-date semantics. Nullable SQLite columns store the ratio
+and exact integer diagnostics for trials, selected windows, and module trials.
+Additive idempotent migrations leave historical rows `NULL` and perform no
+backfill. Generic Queue, Results, API, and Analytics transports expose stored
+facts without new charts or identity changes. DSR, Monthly Sharpe, WFE,
+stitched OOS, trading, drawdown, and exports remain unchanged.

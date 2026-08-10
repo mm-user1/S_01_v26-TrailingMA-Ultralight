@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from ui.server import app
 from core.backtest_engine import TradeRecord
-from core.grid_engine import GRID_SUPPORTED_FAST_OBJECTIVES
+from core.grid_engine import GRID_SUPPORTED_FAST_OBJECTIVES, GRID_SUPPORTED_SLOW_OBJECTIVES
 from core.metrics import _calculate_r2_consistency
 from core.walkforward_engine import OOSStitchedResult, WFConfig, WFResult, WindowResult
 from core.storage import (
@@ -66,6 +66,7 @@ def test_grid_start_page_label_and_marker_are_compact():
     results_html = (repo_root / "src" / "ui" / "templates" / "results.html").read_text(encoding="utf-8")
     results_tables_js = (repo_root / "src" / "ui" / "static" / "js" / "results-tables.js").read_text(encoding="utf-8")
     analytics_js = (repo_root / "src" / "ui" / "static" / "js" / "analytics.js").read_text(encoding="utf-8")
+    wfa_results_js = (repo_root / "src" / "ui" / "static" / "js" / "wfa-results-ui.js").read_text(encoding="utf-8")
     queue_js = (repo_root / "src" / "ui" / "static" / "js" / "queue.js").read_text(encoding="utf-8")
     run_routes_py = (repo_root / "src" / "ui" / "server_routes_run.py").read_text(encoding="utf-8")
 
@@ -77,8 +78,11 @@ def test_grid_start_page_label_and_marker_are_compact():
     assert 'id="optuna-settings-section"' in results_html
     assert 'id="gridFastObjectivesSection"' in index_html
     assert 'class="grid-fast-objective-checkbox"' in index_html
-    assert index_html.count('class="grid-fast-objective-checkbox"') == 7
+    assert index_html.count('class="grid-fast-objective-checkbox"') == 8
     assert 'data-objective="sharpe_ratio"' in index_html
+    assert index_html.count('class="objective-checkbox" data-objective="sharpe_daily"') == 1
+    assert index_html.count('class="grid-fast-objective-checkbox" data-objective="sharpe_daily"') == 1
+    assert index_html.count('class="grid-slow-objective-checkbox" data-objective="sharpe_daily"') == 0
     assert 'data-objective="sqn"' in index_html
     assert "Select 1-6 objectives." in index_html
     assert "const GRID_MAX_FAST_OBJECTIVES = 6" in ui_handlers_js
@@ -150,6 +154,10 @@ def test_grid_start_page_label_and_marker_are_compact():
     assert results_html.index('id="optuna-settings-section"') > results_html.index("Status &amp; Controls")
     assert "setElementVisible('optuna-settings-section', gridRows.length === 0)" in results_tables_js
     assert "optunaSection.style.display = gridRows.length ? 'none' : ''" in analytics_js
+    assert "sharpe_daily: window.is_sharpe_daily" in wfa_results_js
+    assert "sharpe_daily: window.oos_sharpe_daily" in wfa_results_js
+    assert "objective_values: isObjectiveValues" in wfa_results_js
+    assert "objective_values: oosObjectiveValues" in wfa_results_js
 
 
 def test_common_fast_objectives_match_javascript_and_start_page_controls():
@@ -180,6 +188,8 @@ def test_common_fast_objectives_match_javascript_and_start_page_controls():
     assert python_objectives <= javascript_objectives
     for objective in python_objectives:
         assert control_objectives.count(objective) == 1
+
+    assert "sharpe_daily" not in GRID_SUPPORTED_SLOW_OBJECTIVES
 
 
 def _javascript_function_source(source: str, signature: str, next_signature: str) -> str:
@@ -1017,7 +1027,7 @@ def test_grid_api_enforces_six_fast_objective_boundary(
         "profit_factor",
         "win_rate",
         "sharpe_ratio",
-        "sqn",
+        "sharpe_daily",
     ]
     payload.update(
         objectives=seven,

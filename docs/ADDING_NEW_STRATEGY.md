@@ -421,9 +421,9 @@ enumeration. A fast backend typically provides:
   compute_sharpe=False, compute_sharpe_daily=False, compute_sqn=False)` —
   evaluate the population. These keyword arguments are part of the V1 Fast Grid
   backend contract and must be
-  accepted even when the backend can use their default behavior. Sharpe and SQN
-  may be requested conditionally as public Fast Objectives; Sharpe may also be
-  requested internally for DSR.
+  accepted even when the backend can use their default behavior. Monthly
+  Sharpe, Daily Sharpe, and SQN may be requested conditionally as public Fast
+  Objectives; Monthly Sharpe may also be requested internally for DSR.
 - Conditional Fast Sharpe must stream only observations at or after
   `trade_start_idx`, anchor the first real month at initial capital, close a
   month with the preceding bar, retain the final partial month, and remain
@@ -441,8 +441,8 @@ enumeration. A fast backend typically provides:
 - A Numba inner loop that evaluates the restricted fast objective set
   (`net_profit_pct`, `max_drawdown_pct`, `romad`, `profit_factor`, `win_rate`,
   `sharpe_ratio`, `sharpe_daily`, `sqn`) cheaply per candidate. Daily Sharpe is
-  currently an internal, review-gated capability rather than a public objective;
-  all three metrics remain conditional so unrequested metrics add no
+  an explicit Fast-only Grid objective and a maximize Optuna objective; all
+  three conditional metrics remain gated so unrequested metrics add no
   per-candidate calculation.
 - A slow-path validator that re-runs the top-N candidates through the regular
   Python strategy using `core.optuna_engine._run_single_combination` to keep
@@ -491,16 +491,18 @@ and no `sqrt(12)`. SQN uses exact net trade PnL, sample variance, and is
 undefined below 30 completed trades or for non-finite/near-zero dispersion.
 Both accumulators use stable Welford updates and constant per-candidate memory.
 
-Sharpe and SQN are Fast Objectives, but not Fast Constraints. The Start page
-shows seven common Fast controls and accepts at most six simultaneously.
+Monthly Sharpe, Daily Sharpe, and SQN are Fast Objectives, but not Fast
+Constraints. The Start page shows eight common Fast controls and accepts at
+most six simultaneously; Optuna retains its separate six-objective cap.
 Sortino, Ulcer Index, and Consistency remain Slow-only. Non-finite selected
 objectives remove the candidate from ranking rather than falling back to zero
 or Net Profit.
 
-Daily Sharpe is not yet a public Fast Objective or public strategy field.
-Internal Fast requests may explicitly set `compute_sharpe_daily=True`; normal
-public Grid, Optuna, WFA, UI, Queue, and storage paths leave it disabled until
-the product-integration stage is reviewed. Each backend builds canonical
+Daily Sharpe is a maximize Optuna objective and an explicit Fast-only Grid
+objective. Public requests set `compute_sharpe_daily=True` only when selected;
+final WFA reporting separately requests it for real IS and real undelayed OOS
+series. Delayed/no-trade OOS facts are absent rather than calculated from a
+synthetic sparse prefix. Each backend builds canonical
 contiguous `int32` UTC day IDs once per dataset/window and streams Welford state
 without daily arrays per candidate. Its fractional-return, `rf/365`, population-
 variance, and `sqrt(365)` scale is not interchangeable with Merlin's
@@ -509,4 +511,6 @@ diagnostics are factual integers for structurally valid series, including zero,
 with no minimum-active-days rule. A non-finite equity observation or invalid
 opening denominator invalidates all three fields. The compounded-return
 self-check remains reference-only; selected Fast rows are validated against
-that canonical reference. Existing metrics and DSR remain unchanged.
+that canonical reference. Nullable SQL fields preserve historical absence
+without backfill. Existing metrics, DSR, stitched OOS, and exports remain
+unchanged.

@@ -745,17 +745,20 @@ calendar-month items retain authoritative month counts and use labels such as
 
 ### Conditional Fast Grid Sharpe and SQN
 
-V1 and V2 Grid expose seven common Fast Objective controls: Net Profit, Max
-Drawdown, RoMaD, Profit Factor, Win Rate, Sharpe, and SQN. At most six may be
-selected in one request. Sharpe and SQN are computed only when requested;
-selecting either does not enable DSR. V1 DSR may reuse the conditional Sharpe
-stream, while V2 Grid DSR remains unavailable. Sortino, Ulcer Index, and
-Consistency remain Slow-only, and Fast Constraints are unchanged.
+V1 and V2 Grid expose eight common Fast Objective controls: Net Profit, Max
+Drawdown, RoMaD, Profit Factor, Win Rate, Monthly Sharpe, Daily Sharpe, and SQN.
+At most six may be selected in one request; Optuna independently retains its
+existing six-objective cap. Monthly Sharpe, Daily Sharpe, and SQN are computed
+only when requested. Daily Sharpe is explicitly Fast-only; Sortino, Ulcer
+Index, and Consistency remain Slow-only, and Fast Constraints are unchanged.
 
 Grid drops a candidate when any selected objective is non-finite. SQN is
 undefined below 30 completed trades, so short direct-Grid or WFA windows can
 lose much of their rankable population; a WFA window with no usable candidate
 fails with its window number and selected objective context.
+Daily Sharpe can similarly shrink the rankable population when its ratio is
+unavailable because of zero trades, too few observations, zero variance, or an
+invalid series.
 
 ### Advanced Metric Boundary Contract
 
@@ -800,7 +803,11 @@ stream constant per-candidate state, and validate selected rows against the
 canonical reference. The canonical compounded-return self-check stays
 reference-only; Fast parity supplies the same boundaries, Welford statistics,
 eligibility, and strict invalidation without a product accumulator. Sparse WFA
-timestamps never imply synthesized dates. Public Grid/Optuna registration, UI,
-storage, WFA production integration, Queue, DSR, Monthly Sharpe, and every other
-metric remain unchanged pending the separately reviewed product-integration
-stage.
+timestamps never imply synthesized dates. It is a maximize Optuna objective and
+an explicit Fast-only Grid objective; generic Queue transport preserves it.
+Final fixed and Adaptive WFA windows always report Daily Sharpe for real IS and
+real undelayed dense OOS series, even when another objective selected the
+candidate. Delayed/no-trade OOS fields remain absent because a sparse flat
+prefix would invent omitted calendar gaps. SQLite storage is nullable and does
+not backfill historical rows. DSR, Monthly Sharpe, exports, stitched portfolio
+metrics, and active-day constraints remain unchanged/deferred.

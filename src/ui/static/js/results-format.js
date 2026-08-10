@@ -2,6 +2,7 @@ const OBJECTIVE_LABELS = {
   net_profit_pct: 'Net Profit %',
   max_drawdown_pct: 'Max DD %',
   sharpe_ratio: 'Sharpe Ratio',
+  sharpe_daily: 'Daily Sharpe',
   sortino_ratio: 'Sortino Ratio',
   romad: 'RoMaD',
   profit_factor: 'Profit Factor',

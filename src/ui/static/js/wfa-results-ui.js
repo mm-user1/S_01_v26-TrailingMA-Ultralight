@@ -753,6 +753,10 @@
       });
       tbody.appendChild(headerRow);
 
+      const isObjectiveValues = objectives.map((objective) => {
+        const value = window[`is_${objective}`];
+        return value === undefined ? null : value;
+      });
       const isTrial = {
         trial_number: window.is_best_trial_number ?? '',
         win_rate: window.is_win_rate,
@@ -766,10 +770,13 @@
         profit_factor: window.is_profit_factor,
         ulcer_index: window.is_ulcer_index,
         sqn: window.is_sqn,
+        sharpe_daily: window.is_sharpe_daily,
+        sharpe_daily_observations: window.is_sharpe_daily_observations,
+        sharpe_daily_active_days: window.is_sharpe_daily_active_days,
         consistency_score: window.is_consistency_score,
         is_pareto_optimal: window.is_pareto_optimal,
         constraints_satisfied: window.constraints_satisfied,
-        objective_values: []
+        objective_values: isObjectiveValues
       };
 
       const isRow = buildOptunaRow(isTrial, objectives, hasConstraints) || document.createElement('tr');
@@ -792,6 +799,10 @@
       });
       tbody.appendChild(isRow);
 
+      const oosObjectiveValues = objectives.map((objective) => {
+        const value = window[`oos_${objective}`];
+        return value === undefined ? null : value;
+      });
       const oosTrial = {
         trial_number: '',
         win_rate: window.oos_win_rate,
@@ -805,10 +816,13 @@
         profit_factor: window.oos_profit_factor,
         ulcer_index: window.oos_ulcer_index,
         sqn: window.oos_sqn,
+        sharpe_daily: window.oos_sharpe_daily,
+        sharpe_daily_observations: window.oos_sharpe_daily_observations,
+        sharpe_daily_active_days: window.oos_sharpe_daily_active_days,
         consistency_score: window.oos_consistency_score,
         is_pareto_optimal: window.is_pareto_optimal,
         constraints_satisfied: window.constraints_satisfied,
-        objective_values: []
+        objective_values: oosObjectiveValues
       };
 
       const oosRow = buildOptunaRow(oosTrial, objectives, hasConstraints) || document.createElement('tr');

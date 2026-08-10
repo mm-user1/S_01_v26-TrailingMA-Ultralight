@@ -770,7 +770,8 @@ Check these first when V2 strategy work drifts:
 
 ## Inherited conditional Fast metrics
 
-New V2 strategies inherit conditional Fast Grid Sharpe and SQN from their
+New V2 strategies inherit conditional Fast Grid Monthly Sharpe, Daily Sharpe,
+and SQN from their
 certified execution family; strategy signal code must not implement a second
 formula. The compiled families stream Welford state in constant memory. Sharpe
 uses the evaluation-only calendar-month mark-to-market equity sequence starting
@@ -785,8 +786,9 @@ sample variance, and is undefined below 30 completed trades, for non-positive
 variance, or standard deviation below `1e-10`.
 
 Fast requests are execution-only and must not enter semantic identity, plan
-fingerprints, sampling, or cache identity. The UI exposes seven common Fast
-controls but permits at most six selected. Non-finite selected objectives are
+fingerprints, sampling, or cache identity. The UI exposes eight common Fast
+controls but permits at most six selected; Optuna keeps its separate cap.
+Daily Sharpe is Fast-only. Non-finite selected objectives are
 removed from direct Grid and WFA ranking; a short WFA window can therefore
 exclude many SQN candidates. Sortino, Ulcer Index, and Consistency stay
 Slow-only, Fast Constraints are unchanged, and V2 Grid DSR remains unavailable.
@@ -815,6 +817,9 @@ implementation: one canonical contiguous `int32` day-ID array is shared by the
 population, each candidate keeps constant streaming state, and output columns
 23..25 transport the ratio and exact diagnostics. Selected results validate all
 three fields against the canonical reference; the reference-only compounding
-self-check is intentionally not duplicated in the kernels. Public Grid/Optuna,
-WFA, UI, Queue, storage, and DSR remain unchanged until the separately reviewed
-product-integration stage.
+self-check is intentionally not duplicated in the kernels. Public Grid and
+Optuna derive the request from selected objectives, and generic Queue transport
+preserves it. Final WFA reporting always requests the metric for real IS and
+real undelayed dense OOS series; delayed/no-trade OOS facts are suppressed.
+Nullable storage preserves historical absence without backfill. DSR, stitched
+portfolio metrics, exports, and active-day constraints remain unchanged.
