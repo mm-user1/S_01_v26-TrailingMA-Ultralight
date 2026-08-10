@@ -791,3 +791,37 @@ dates. Disabled runner tests replace daily aggregation with a failing sentinel
 and still pass, proving there is no day-ID or daily-return traversal when the
 flag is false. Fast/Grid candidate paths remain unchanged and were not timed
 because Phase 1 does not expose Daily Sharpe there.
+
+## TZ-14-2 Stage 1 Fast Daily Sharpe measurement (2026-08-10)
+
+Windows 10, Python 3.13.7, NumPy 2.3.3, Numba 0.65.1, task-local Numba
+cache. Runs used one warmup followed by three measured iterations on the same
+host. Daily, Monthly, and combined requests were measured independently; all
+candidate populations and selected trading results were preserved.
+
+| Family / plan | Candidates / bars | Disabled median | Daily median | Combined Daily+Monthly median | Daily delta | Combined delta |
+|---|---:|---:|---:|---:|---:|---:|
+| V2 position/bracket S06 full, evaluation | 48,480 / 6,857 | 5.804s | 5.827s | 5.890s | +0.40% | +1.48% |
+| V2 signal-reversal sampled, wall | 4,096 / 18,521 | 11.977s | 12.012s | 12.108s | +0.29% | +1.09% |
+
+The full S06 disabled wall median was 10.503s versus the same-host pre-change
+10.209s (+2.88%); its Fast median was 5.804s versus 5.694s (+1.93%). Candidate
+18,436 remained selected with `net_profit_pct=45.74422762364992`,
+`max_drawdown_pct=14.133826459897126`, and 55 trades. The sampled signal
+disabled wall median was 11.977s versus 11.827s (+1.27%).
+
+V1 warmed 4,096-candidate representative medians were: S03 v10 disabled
+0.191s and Daily 0.263s; S03 v11 disabled 0.249s and Daily 0.286s; S06 disabled
+0.146s and Daily 0.168s. A 50,000-candidate S03 v10 representative run measured
+2.590s disabled and 3.257s Daily before the final constant-request dispatcher
+specialization; the final 4,096-candidate disabled rerun was within +0.41% of
+the pre-change median. Daily is therefore inexpensive in both V2 population
+families but remains a measurable opt-in cost in V1, especially S03 v10; the
+disabled path remains gated.
+
+The fixed V2 result matrix grew from 23 to 26 float64 columns, adding 24 bytes
+per candidate: 10,083,840 bytes for 48,480 rows (+1,163,520) and 851,968 bytes
+for 4,096 rows (+98,304). Requested day IDs add exactly one shared int32 per
+bar: 27,428 bytes for S06 and 74,084 bytes for the signal sample. Both measured
+plans remained single-chunk. No per-candidate daily arrays or dictionaries are
+allocated.

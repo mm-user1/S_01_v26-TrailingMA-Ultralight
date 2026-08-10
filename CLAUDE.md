@@ -777,9 +777,9 @@ retain only the sparse scheduled flat prefix, produce strictly increasing
 unique timestamps, and rebase the metric boundary to zero with an explicit
 anchor. Non-delayed stitched output remains unchanged.
 
-### Request-gated Daily Sharpe reference metric
+### Request-gated Daily Sharpe metric
 
-`AdvancedMetrics.sharpe_daily` is a reference-only, explicit opt-in metric and
+`AdvancedMetrics.sharpe_daily` is an explicit opt-in metric and
 is distinct from the existing unannualized Monthly Sharpe. It groups the
 evaluation-only mark-to-market curve by UTC days since the Unix epoch, uses the
 canonical pre-evaluation equity anchor, emits fractional simple returns for
@@ -792,7 +792,15 @@ When the request is disabled or the enabled daily series is structurally
 invalid, both optional diagnostics are `None`. With a valid constructed series,
 both are integers, including a genuine `0`; the ratio may still be `None` for
 no completed trades, insufficient observations, or zero variance. Active means
-`abs(raw return) > 1e-12` and is descriptive, not a hard gate. Sparse WFA
-timestamps never imply synthesized dates. Fast Grid, UI, storage, WFA production
-integration, DSR, Monthly Sharpe, and every other metric remain unchanged
-pending a Phase 2 product decision.
+`abs(raw return) > 1e-12` and is descriptive, not a hard gate. The three V1
+Fast backends and both V2 compiled execution families can calculate the same
+ratio and diagnostics when their internal `compute_sharpe_daily` request is
+true. They build one shared contiguous `int32` UTC day array per dataset/window,
+stream constant per-candidate state, and validate selected rows against the
+canonical reference. The canonical compounded-return self-check stays
+reference-only; Fast parity supplies the same boundaries, Welford statistics,
+eligibility, and strict invalidation without a product accumulator. Sparse WFA
+timestamps never imply synthesized dates. Public Grid/Optuna registration, UI,
+storage, WFA production integration, Queue, DSR, Monthly Sharpe, and every other
+metric remain unchanged pending the separately reviewed product-integration
+stage.

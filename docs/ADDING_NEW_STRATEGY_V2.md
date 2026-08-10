@@ -803,13 +803,18 @@ Selected Slow consumers must read those objects directly; do not reconstruct
 metrics from `StrategyResult`, add fallback defaults, or recalculate them.
 Fast-row ownership is unchanged, and an undefined Sortino remains `None`.
 
-Daily Sharpe Phase 1 adds three typed fields only to `AdvancedMetrics`. The
+Daily Sharpe adds three typed fields to `AdvancedMetrics`. The
 shared reference runner computes them in its existing single enrichment call
 only when `compute_sharpe_daily=True`; certified adapters keep the default
 disabled behavior. UTC day closes use the evaluation boundary and initial-
 capital anchor, retain partial first/final observed days (including a one-bar
 inclusive-midnight end), and do not fill missing dates. An invalid opening
-denominator invalidates the whole daily series. Sparse delayed-OOS semantics,
-Fast Grid, selected-Slow transport, UI, storage, and DSR remain unchanged until
-Phase 2 decides whether WFA should preserve, densify, or suppress sparse daily
-observations.
+denominator or any non-finite evaluation equity invalidates the whole daily
+series. Both compiled execution families inherit the internal request-gated
+implementation: one canonical contiguous `int32` day-ID array is shared by the
+population, each candidate keeps constant streaming state, and output columns
+23..25 transport the ratio and exact diagnostics. Selected results validate all
+three fields against the canonical reference; the reference-only compounding
+self-check is intentionally not duplicated in the kernels. Public Grid/Optuna,
+WFA, UI, Queue, storage, and DSR remain unchanged until the separately reviewed
+product-integration stage.

@@ -44,6 +44,9 @@ from core.engine_v2.compiled_kernel import (
     OUTPUT_PROFIT_FACTOR,
     OUTPUT_REJECTED_FILL_COUNT,
     OUTPUT_ROMAD,
+    OUTPUT_SHARPE_DAILY,
+    OUTPUT_SHARPE_DAILY_ACTIVE_DAYS,
+    OUTPUT_SHARPE_DAILY_OBSERVATIONS,
     OUTPUT_SHARPE_RATIO,
     OUTPUT_SQN,
     OUTPUT_TOTAL_TRADES,
@@ -63,6 +66,7 @@ from core.engine_v2.compiled_kernel import (
     _empty_config_arrays,
     validate_tick_size,
 )
+from core.metrics import build_utc_day_ids
 from core.engine_v2.compiled_kernel_signal import (
     build_signal_stacked_execution_data,
     evaluate_compiled_signal_stacked_batch,
@@ -614,6 +618,7 @@ class GridV2CacheEstimate:
     bytes_per_output_candidate: int = OUTPUT_COLUMN_COUNT * np.dtype(np.float64).itemsize
     bytes_per_shared_market_bar: int = 5 * np.dtype(np.float64).itemsize
     month_id_nbytes: int = 0
+    day_id_nbytes: int = 0
 
 
 @dataclass
@@ -651,6 +656,9 @@ class GridV2ResultRow:
     guardrail_summary: Mapping[str, Any]
     sharpe_ratio: float = _UNDEFINED_METRIC
     sqn: float = _UNDEFINED_METRIC
+    sharpe_daily: float = _UNDEFINED_METRIC
+    sharpe_daily_observations: Optional[int] = None
+    sharpe_daily_active_days: Optional[int] = None
     backend_kind: str = REFERENCE_BATCH_KIND
     status: str = "ok"
     error: str | None = None
@@ -1844,6 +1852,7 @@ def estimate_grid_v2_cache(
     candidate_indices: Sequence[int] | None = None,
     *,
     compute_sharpe: bool = False,
+    compute_sharpe_daily: bool = False,
 ) -> GridV2CacheEstimate:
     """Estimate local cache memory for a planned run."""
 
@@ -1857,6 +1866,7 @@ def estimate_grid_v2_cache(
         n_bars,
         cache_keys,
         compute_sharpe=compute_sharpe,
+        compute_sharpe_daily=compute_sharpe_daily,
     )
 
 
@@ -1895,6 +1905,7 @@ def _estimate_grid_v2_cache_from_keys(
     cache_keys: Sequence[_CandidateCacheKeys],
     *,
     compute_sharpe: bool = False,
+    compute_sharpe_daily: bool = False,
 ) -> GridV2CacheEstimate:
     topology = _grid_v2_execution_topology(plan)
     signal_combo_count = len({item.signal_key for item in cache_keys})
@@ -1912,11 +1923,13 @@ def _estimate_grid_v2_cache_from_keys(
         4 * np.dtype(np.float64).itemsize
         + np.dtype(np.int64).itemsize
         + (np.dtype(np.int32).itemsize if compute_sharpe else 0)
+        + (np.dtype(np.int32).itemsize if compute_sharpe_daily else 0)
     )
     estimated_signal_bytes = physical_signal_stack_rows * bytes_per_signal_combo
     estimated_dataprep_bytes = physical_dataprep_stack_rows * bytes_per_dataprep_combo
     estimated_output_bytes = output_candidate_count * bytes_per_output_candidate
     month_id_nbytes = n_bars * np.dtype(np.int32).itemsize if compute_sharpe else 0
+    day_id_nbytes = n_bars * np.dtype(np.int32).itemsize if compute_sharpe_daily else 0
     estimated_shared_market_bytes = n_bars * bytes_per_shared_market_bar
     estimated_total_bytes = (
         estimated_signal_bytes
@@ -1946,6 +1959,7 @@ def _estimate_grid_v2_cache_from_keys(
         bytes_per_output_candidate=bytes_per_output_candidate,
         bytes_per_shared_market_bar=bytes_per_shared_market_bar,
         month_id_nbytes=month_id_nbytes,
+        day_id_nbytes=day_id_nbytes,
     )
 
 
@@ -1978,6 +1992,7 @@ def _signal_chunk_estimated_mb(
     signal_row_count: int,
     candidate_count: int,
     compute_sharpe: bool = False,
+    compute_sharpe_daily: bool = False,
 ) -> float:
     worker_multiplier = max(1, int(plan.settings.worker_multiplier))
     signal_bytes = (
@@ -1991,6 +2006,7 @@ def _signal_chunk_estimated_mb(
         4 * np.dtype(np.float64).itemsize
         + np.dtype(np.int64).itemsize
         + (np.dtype(np.int32).itemsize if compute_sharpe else 0)
+        + (np.dtype(np.int32).itemsize if compute_sharpe_daily else 0)
     )
     return ((signal_bytes + output_bytes + shared_market_bytes) * worker_multiplier) / _BYTES_PER_MB
 
@@ -2001,6 +2017,7 @@ def _signal_cache_key_chunks(
     cache_keys: Sequence[_CandidateCacheKeys],
     *,
     compute_sharpe: bool = False,
+    compute_sharpe_daily: bool = False,
 ) -> tuple[_CacheKeyChunk, ...]:
     if not cache_keys:
         return (
@@ -2011,6 +2028,7 @@ def _signal_cache_key_chunks(
                     n_bars,
                     (),
                     compute_sharpe=compute_sharpe,
+                    compute_sharpe_daily=compute_sharpe_daily,
                 ),
             ),
         )
@@ -2029,6 +2047,7 @@ def _signal_cache_key_chunks(
             signal_row_count=next_data_key_count,
             candidate_count=next_candidate_count,
             compute_sharpe=compute_sharpe,
+            compute_sharpe_daily=compute_sharpe_daily,
         )
         if current and next_estimated_mb > limit_mb:
             chunk_records = tuple(current)
@@ -2040,6 +2059,7 @@ def _signal_cache_key_chunks(
                         n_bars,
                         chunk_records,
                         compute_sharpe=compute_sharpe,
+                        compute_sharpe_daily=compute_sharpe_daily,
                     ),
                 )
             )
@@ -2054,6 +2074,7 @@ def _signal_cache_key_chunks(
             signal_row_count=len(current_data_keys),
             candidate_count=len(current),
             compute_sharpe=compute_sharpe,
+            compute_sharpe_daily=compute_sharpe_daily,
         )
         if single_chunk_mb > limit_mb:
             chunk_estimate = _estimate_grid_v2_cache_from_keys(
@@ -2061,6 +2082,7 @@ def _signal_cache_key_chunks(
                 n_bars,
                 tuple(current),
                 compute_sharpe=compute_sharpe,
+                compute_sharpe_daily=compute_sharpe_daily,
             )
             _raise_cache_estimate_error(chunk_estimate)
 
@@ -2074,6 +2096,7 @@ def _signal_cache_key_chunks(
                     n_bars,
                     chunk_records,
                     compute_sharpe=compute_sharpe,
+                    compute_sharpe_daily=compute_sharpe_daily,
                 ),
             )
         )
@@ -2123,6 +2146,7 @@ def execute_grid_v2_candidates(
     candidate_indices: Sequence[int] | None = None,
     *,
     compute_sharpe: bool = False,
+    compute_sharpe_daily: bool = False,
     compute_sqn: bool = False,
 ) -> GridV2RunResult:
     """Execute planned candidates through the selected V2 batch backend."""
@@ -2141,11 +2165,19 @@ def execute_grid_v2_candidates(
     )
     if month_ids.size not in {0, int(len(df))}:
         raise ValueError("Grid V2 month_ids length must match the execution dataframe.")
+    day_ids = (
+        np.ascontiguousarray(build_utc_day_ids(df.index), dtype=np.int32)
+        if compute_sharpe_daily
+        else np.empty(0, dtype=np.int32)
+    )
+    if day_ids.size not in {0, int(len(df))}:
+        raise ValueError("Grid V2 day_ids length must match the execution dataframe.")
     estimate = _estimate_grid_v2_cache_from_keys(
         plan,
         int(len(df)),
         cache_keys,
         compute_sharpe=compute_sharpe,
+        compute_sharpe_daily=compute_sharpe_daily,
     )
     if estimate.estimated_total_mb > estimate.max_signal_cache_mb and topology != "signal_reversal":
         _raise_cache_estimate_error(estimate)
@@ -2155,6 +2187,7 @@ def execute_grid_v2_candidates(
             int(len(df)),
             cache_keys,
             compute_sharpe=compute_sharpe,
+            compute_sharpe_daily=compute_sharpe_daily,
         )
         if topology == "signal_reversal" and estimate.estimated_total_mb > estimate.max_signal_cache_mb
         else (_CacheKeyChunk(cache_keys, estimate),)
@@ -2255,6 +2288,7 @@ def execute_grid_v2_candidates(
                         [dataprep_cache[key] for key in data_keys],
                         data_index,
                         month_ids=month_ids,
+                        day_ids=day_ids,
                     )
                     stack_build_seconds += time.time() - stack_started
                     compiled_started = time.time()
@@ -2274,6 +2308,7 @@ def execute_grid_v2_candidates(
                         trade_start_idx=trade_start_idx,
                         n_workers=plan.settings.compiled_workers,
                         compute_sharpe=compute_sharpe,
+                        compute_sharpe_daily=compute_sharpe_daily,
                         compute_sqn=compute_sqn,
                     )
                     compiled_batch_seconds += time.time() - compiled_started
@@ -2283,6 +2318,7 @@ def execute_grid_v2_candidates(
                         [dataprep_cache[key] for key in data_keys],
                         data_index,
                         month_ids=month_ids,
+                        day_ids=day_ids,
                     )
                     stack_build_seconds += time.time() - stack_started
                     compiled_started = time.time()
@@ -2313,6 +2349,7 @@ def execute_grid_v2_candidates(
                         n_workers=plan.settings.compiled_workers,
                         packed_config_arrays=packed_config_arrays,
                         compute_sharpe=compute_sharpe,
+                        compute_sharpe_daily=compute_sharpe_daily,
                         compute_sqn=compute_sqn,
                     )
                     compiled_batch_seconds += time.time() - compiled_started
@@ -2349,6 +2386,7 @@ def execute_grid_v2_candidates(
                             profile=plan.profile,
                             params=_normalized_candidate_params(hooks, params),
                             trade_start_idx=trade_start_idx,
+                            compute_sharpe_daily=compute_sharpe_daily,
                         )
                     except Exception as exc:
                         rows.append(_error_row(plan, candidate_index, exc))
@@ -2360,6 +2398,7 @@ def execute_grid_v2_candidates(
                             run,
                             params=params,
                             compute_sharpe=compute_sharpe,
+                            compute_sharpe_daily=compute_sharpe_daily,
                             compute_sqn=compute_sqn,
                         )
                     )
@@ -2372,7 +2411,16 @@ def execute_grid_v2_candidates(
     selected = ()
     if plan.settings.slow_enrich_selected:
         selected = tuple(
-            _slow_enrich_selected(plan, df, context, trade_start_idx, hooks, row, selected_dataprep_cache)
+            _slow_enrich_selected(
+                plan,
+                df,
+                context,
+                trade_start_idx,
+                hooks,
+                row,
+                selected_dataprep_cache,
+                compute_sharpe_daily=compute_sharpe_daily,
+            )
             for row in _rank_rows(rows, plan.settings.primary_metric)[: max(0, int(plan.settings.top_n))]
         )
     evaluation_seconds = time.time() - eval_started
@@ -2414,8 +2462,10 @@ def execute_grid_v2_candidates(
             "slow_enrich_selected": bool(plan.settings.slow_enrich_selected),
             "compiled_workers": int(plan.settings.compiled_workers),
             "compute_sharpe": bool(compute_sharpe),
+            "compute_sharpe_daily": bool(compute_sharpe_daily),
             "compute_sqn": bool(compute_sqn),
             "month_id_nbytes": int(month_ids.nbytes),
+            "day_id_nbytes": int(day_ids.nbytes),
             "evaluation_seconds": evaluation_seconds,
             "candidates_per_second": (len(rows) / evaluation_seconds) if evaluation_seconds > 0.0 else None,
             "cache_key_build_seconds": cache_key_build_seconds,
@@ -2443,6 +2493,7 @@ def run_grid_v2(
     candidate_indices: Sequence[int] | None = None,
     *,
     compute_sharpe: bool = False,
+    compute_sharpe_daily: bool = False,
     compute_sqn: bool = False,
 ) -> GridV2RunResult:
     """Build and execute a Grid V2 plan."""
@@ -2455,6 +2506,7 @@ def run_grid_v2(
         hooks,
         candidate_indices,
         compute_sharpe=compute_sharpe,
+        compute_sharpe_daily=compute_sharpe_daily,
         compute_sqn=compute_sqn,
     )
 
@@ -4061,11 +4113,13 @@ def _row_from_run(
     *,
     params: Mapping[str, Any] | None = None,
     compute_sharpe: bool = False,
+    compute_sharpe_daily: bool = False,
     compute_sqn: bool = False,
 ) -> GridV2ResultRow:
     table = plan.candidate_table
     params = params or table.params_for_index(candidate_index)
     result = run.strategy_result
+    advanced_metrics = run.advanced_metrics
     initial_balance = float(params.get("initialCapital", 100.0))
     core = compute_core_metrics_from_balance_and_trades(
         result.balance_curve,
@@ -4094,11 +4148,22 @@ def _row_from_run(
         final_balance=core.final_balance,
         guardrail_summary=_guardrail_mapping(run.guardrail_summary),
         sharpe_ratio=(
-            _internal_metric_value(result.sharpe_ratio)
+            _internal_metric_value(advanced_metrics.sharpe_ratio)
             if compute_sharpe
             else _UNDEFINED_METRIC
         ),
-        sqn=_internal_metric_value(result.sqn) if compute_sqn else _UNDEFINED_METRIC,
+        sqn=_internal_metric_value(advanced_metrics.sqn) if compute_sqn else _UNDEFINED_METRIC,
+        sharpe_daily=(
+            _internal_metric_value(advanced_metrics.sharpe_daily)
+            if compute_sharpe_daily
+            else _UNDEFINED_METRIC
+        ),
+        sharpe_daily_observations=(
+            advanced_metrics.sharpe_daily_observations if compute_sharpe_daily else None
+        ),
+        sharpe_daily_active_days=(
+            advanced_metrics.sharpe_daily_active_days if compute_sharpe_daily else None
+        ),
         backend_kind=REFERENCE_BATCH_KIND,
     )
 
@@ -4154,6 +4219,15 @@ def _row_from_compiled_output(
         guardrail_summary=guardrail_summary,
         sharpe_ratio=_internal_metric_value(values[OUTPUT_SHARPE_RATIO]),
         sqn=_internal_metric_value(values[OUTPUT_SQN]),
+        sharpe_daily=_internal_metric_value(values[OUTPUT_SHARPE_DAILY]),
+        sharpe_daily_observations=_optional_compiled_count(
+            values[OUTPUT_SHARPE_DAILY_OBSERVATIONS],
+            "sharpe_daily_observations",
+        ),
+        sharpe_daily_active_days=_optional_compiled_count(
+            values[OUTPUT_SHARPE_DAILY_ACTIVE_DAYS],
+            "sharpe_daily_active_days",
+        ),
         backend_kind=COMPILED_BATCH_KIND,
     )
 
@@ -4183,6 +4257,9 @@ def _error_row(plan: GridV2Plan, candidate_index: int, exc: Exception) -> GridV2
         guardrail_summary={},
         sharpe_ratio=_UNDEFINED_METRIC,
         sqn=_UNDEFINED_METRIC,
+        sharpe_daily=_UNDEFINED_METRIC,
+        sharpe_daily_observations=None,
+        sharpe_daily_active_days=None,
         status="error",
         error=str(exc),
     )
@@ -4193,6 +4270,17 @@ def _internal_metric_value(value: Any) -> float:
         return _UNDEFINED_METRIC
     numeric = float(value)
     return numeric if math.isfinite(numeric) else _UNDEFINED_METRIC
+
+
+def _optional_compiled_count(value: Any, name: str) -> Optional[int]:
+    numeric = float(value)
+    if math.isnan(numeric):
+        return None
+    if not math.isfinite(numeric) or numeric < 0.0 or not numeric.is_integer():
+        raise ValueError(f"Compiled Grid V2 {name} must be NaN or a non-negative integer.")
+    if numeric > float(np.iinfo(np.int64).max):
+        raise ValueError(f"Compiled Grid V2 {name} is out of range.")
+    return int(numeric)
 
 
 def _max_consecutive_losses(trades: Sequence[Any]) -> int:
@@ -4244,6 +4332,8 @@ def _slow_enrich_selected(
     hooks: GridV2StrategyHooks,
     row: GridV2ResultRow,
     dataprep_cache: Mapping[Any, ExecutionData],
+    *,
+    compute_sharpe_daily: bool = False,
 ) -> GridV2SelectedResult:
     if row.status != "ok":
         return GridV2SelectedResult(row=row, metrics={}, guardrail_summary={})
@@ -4259,6 +4349,7 @@ def _slow_enrich_selected(
         profile=plan.profile,
         params=normalized_params,
         trade_start_idx=trade_start_idx,
+        compute_sharpe_daily=compute_sharpe_daily,
     )
     basic_metrics = run.basic_metrics
     advanced_metrics = run.advanced_metrics
@@ -4275,6 +4366,9 @@ def _slow_enrich_selected(
         "gross_loss": basic_metrics.gross_loss,
         "max_consecutive_losses": basic_metrics.max_consecutive_losses,
         "sharpe_ratio": advanced_metrics.sharpe_ratio,
+        "sharpe_daily": advanced_metrics.sharpe_daily,
+        "sharpe_daily_observations": advanced_metrics.sharpe_daily_observations,
+        "sharpe_daily_active_days": advanced_metrics.sharpe_daily_active_days,
         "sortino_ratio": advanced_metrics.sortino_ratio,
         "sqn": advanced_metrics.sqn,
         "ulcer_index": advanced_metrics.ulcer_index,

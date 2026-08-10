@@ -638,3 +638,32 @@ variance. No active-day gate exists. Sparse delayed-OOS endpoints produce only
 represented daily observations, never implicit calendar rows. Phase 1 does not
 enable this metric in Fast Grid, selected-Slow payloads, WFA production, UI,
 storage, or DSR; those surfaces require an explicit Phase 2 decision.
+
+## Internal Fast Daily Sharpe certification (TZ-14-2 Stage 1)
+
+All three V1 Fast backends and both V2 compiled execution families now accept
+an internal `compute_sharpe_daily` request and reproduce the accepted reference
+contract. One canonical helper prepares a contiguous signed `int32` UTC day-ID
+array once per dataset/window and rejects `NaT`, length mismatches, and invalid
+ranges before compiled dispatch. Disabled requests use a zero-length typed
+sentinel and do no Daily per-bar candidate work.
+
+Each candidate streams opening/closing equity, validity, Welford state, emitted
+observations, and active-day count in constant memory. The final observed day is
+emitted independently of completed trades. Structurally valid zero-trade,
+insufficient-sample, and zero-variance series retain exact integer diagnostics
+while the ratio remains unavailable. Non-finite evaluation equity or an invalid
+opening denominator suppresses all three fields. The canonical compounding
+self-check remains reference-only by design; selected validation compares the
+Fast ratio within `abs=1e-12`, `rel=1e-9` and both counts exactly, so the kernels
+do not add a product accumulator.
+
+The V2 output contract is 26 float64 columns: existing offsets 0..22 remain
+fixed and offsets 23..25 are Daily Sharpe, observations, and active days.
+Undefined values remain NaN internally and project to `None`; genuine diagnostic
+zero survives as integer zero. The S06 population remains 48,480 with semantic
+digest `fc55d174e835e7196ae5fcf21427d318dc364241f6b10560aa32545e6910a08f`
+and plan fingerprint
+`0f8d001c380df5ee95d34ca4e25910c674e20e9e8f34886a1bd2f1c261f019b2`.
+Public objective registration, WFA behavior, UI, Queue, persistence, Results,
+Analytics, DSR, and all existing metric formulas remain outside this stage.

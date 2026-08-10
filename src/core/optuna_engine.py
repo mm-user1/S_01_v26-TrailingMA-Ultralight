@@ -141,6 +141,9 @@ class OptimizationResult:
     max_consecutive_losses: int = 0
     romad: Optional[float] = None
     sharpe_ratio: Optional[float] = None
+    sharpe_daily: Optional[float] = None
+    sharpe_daily_observations: Optional[int] = None
+    sharpe_daily_active_days: Optional[int] = None
     sortino_ratio: Optional[float] = None
     profit_factor: Optional[float] = None
     ulcer_index: Optional[float] = None
@@ -1074,19 +1077,20 @@ def _build_sampler_config(config: Any) -> SamplerConfig:
 
 
 def _run_single_combination(
-    args: Tuple[Dict[str, Any], pd.DataFrame, int, Any]
+    args: Tuple[Dict[str, Any], pd.DataFrame, int, Any, bool]
 ) -> OptimizationResult:
     """
     Worker function to run a single parameter combination using strategy.run().
 
     Args:
-        args: Tuple of (params_dict, df, trade_start_idx, strategy_class)
+        args: Tuple of (params_dict, df, trade_start_idx, strategy_class,
+            compute_sharpe_daily)
 
     Returns:
         OptimizationResult with metrics for this combination
     """
 
-    params_dict, df, trade_start_idx, strategy_class = args
+    params_dict, df, trade_start_idx, strategy_class, compute_sharpe_daily = args
 
     def _base_result(params: Dict[str, Any]) -> OptimizationResult:
         return OptimizationResult(
@@ -1103,6 +1107,9 @@ def _run_single_combination(
             gross_loss=0.0,
             max_consecutive_losses=0,
             sharpe_ratio=None,
+            sharpe_daily=None,
+            sharpe_daily_observations=None,
+            sharpe_daily_active_days=None,
             sortino_ratio=None,
             profit_factor=None,
             romad=None,
@@ -1115,7 +1122,10 @@ def _run_single_combination(
         result = strategy_class.run(df, params_dict, trade_start_idx)
 
         basic_metrics = metrics.calculate_basic(result)
-        advanced_metrics = metrics.calculate_advanced(result)
+        advanced_metrics = metrics.calculate_advanced(
+            result,
+            compute_sharpe_daily=compute_sharpe_daily,
+        )
 
         return OptimizationResult(
             params=params_dict.copy(),
@@ -1132,6 +1142,9 @@ def _run_single_combination(
             max_consecutive_losses=basic_metrics.max_consecutive_losses,
             romad=advanced_metrics.romad,
             sharpe_ratio=advanced_metrics.sharpe_ratio,
+            sharpe_daily=advanced_metrics.sharpe_daily,
+            sharpe_daily_observations=advanced_metrics.sharpe_daily_observations,
+            sharpe_daily_active_days=advanced_metrics.sharpe_daily_active_days,
             sortino_ratio=advanced_metrics.sortino_ratio,
             profit_factor=advanced_metrics.profit_factor,
             ulcer_index=advanced_metrics.ulcer_index,
@@ -2106,7 +2119,7 @@ class OptunaOptimizer:
         if self.df is None or self.strategy_class is None:
             raise RuntimeError("Data and strategy must be prepared before evaluation.")
 
-        args = (params_dict, self.df, self.trade_start_idx, self.strategy_class)
+        args = (params_dict, self.df, self.trade_start_idx, self.strategy_class, False)
         return _run_single_combination(args)
 
     def _evaluate_trial_payload(self, params_dict: Dict[str, Any]) -> Dict[str, Any]:

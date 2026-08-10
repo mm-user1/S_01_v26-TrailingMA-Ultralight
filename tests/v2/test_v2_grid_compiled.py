@@ -21,6 +21,9 @@ from core.engine_v2.compiled_kernel import (
     OUTPUT_NET_PROFIT_PCT,
     OUTPUT_PROFIT_FACTOR,
     OUTPUT_ROMAD,
+    OUTPUT_SHARPE_DAILY,
+    OUTPUT_SHARPE_DAILY_ACTIVE_DAYS,
+    OUTPUT_SHARPE_DAILY_OBSERVATIONS,
     OUTPUT_SHARPE_RATIO,
     OUTPUT_SQN,
     OUTPUT_TOTAL_TRADES,
@@ -41,11 +44,12 @@ from core.engine_v2.contracts import Signals
 from core.engine_v2.kernel import ExecutionData
 from core.engine_v2.profile import parse_execution_profile
 from core.engine_v2.runner import run_v2_strategy
-from core.grid_engine import _grid_v2_result_from_row
-from core.metrics import _advanced_metric_view, _calculate_monthly_returns
+from core.grid_engine import _grid_v2_result_from_row, _grid_v2_slow_result
+from core.metrics import _advanced_metric_view, _calculate_monthly_returns, build_utc_day_ids
 from core.grid_v2 import (
     GridV2Settings,
     GridV2StrategyHooks,
+    _optional_compiled_count,
     _pack_table_config_arrays,
     build_grid_v2_plan,
     deterministic_candidate_subset_indices,
@@ -150,12 +154,29 @@ def _assert_rows_equal(compiled_row, reference_row):
     _assert_float_equal(compiled_row.final_balance, reference_row.final_balance)
     _assert_float_equal(compiled_row.sharpe_ratio, reference_row.sharpe_ratio)
     _assert_float_equal(compiled_row.sqn, reference_row.sqn)
+    _assert_float_equal(compiled_row.sharpe_daily, reference_row.sharpe_daily)
+    assert compiled_row.sharpe_daily_observations == reference_row.sharpe_daily_observations
+    assert compiled_row.sharpe_daily_active_days == reference_row.sharpe_daily_active_days
 
 
 def test_compiled_output_contract_appends_conditional_metrics():
     assert OUTPUT_SHARPE_RATIO == 21
     assert OUTPUT_SQN == 22
-    assert OUTPUT_COLUMN_COUNT == 23
+    assert OUTPUT_SHARPE_DAILY == 23
+    assert OUTPUT_SHARPE_DAILY_OBSERVATIONS == 24
+    assert OUTPUT_SHARPE_DAILY_ACTIVE_DAYS == 25
+    assert OUTPUT_COLUMN_COUNT == 26
+
+
+@pytest.mark.parametrize("value", [math.inf, -1.0, 1.5, float(np.iinfo(np.int64).max) * 2.0])
+def test_compiled_daily_diagnostic_materialization_rejects_invalid_counts(value):
+    with pytest.raises(ValueError, match="must be NaN|out of range"):
+        _optional_compiled_count(value, "sharpe_daily_observations")
+
+
+def test_compiled_daily_diagnostic_materialization_preserves_none_and_zero():
+    assert _optional_compiled_count(math.nan, "sharpe_daily_observations") is None
+    assert _optional_compiled_count(0.0, "sharpe_daily_observations") == 0
 
 
 def test_calendar_month_ids_are_contiguous_int32_and_preserve_transitions():
@@ -236,6 +257,44 @@ def test_grouped_compiled_sharpe_requires_complete_month_ids_before_dispatch(mon
     assert dispatched_month_ids[1].dtype == np.int32
     assert dispatched_month_ids[1].flags.c_contiguous
     assert dispatched_month_ids[1].size == len(data.timestamps)
+
+
+def test_grouped_compiled_daily_sharpe_requires_complete_day_ids_before_dispatch(monkeypatch):
+    data = _data(
+        open_=[100.0, 101.0],
+        high=[101.0, 102.0],
+        low=[99.0, 100.0],
+        close=[100.5, 101.5],
+    )
+    profile = parse_execution_profile(load_config())
+    dispatched_day_ids = []
+
+    def fake_loop(*args):
+        dispatched_day_ids.append(args[6])
+        args[-1].fill(np.nan)
+
+    monkeypatch.setattr(compiled_kernel_module, "_COMPILED_BATCH_LOOP", fake_loop)
+    with pytest.raises(ValueError, match="day_ids matching the execution bars"):
+        evaluate_compiled_batch(
+            data=data,
+            profile=profile,
+            params_batch=[merged_reference_params("reference_b_trend_bracket")],
+            trade_start_idx=0,
+            compute_sharpe_daily=True,
+            day_ids=np.empty(0, dtype=np.int32),
+        )
+    assert dispatched_day_ids == []
+
+    evaluate_compiled_batch(
+        data=data,
+        profile=profile,
+        params_batch=[merged_reference_params("reference_b_trend_bracket")],
+        trade_start_idx=0,
+        compute_sharpe_daily=True,
+        day_ids=build_utc_day_ids(data.timestamps),
+    )
+    assert dispatched_day_ids[0].dtype == np.int32
+    assert dispatched_day_ids[0].size == len(data.timestamps)
 
 
 def test_position_stacked_sharpe_requires_complete_month_ids_before_dispatch(monkeypatch):
@@ -327,12 +386,22 @@ def test_position_cache_estimate_counts_fixed_output_and_optional_month_ids(prep
         indices,
         compute_sharpe=True,
     )
+    daily = estimate_grid_v2_cache(
+        plan,
+        df,
+        trade_start_idx,
+        hooks,
+        indices,
+        compute_sharpe_daily=True,
+    )
 
-    assert disabled.output_column_count == 23
-    assert disabled.bytes_per_output_candidate == 23 * 8
-    assert disabled.estimated_output_mb * 1024 * 1024 == len(indices) * 23 * 8
+    assert disabled.output_column_count == 26
+    assert disabled.bytes_per_output_candidate == 26 * 8
+    assert disabled.estimated_output_mb * 1024 * 1024 == len(indices) * 26 * 8
     assert disabled.month_id_nbytes == 0
     assert sharpe.month_id_nbytes == len(df) * 4
+    assert daily.day_id_nbytes == len(df) * 4
+    assert daily.month_id_nbytes == 0
     assert sharpe.bytes_per_shared_market_bar == disabled.bytes_per_shared_market_bar + 4
     assert (sharpe.estimated_shared_market_mb - disabled.estimated_shared_market_mb) * 1024 * 1024 == pytest.approx(len(df) * 4)
 
@@ -478,13 +547,21 @@ def test_compiled_grid_v2_worker_count_is_deterministic(prepared_data, hooks):
 
 
 @pytest.mark.parametrize(
-    ("compute_sharpe", "compute_sqn"),
-    [(False, False), (True, False), (False, True), (True, True)],
+    ("compute_sharpe", "compute_sharpe_daily", "compute_sqn"),
+    [
+        (False, False, False),
+        (True, False, False),
+        (False, True, False),
+        (True, True, False),
+        (False, True, True),
+        (True, True, True),
+    ],
 )
 def test_position_fast_metrics_are_request_gated_and_match_reference(
     prepared_data,
     hooks,
     compute_sharpe,
+    compute_sharpe_daily,
     compute_sqn,
 ):
     df, trade_start_idx = prepared_data
@@ -513,6 +590,7 @@ def test_position_fast_metrics_are_request_gated_and_match_reference(
         hooks,
         indices,
         compute_sharpe=compute_sharpe,
+        compute_sharpe_daily=compute_sharpe_daily,
         compute_sqn=compute_sqn,
     )
     reference = execute_grid_v2_candidates(
@@ -522,17 +600,23 @@ def test_position_fast_metrics_are_request_gated_and_match_reference(
         hooks,
         indices,
         compute_sharpe=compute_sharpe,
+        compute_sharpe_daily=compute_sharpe_daily,
         compute_sqn=compute_sqn,
     )
 
     assert compiled.metadata["compute_sharpe"] is compute_sharpe
+    assert compiled.metadata["compute_sharpe_daily"] is compute_sharpe_daily
     assert compiled.metadata["compute_sqn"] is compute_sqn
     assert compiled.metadata["month_id_nbytes"] == (len(df) * 4 if compute_sharpe else 0)
     assert compiled.cache_estimate.month_id_nbytes == (len(df) * 4 if compute_sharpe else 0)
+    assert compiled.metadata["day_id_nbytes"] == (len(df) * 4 if compute_sharpe_daily else 0)
+    assert compiled.cache_estimate.day_id_nbytes == (len(df) * 4 if compute_sharpe_daily else 0)
     for compiled_row, reference_row in zip(compiled.rows, reference.rows):
         _assert_rows_equal(compiled_row, reference_row)
         assert math.isfinite(compiled_row.sharpe_ratio) is compute_sharpe
         assert math.isfinite(compiled_row.sqn) is compute_sqn
+        assert (compiled_row.sharpe_daily_observations is not None) is compute_sharpe_daily
+        assert (compiled_row.sharpe_daily_active_days is not None) is compute_sharpe_daily
     if not compute_sharpe:
         assert compiled.rows[0].sharpe_ratio is compiled.rows[1].sharpe_ratio
         assert reference.rows[0].sharpe_ratio is reference.rows[1].sharpe_ratio
@@ -542,8 +626,14 @@ def test_position_fast_metrics_are_request_gated_and_match_reference(
     materialized = _grid_v2_result_from_row(compiled.rows[0], metric_tier="compiled_fast")
     assert (math.isfinite(materialized.sharpe_ratio) if compute_sharpe else materialized.sharpe_ratio is None)
     assert (math.isfinite(materialized.sqn) if compute_sqn else materialized.sqn is None)
+    assert (
+        math.isfinite(materialized.sharpe_daily)
+        if compute_sharpe_daily
+        else materialized.sharpe_daily is None
+    )
     assert materialized.fast_metrics["sharpe_ratio"] == materialized.sharpe_ratio
     assert materialized.fast_metrics["sqn"] == materialized.sqn
+    assert materialized.fast_metrics["sharpe_daily"] == materialized.sharpe_daily
 
 
 def test_position_bracket_compiled_sharpe_matches_reference_after_real_warmup(
@@ -601,6 +691,47 @@ def test_position_bracket_compiled_sharpe_matches_reference_after_real_warmup(
     assert len(reference.timestamps) == len(reference.equity_curve) == len(df)
     assert view.timestamps[0] == df.index[trade_start_idx]
     assert len(monthly_returns) == len(evaluation_months) < len(prepared_months)
+
+
+def test_position_selected_reference_validation_compares_daily_ratio_and_counts(
+    prepared_data,
+    hooks,
+):
+    df, trade_start_idx = prepared_data
+    plan = build_grid_v2_plan(
+        _config_with_rounding("none"),
+        GridV2Settings(
+            enabled_variants=("bracket",),
+            enabled_axes=("stopX", "stopRR"),
+            prefer_compiled=True,
+            top_n=0,
+        ),
+        base_params=merged_reference_params("reference_b_trend_bracket"),
+    )
+    fast_run = execute_grid_v2_candidates(
+        plan,
+        df,
+        trade_start_idx,
+        hooks,
+        (0,),
+        compute_sharpe_daily=True,
+    )
+
+    selected = _grid_v2_slow_result(
+        plan=plan,
+        df=df,
+        trade_start_idx=trade_start_idx,
+        hooks=hooks,
+        row=fast_run.rows[0],
+        compute_sharpe_daily=True,
+        validation_tolerances={},  # Historical Grid Settings payload without additive keys.
+        fail_on_error=True,
+    )
+
+    assert selected.validation_status == "passed"
+    assert selected.validation_diffs["sharpe_daily"]["passed"] is True
+    assert selected.validation_diffs["sharpe_daily_observations"]["passed"] is True
+    assert selected.validation_diffs["sharpe_daily_active_days"]["passed"] is True
 
 
 def test_sampled_position_grid_compiled_rows_match_reference(prepared_data, hooks):
@@ -786,9 +917,102 @@ def test_empty_compiled_result_initializes_appended_metric_columns():
         compute_sqn=True,
     ).outputs[0]
 
-    assert values.shape == (23,)
+    assert values.shape == (26,)
     assert math.isnan(values[OUTPUT_SHARPE_RATIO])
     assert math.isnan(values[OUTPUT_SQN])
+    assert math.isnan(values[OUTPUT_SHARPE_DAILY])
+    assert math.isnan(values[OUTPUT_SHARPE_DAILY_OBSERVATIONS])
+    assert math.isnan(values[OUTPUT_SHARPE_DAILY_ACTIVE_DAYS])
+
+
+def test_position_daily_final_day_and_zero_trade_diagnostics_are_independent_of_ratio():
+    data = _data(
+        open_=[100.0, 100.0],
+        high=[100.0, 100.0],
+        low=[100.0, 100.0],
+        close=[100.0, 100.0],
+    )
+    data = replace(
+        data,
+        timestamps=tuple(pd.DatetimeIndex(["2025-01-01T12:00:00Z", "2025-01-03T12:00:00Z"])),
+    )
+    profile = parse_execution_profile(load_config())
+
+    disabled = evaluate_compiled_batch(
+        data=data,
+        profile=profile,
+        params_batch=[_edge_params()],
+        trade_start_idx=0,
+    ).outputs[0]
+    daily = evaluate_compiled_batch(
+        data=data,
+        profile=profile,
+        params_batch=[_edge_params()],
+        trade_start_idx=0,
+        compute_sharpe_daily=True,
+    ).outputs[0]
+    invalid = evaluate_compiled_batch(
+        data=data,
+        profile=profile,
+        params_batch=[_edge_params(initialCapital=0.0)],
+        trade_start_idx=0,
+        compute_sharpe_daily=True,
+    ).outputs[0]
+
+    assert math.isnan(disabled[OUTPUT_SHARPE_DAILY])
+    assert math.isnan(disabled[OUTPUT_SHARPE_DAILY_OBSERVATIONS])
+    assert math.isnan(disabled[OUTPUT_SHARPE_DAILY_ACTIVE_DAYS])
+    assert math.isnan(daily[OUTPUT_SHARPE_DAILY])
+    assert daily[OUTPUT_SHARPE_DAILY_OBSERVATIONS] == 2.0
+    assert daily[OUTPUT_SHARPE_DAILY_ACTIVE_DAYS] == 0.0
+    assert math.isnan(invalid[OUTPUT_SHARPE_DAILY])
+    assert math.isnan(invalid[OUTPUT_SHARPE_DAILY_OBSERVATIONS])
+    assert math.isnan(invalid[OUTPUT_SHARPE_DAILY_ACTIVE_DAYS])
+
+
+def test_position_daily_empty_evaluation_matches_canonical_unavailable_tuple():
+    data = _data(
+        open_=[100.0, 100.0],
+        high=[100.0, 100.0],
+        low=[100.0, 100.0],
+        close=[100.0, 100.0],
+    )
+    profile = parse_execution_profile(load_config())
+    params = _edge_params()
+    trade_start_idx = len(data.timestamps)
+
+    compiled = evaluate_compiled_batch(
+        data=data,
+        profile=profile,
+        params_batch=[params],
+        trade_start_idx=trade_start_idx,
+        compute_sharpe_daily=True,
+    ).outputs[0]
+    canonical = run_v2_strategy(
+        data=data,
+        profile=profile,
+        params=params,
+        trade_start_idx=trade_start_idx,
+        compute_sharpe_daily=True,
+    ).advanced_metrics
+
+    compiled_tuple = (
+        None if math.isnan(compiled[OUTPUT_SHARPE_DAILY]) else compiled[OUTPUT_SHARPE_DAILY],
+        _optional_compiled_count(
+            compiled[OUTPUT_SHARPE_DAILY_OBSERVATIONS],
+            "sharpe_daily_observations",
+        ),
+        _optional_compiled_count(
+            compiled[OUTPUT_SHARPE_DAILY_ACTIVE_DAYS],
+            "sharpe_daily_active_days",
+        ),
+    )
+    canonical_tuple = (
+        canonical.sharpe_daily,
+        canonical.sharpe_daily_observations,
+        canonical.sharpe_daily_active_days,
+    )
+    assert compiled_tuple == canonical_tuple == (None, None, None)
 
 
 @pytest.mark.parametrize(("trade_count", "expect_defined"), [(29, False), (30, True)])

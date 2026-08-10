@@ -105,6 +105,7 @@ class FastMetricRequest:
     """Execution-only V1 Fast metric work resolved from Grid selection."""
 
     compute_sharpe: bool = False
+    compute_sharpe_daily: bool = False
     compute_sqn: bool = False
     compute_dsr_higher_moments: bool = False
 
@@ -117,6 +118,7 @@ def resolve_fast_metric_request(
     requested = set(selection.fast_objectives)
     return FastMetricRequest(
         compute_sharpe=needs_dsr or "sharpe_ratio" in requested,
+        compute_sharpe_daily="sharpe_daily" in requested,
         compute_sqn="sqn" in requested,
         compute_dsr_higher_moments=needs_dsr,
     )
@@ -145,6 +147,8 @@ class GridSettings:
             "max_consecutive_losses_abs": 0.0,
             "sharpe_ratio_abs": 1e-12,
             "sharpe_ratio_rel": 1e-9,
+            "sharpe_daily_abs": 1e-12,
+            "sharpe_daily_rel": 1e-9,
             "sqn_abs": 1e-12,
             "sqn_rel": 1e-9,
         }
@@ -1447,6 +1451,7 @@ def _grid_v2_result_from_row(
 ) -> OptimizationResult:
     profit_factor = float(row.profit_factor)
     sharpe_ratio = _finite_metric_or_none(getattr(row, "sharpe_ratio", None))
+    sharpe_daily = _finite_metric_or_none(getattr(row, "sharpe_daily", None))
     sqn = _finite_metric_or_none(getattr(row, "sqn", None))
     result = OptimizationResult(
         params=row.params,
@@ -1463,6 +1468,9 @@ def _grid_v2_result_from_row(
         max_consecutive_losses=int(row.max_consecutive_losses),
         romad=float(row.romad),
         sharpe_ratio=sharpe_ratio,
+        sharpe_daily=sharpe_daily,
+        sharpe_daily_observations=getattr(row, "sharpe_daily_observations", None),
+        sharpe_daily_active_days=getattr(row, "sharpe_daily_active_days", None),
         sqn=sqn,
         profit_factor=None if math.isnan(profit_factor) else profit_factor,
         optuna_trial_number=int(row.candidate_id),
@@ -1498,6 +1506,9 @@ def _grid_v2_result_from_row(
             "gross_loss": row.gross_loss,
             "max_consecutive_losses": row.max_consecutive_losses,
             "sharpe_ratio": sharpe_ratio,
+            "sharpe_daily": sharpe_daily,
+            "sharpe_daily_observations": getattr(row, "sharpe_daily_observations", None),
+            "sharpe_daily_active_days": getattr(row, "sharpe_daily_active_days", None),
             "sqn": sqn,
         },
     )
@@ -1519,6 +1530,9 @@ def _grid_v2_slow_result(
     trade_start_idx: int,
     hooks: Any,
     row: Any,
+    compute_sharpe_daily: bool = False,
+    validation_tolerances: Optional[Mapping[str, float]] = None,
+    fail_on_error: bool = True,
 ) -> OptimizationResult:
     candidate_index = int(row.candidate_id) - 1
     if hasattr(plan, "candidate_table"):
@@ -1534,6 +1548,7 @@ def _grid_v2_slow_result(
         profile=plan.profile,
         params=params,
         trade_start_idx=trade_start_idx,
+        compute_sharpe_daily=compute_sharpe_daily,
     )
     basic_metrics = run.basic_metrics
     advanced_metrics = run.advanced_metrics
@@ -1553,6 +1568,9 @@ def _grid_v2_slow_result(
         romad=advanced_metrics.romad,
         profit_factor=advanced_metrics.profit_factor,
         sharpe_ratio=advanced_metrics.sharpe_ratio,
+        sharpe_daily=advanced_metrics.sharpe_daily,
+        sharpe_daily_observations=advanced_metrics.sharpe_daily_observations,
+        sharpe_daily_active_days=advanced_metrics.sharpe_daily_active_days,
         sortino_ratio=advanced_metrics.sortino_ratio,
         sqn=advanced_metrics.sqn,
         ulcer_index=advanced_metrics.ulcer_index,
@@ -1597,7 +1615,49 @@ def _grid_v2_slow_result(
         )
     setattr(result, "guardrail_summary", _grid_v2_guardrail_mapping(run.guardrail_summary))
     setattr(result, "metric_tier", "slow_public_v2")
-    setattr(result, "validation_status", "passed")
+    validation_diffs: Dict[str, Any] = {}
+    validation_ok = True
+    if compute_sharpe_daily:
+        fast_daily = fast_result.sharpe_daily
+        slow_daily = result.sharpe_daily
+        availability_matches = (fast_daily is None) == (slow_daily is None)
+        daily_difference = 0.0
+        ratio_matches = availability_matches
+        tolerances = validation_tolerances or {}
+        abs_tolerance = float(tolerances.get("sharpe_daily_abs", 1e-12))
+        rel_tolerance = float(tolerances.get("sharpe_daily_rel", 1e-9))
+        if availability_matches and fast_daily is not None and slow_daily is not None:
+            daily_difference = abs(float(fast_daily) - float(slow_daily))
+            ratio_matches = daily_difference <= max(
+                abs_tolerance,
+                rel_tolerance * max(abs(float(fast_daily)), abs(float(slow_daily))),
+            )
+        validation_ok = validation_ok and ratio_matches
+        validation_diffs["sharpe_daily"] = {
+            "fast": fast_daily,
+            "slow": slow_daily,
+            "diff": daily_difference if availability_matches else math.inf,
+            "absolute_tolerance": abs_tolerance,
+            "relative_tolerance": rel_tolerance,
+            "passed": ratio_matches,
+        }
+        for attribute in ("sharpe_daily_observations", "sharpe_daily_active_days"):
+            fast_value = getattr(fast_result, attribute)
+            slow_value = getattr(result, attribute)
+            passed = fast_value == slow_value
+            validation_ok = validation_ok and passed
+            validation_diffs[attribute] = {
+                "fast": fast_value,
+                "slow": slow_value,
+                "passed": passed,
+            }
+    setattr(result, "validation_status", "passed" if validation_ok else "failed")
+    setattr(result, "validation_diffs", validation_diffs)
+    if not validation_ok and fail_on_error:
+        raise ValueError(
+            "Grid V2 fast-vs-reference Daily Sharpe validation failed: "
+            + json.dumps(validation_diffs, default=str, sort_keys=True)
+        )
     return result
 
 
@@ -1729,6 +1789,7 @@ def _run_grid_v2_optimization(
         trade_start_idx,
         hooks,
         compute_sharpe=fast_metric_request.compute_sharpe,
+        compute_sharpe_daily=fast_metric_request.compute_sharpe_daily,
         compute_sqn=fast_metric_request.compute_sqn,
     )
     timings["fast_evaluation_seconds"] = time.time() - eval_started
@@ -1790,6 +1851,9 @@ def _run_grid_v2_optimization(
             trade_start_idx=trade_start_idx,
             hooks=hooks,
             row=row_by_id[int(getattr(result, "candidate_id"))],
+            compute_sharpe_daily=fast_metric_request.compute_sharpe_daily,
+            validation_tolerances=GridSettings().validation_tolerances,
+            fail_on_error=bool(getattr(config, "grid_strict_validation", True)),
         )
         for result in selected_fast
     ]
@@ -2103,18 +2167,31 @@ def run_grid_optimization(
 
     data_started = time.time()
     df, trade_start_idx, start_ts, end_ts = _prepare_grid_dataframe(config)
-    fast_data = backend.prepare_fast_data(df, trade_start_idx, candidate_set.candidates)
+    if fast_metric_request.compute_sharpe_daily:
+        fast_data = backend.prepare_fast_data(
+            df,
+            trade_start_idx,
+            candidate_set.candidates,
+            compute_sharpe_daily=True,
+        )
+    else:
+        fast_data = backend.prepare_fast_data(df, trade_start_idx, candidate_set.candidates)
     timings["ma_cache_build_seconds"] = getattr(fast_data, "ma_cache_build_seconds", 0.0)
     timings["data_prepare_seconds"] = time.time() - data_started
 
     eval_started = time.time()
+    evaluation_kwargs = {
+        "n_workers": int(getattr(config, "worker_processes", 1) or 1),
+        "needs_dsr": fast_metric_request.compute_dsr_higher_moments,
+        "compute_sharpe": fast_metric_request.compute_sharpe,
+        "compute_sqn": fast_metric_request.compute_sqn,
+    }
+    if fast_metric_request.compute_sharpe_daily:
+        evaluation_kwargs["compute_sharpe_daily"] = True
     all_fast_results = backend.evaluate_candidates(
         fast_data,
         candidate_set.candidates,
-        n_workers=int(getattr(config, "worker_processes", 1) or 1),
-        needs_dsr=fast_metric_request.compute_dsr_higher_moments,
-        compute_sharpe=fast_metric_request.compute_sharpe,
-        compute_sqn=fast_metric_request.compute_sqn,
+        **evaluation_kwargs,
     )
     timings["fast_evaluation_seconds"] = time.time() - eval_started
 
@@ -2255,6 +2332,8 @@ def run_grid_optimization(
             "diversity": diversity_metadata,
             "ma_cache_entries": getattr(fast_data, "ma_cache_entries", None),
             "ma_cache_estimated_mb": getattr(fast_data, "ma_cache_estimated_mb", None),
+            "compute_sharpe_daily": fast_metric_request.compute_sharpe_daily,
+            "day_id_nbytes": int(getattr(getattr(fast_data, "day_ids", None), "nbytes", 0)),
             "dsr_metric_computation_enabled": needs_dsr,
             "dsr": dsr_metadata,
             "full_candidate_count": actual_candidates,

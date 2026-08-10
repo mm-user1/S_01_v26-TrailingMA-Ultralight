@@ -29,6 +29,9 @@ from .compiled_kernel import (
     OUTPUT_PROFIT_FACTOR,
     OUTPUT_REJECTED_FILL_COUNT,
     OUTPUT_ROMAD,
+    OUTPUT_SHARPE_DAILY,
+    OUTPUT_SHARPE_DAILY_ACTIVE_DAYS,
+    OUTPUT_SHARPE_DAILY_OBSERVATIONS,
     OUTPUT_SHARPE_RATIO,
     OUTPUT_SQN,
     OUTPUT_TOTAL_TRADES,
@@ -58,6 +61,7 @@ class SignalStackedExecutionData:
     close: np.ndarray
     timestamp_ns: np.ndarray
     month_ids: np.ndarray
+    day_ids: np.ndarray
     long_entries: np.ndarray
     short_entries: np.ndarray
     long_exits: np.ndarray
@@ -81,6 +85,7 @@ class SignalStackedExecutionData:
             + self.close.nbytes
             + self.timestamp_ns.nbytes
             + self.month_ids.nbytes
+            + self.day_ids.nbytes
         )
 
     @property
@@ -124,6 +129,7 @@ def build_signal_stacked_execution_data(
     data_index: Sequence[int],
     *,
     month_ids: np.ndarray | None = None,
+    day_ids: np.ndarray | None = None,
 ) -> SignalStackedExecutionData:
     """Build and validate a stacked compiled payload for signal-only profiles."""
 
@@ -138,6 +144,7 @@ def build_signal_stacked_execution_data(
     close_values = _base._contiguous_1d(first.close, "close", np.float64)
     timestamp_ns = _base._timestamps_ns(first.timestamps)
     metric_month_ids = _base._validated_month_ids(month_ids, len(timestamp_ns))
+    metric_day_ids = _base._validated_day_ids(day_ids, len(timestamp_ns))
 
     long_entry_rows: list[np.ndarray] = []
     short_entry_rows: list[np.ndarray] = []
@@ -199,6 +206,7 @@ def build_signal_stacked_execution_data(
         close=close_values,
         timestamp_ns=timestamp_ns,
         month_ids=metric_month_ids,
+        day_ids=metric_day_ids,
         long_entries=np.ascontiguousarray(np.stack(long_entry_rows, axis=0), dtype=np.bool_),
         short_entries=np.ascontiguousarray(np.stack(short_entry_rows, axis=0), dtype=np.bool_),
         long_exits=np.ascontiguousarray(np.stack(long_exit_rows, axis=0), dtype=np.bool_),
@@ -216,6 +224,7 @@ def evaluate_compiled_signal_stacked_batch(
     n_workers: int = 1,
     packed_config_arrays: Mapping[str, np.ndarray] | None = None,
     compute_sharpe: bool = False,
+    compute_sharpe_daily: bool = False,
     compute_sqn: bool = False,
 ) -> CompiledBatchOutput:
     """Evaluate one stacked signal-reversal compiled batch."""
@@ -230,6 +239,12 @@ def evaluate_compiled_signal_stacked_batch(
         metric_month_ids,
         len(stacked_data.timestamp_ns),
         compute_sharpe,
+    )
+    metric_day_ids = _base._validated_day_ids(stacked_data.day_ids, len(stacked_data.timestamp_ns))
+    _base._validate_sharpe_daily_day_ids(
+        metric_day_ids,
+        len(stacked_data.timestamp_ns),
+        compute_sharpe_daily,
     )
     if packed_config_arrays is None:
         if not params_batch:
@@ -269,6 +284,7 @@ def evaluate_compiled_signal_stacked_batch(
             stacked_data.close,
             stacked_data.timestamp_ns,
             metric_month_ids,
+            metric_day_ids,
             stacked_data.long_entries,
             stacked_data.short_entries,
             stacked_data.long_exits,
@@ -290,6 +306,7 @@ def evaluate_compiled_signal_stacked_batch(
             packed["strict_boundary"],
             packed["boundary_none"],
             bool(compute_sharpe),
+            bool(compute_sharpe_daily),
             bool(compute_sqn),
             outputs,
         )
@@ -395,6 +412,7 @@ def _signal_stacked_batch_loop_impl(
     close_values: np.ndarray,
     timestamp_ns: np.ndarray,
     month_ids: np.ndarray,
+    day_ids: np.ndarray,
     long_entries: np.ndarray,
     short_entries: np.ndarray,
     long_exits: np.ndarray,
@@ -416,6 +434,7 @@ def _signal_stacked_batch_loop_impl(
     strict_boundary_values: np.ndarray,
     boundary_none_values: np.ndarray,
     compute_sharpe: bool,
+    compute_sharpe_daily: bool,
     compute_sqn: bool,
     outputs: np.ndarray,
 ) -> None:
@@ -429,6 +448,7 @@ def _signal_stacked_batch_loop_impl(
             close_values,
             timestamp_ns,
             month_ids,
+            day_ids,
             long_entries[row],
             short_entries[row],
             long_exits[row],
@@ -449,6 +469,7 @@ def _signal_stacked_batch_loop_impl(
             strict_boundary_values,
             boundary_none_values,
             compute_sharpe,
+            compute_sharpe_daily,
             compute_sqn,
             outputs,
         )
@@ -462,6 +483,7 @@ def _compiled_signal_loop_one(
     close_values: np.ndarray,
     timestamp_ns: np.ndarray,
     month_ids: np.ndarray,
+    day_ids: np.ndarray,
     long_entries: np.ndarray,
     short_entries: np.ndarray,
     long_exits: np.ndarray,
@@ -482,6 +504,7 @@ def _compiled_signal_loop_one(
     strict_boundary_values: np.ndarray,
     boundary_none_values: np.ndarray,
     compute_sharpe: bool,
+    compute_sharpe_daily: bool,
     compute_sqn: bool,
     outputs: np.ndarray,
 ) -> None:
@@ -539,6 +562,15 @@ def _compiled_signal_loop_one(
     monthly_count = 0
     monthly_mean = 0.0
     monthly_m2 = 0.0
+    current_day = 0
+    daily_started = False
+    daily_opening_equity = initial_capital
+    daily_last_equity = initial_capital
+    daily_count = 0
+    daily_active_days = 0
+    daily_mean = 0.0
+    daily_m2 = 0.0
+    daily_valid = True
     sqn_count = 0
     sqn_mean = 0.0
     sqn_m2 = 0.0
@@ -747,7 +779,7 @@ def _compiled_signal_loop_one(
                 emergency_fill_index = -1
                 emergency_counter = 0
 
-        if compute_sharpe and i >= trade_start_idx:
+        if (compute_sharpe or compute_sharpe_daily) and i >= trade_start_idx:
             unrealized = 0.0
             if position > 0:
                 unrealized = (close - entry_price) * size
@@ -755,20 +787,50 @@ def _compiled_signal_loop_one(
                 unrealized = (entry_price - close) * size
             equity_value = balance + unrealized
             last_equity = equity_value
-            month_key = month_ids[i]
-            if current_month < 0:
-                current_month = month_key
-                month_start_equity = initial_capital
-            elif month_key != current_month:
-                if month_start_equity > 0.0:
-                    monthly_return = ((previous_month_equity / month_start_equity) - 1.0) * 100.0
-                    monthly_count += 1
-                    monthly_delta = monthly_return - monthly_mean
-                    monthly_mean += monthly_delta / monthly_count
-                    monthly_m2 += monthly_delta * (monthly_return - monthly_mean)
-                current_month = month_key
-                month_start_equity = previous_month_equity
-            previous_month_equity = equity_value
+            if compute_sharpe:
+                month_key = month_ids[i]
+                if current_month < 0:
+                    current_month = month_key
+                    month_start_equity = initial_capital
+                elif month_key != current_month:
+                    if month_start_equity > 0.0:
+                        monthly_return = ((previous_month_equity / month_start_equity) - 1.0) * 100.0
+                        monthly_count += 1
+                        monthly_delta = monthly_return - monthly_mean
+                        monthly_mean += monthly_delta / monthly_count
+                        monthly_m2 += monthly_delta * (monthly_return - monthly_mean)
+                    current_month = month_key
+                    month_start_equity = previous_month_equity
+                previous_month_equity = equity_value
+            if compute_sharpe_daily:
+                if not math.isfinite(equity_value):
+                    daily_valid = False
+                elif daily_valid:
+                    day_key = day_ids[i]
+                    if not daily_started:
+                        daily_started = True
+                        current_day = day_key
+                        daily_opening_equity = initial_capital
+                        daily_last_equity = equity_value
+                    elif day_key != current_day:
+                        if not math.isfinite(daily_opening_equity) or daily_opening_equity <= 0.0:
+                            daily_valid = False
+                        else:
+                            daily_return = daily_last_equity / daily_opening_equity - 1.0
+                            if not math.isfinite(daily_return):
+                                daily_valid = False
+                            else:
+                                daily_count += 1
+                                daily_delta = daily_return - daily_mean
+                                daily_mean += daily_delta / daily_count
+                                daily_m2 += daily_delta * (daily_return - daily_mean)
+                                if abs(daily_return) > 1e-12:
+                                    daily_active_days += 1
+                        current_day = day_key
+                        daily_opening_equity = daily_last_equity
+                        daily_last_equity = equity_value
+                    else:
+                        daily_last_equity = equity_value
 
         if balance >= running_peak:
             if i > last_drawdown_boundary + 1 and current_drawdown > max_drawdown:
@@ -826,6 +888,34 @@ def _compiled_signal_loop_one(
                 if not math.isfinite(sqn):
                     sqn = math.nan
 
+    sharpe_daily = math.nan
+    sharpe_daily_observations = math.nan
+    sharpe_daily_active = math.nan
+    if compute_sharpe_daily:
+        if daily_valid and daily_started:
+            if not math.isfinite(daily_opening_equity) or daily_opening_equity <= 0.0:
+                daily_valid = False
+            else:
+                daily_return = daily_last_equity / daily_opening_equity - 1.0
+                if not math.isfinite(daily_return):
+                    daily_valid = False
+                else:
+                    daily_count += 1
+                    daily_delta = daily_return - daily_mean
+                    daily_mean += daily_delta / daily_count
+                    daily_m2 += daily_delta * (daily_return - daily_mean)
+                    if abs(daily_return) > 1e-12:
+                        daily_active_days += 1
+        if daily_valid and daily_started:
+            sharpe_daily_observations = float(daily_count)
+            sharpe_daily_active = float(daily_active_days)
+            if total_trades > 0 and daily_count >= 2:
+                daily_variance = daily_m2 / daily_count
+                if math.isfinite(daily_variance) and daily_variance > 0.0:
+                    sharpe_daily = math.sqrt(365.0) * (daily_mean - 0.02 / 365.0) / math.sqrt(daily_variance)
+                    if not math.isfinite(sharpe_daily):
+                        sharpe_daily = math.nan
+
     outputs[candidate_index, OUTPUT_NET_PROFIT_PCT] = net_profit_pct
     outputs[candidate_index, OUTPUT_MAX_DRAWDOWN_PCT] = max_drawdown
     outputs[candidate_index, OUTPUT_TOTAL_TRADES] = total_trades
@@ -849,6 +939,9 @@ def _compiled_signal_loop_one(
     outputs[candidate_index, OUTPUT_FLAGS] = flags
     outputs[candidate_index, OUTPUT_SHARPE_RATIO] = sharpe_ratio
     outputs[candidate_index, OUTPUT_SQN] = sqn
+    outputs[candidate_index, OUTPUT_SHARPE_DAILY] = sharpe_daily
+    outputs[candidate_index, OUTPUT_SHARPE_DAILY_OBSERVATIONS] = sharpe_daily_observations
+    outputs[candidate_index, OUTPUT_SHARPE_DAILY_ACTIVE_DAYS] = sharpe_daily_active
 
 
 if numba is not None:

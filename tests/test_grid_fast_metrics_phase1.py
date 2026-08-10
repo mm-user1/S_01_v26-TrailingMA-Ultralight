@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -31,6 +32,8 @@ TOLERANCES = {
     "max_consecutive_losses_abs": 0.0,
     "sharpe_ratio_abs": 1e-12,
     "sharpe_ratio_rel": 1e-9,
+    "sharpe_daily_abs": 1e-12,
+    "sharpe_daily_rel": 1e-9,
     "sqn_abs": 1e-12,
     "sqn_rel": 1e-9,
 }
@@ -252,6 +255,144 @@ def test_v1_dsr_reuses_sharpe_without_enabling_sqn(prepared_cases, case_name):
     assert result.dsr_track_length == track_length
     assert result.dsr_skewness == pytest.approx(skewness, rel=1e-10, abs=1e-12)
     assert result.dsr_kurtosis == pytest.approx(kurtosis, rel=1e-10, abs=1e-12)
+
+
+@pytest.mark.parametrize("case_name", ["s03_v10", "s03_v11", "s06"])
+def test_v1_fast_daily_sharpe_is_gated_and_matches_selected_reference(prepared_cases, case_name):
+    backend, frame, trade_start_idx, _data, candidates = prepared_cases[case_name]
+    candidate = candidates[0]
+    data = backend.prepare_fast_data(
+        frame,
+        trade_start_idx,
+        candidates if case_name == "s06" else [candidate],
+        compute_sharpe_daily=True,
+    )
+
+    disabled = backend.evaluate_candidates(data, [candidate])[0]
+    daily = backend.evaluate_candidates(data, [candidate], compute_sharpe_daily=True)[0]
+    combined = backend.evaluate_candidates(
+        data,
+        [candidate],
+        compute_sharpe=True,
+        compute_sharpe_daily=True,
+        compute_sqn=True,
+    )[0]
+
+    assert disabled.sharpe_daily is None
+    assert disabled.sharpe_daily_observations is None
+    assert disabled.sharpe_daily_active_days is None
+    assert daily.sharpe_daily is not None and math.isfinite(daily.sharpe_daily)
+    assert daily.sharpe_daily_observations > 1
+    assert 0 <= daily.sharpe_daily_active_days <= daily.sharpe_daily_observations
+    assert combined.sharpe_daily == daily.sharpe_daily
+    assert combined.sharpe_daily_observations == daily.sharpe_daily_observations
+    assert combined.sharpe_daily_active_days == daily.sharpe_daily_active_days
+
+    validated = backend.validate_selected_candidates(
+        frame,
+        trade_start_idx,
+        [combined],
+        tolerances=TOLERANCES,
+        fail_on_error=True,
+    )[0]
+    assert validated.validation_diffs["sharpe_daily"]["passed"] is True
+    assert validated.validation_diffs["sharpe_daily_observations"]["passed"] is True
+    assert validated.validation_diffs["sharpe_daily_active_days"]["passed"] is True
+    assert daily.sharpe_daily == pytest.approx(validated.sharpe_daily, rel=1e-9, abs=1e-12)
+
+
+@pytest.mark.parametrize("case_name", ["s03_v10", "s03_v11", "s06"])
+def test_v1_fast_daily_empty_evaluation_matches_canonical(
+    prepared_cases,
+    case_name,
+):
+    backend, frame, _trade_start_idx, _data, candidates = prepared_cases[case_name]
+    candidate = candidates[0]
+    prepared_candidates = candidates if case_name == "s06" else [candidate]
+
+    empty_start = len(frame)
+    empty_data = backend.prepare_fast_data(
+        frame,
+        empty_start,
+        prepared_candidates,
+        compute_sharpe_daily=True,
+    )
+    empty = backend.evaluate_candidates(
+        empty_data,
+        [candidate],
+        compute_sharpe_daily=True,
+    )[0]
+
+    assert (
+        empty.sharpe_daily,
+        empty.sharpe_daily_observations,
+        empty.sharpe_daily_active_days,
+    ) == (None, None, None)
+    validated_empty = backend.validate_selected_candidates(
+        frame,
+        empty_start,
+        [empty],
+        tolerances=TOLERANCES,
+        fail_on_error=True,
+    )[0]
+    assert (
+        validated_empty.sharpe_daily,
+        validated_empty.sharpe_daily_observations,
+        validated_empty.sharpe_daily_active_days,
+    ) == (None, None, None)
+
+
+def test_s06_fast_daily_rejects_missing_day_ids_before_any_kernel_dispatch(
+    prepared_cases,
+    monkeypatch,
+):
+    backend, _frame, _trade_start_idx, data, candidates = prepared_cases["s06"]
+    candidate = candidates[0]
+    assert data.day_ids.size == 0
+    calls = {"scalar": 0, "batch": 0}
+
+    def unexpected_scalar(*args, **kwargs):
+        calls["scalar"] += 1
+
+    def unexpected_batch(*args, **kwargs):
+        calls["batch"] += 1
+
+    with monkeypatch.context() as guard:
+        guard.setattr(backend, "_compile_scalar_kernel", unexpected_scalar)
+        guard.setattr(backend, "_S06_FAST_BATCH_LOOP", unexpected_batch)
+        with pytest.raises(
+            ValueError,
+            match="S06 Fast Daily Sharpe requires day_ids matching the execution bars",
+        ):
+            backend.evaluate_candidates(data, [candidate], compute_sharpe_daily=True)
+
+    assert calls == {"scalar": 0, "batch": 0}
+
+    complete = backend.prepare_fast_data(
+        _frame,
+        _trade_start_idx,
+        candidates,
+        compute_sharpe_daily=True,
+    )
+    assert complete.day_ids.dtype == np.int32
+    assert complete.day_ids.flags.c_contiguous
+    assert complete.day_ids.shape == complete.close_values.shape
+
+    normal = backend.evaluate_candidates(complete, [candidate])[0]
+    daily = backend.evaluate_candidates(
+        complete,
+        [candidate],
+        compute_sharpe_daily=True,
+    )[0]
+    for attribute in (
+        "net_profit_pct",
+        "max_drawdown_pct",
+        "total_trades",
+        "winning_trades",
+        "losing_trades",
+    ):
+        assert getattr(daily, attribute) == getattr(normal, attribute)
+    assert daily.sharpe_daily_observations is not None
 
 
 @pytest.mark.parametrize(

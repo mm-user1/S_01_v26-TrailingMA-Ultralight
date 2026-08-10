@@ -418,8 +418,9 @@ enumeration. A fast backend typically provides:
 - `generate_candidates(...)` — emit deterministic `GridCandidate` objects via
   LHS-by-mode or full enumeration.
 - `evaluate_candidates(fast_data, candidates, *, n_workers=1, needs_dsr=False,
-  compute_sharpe=False, compute_sqn=False)` — evaluate the population. The four
-  keyword arguments are part of the V1 Fast Grid backend contract and must be
+  compute_sharpe=False, compute_sharpe_daily=False, compute_sqn=False)` —
+  evaluate the population. These keyword arguments are part of the V1 Fast Grid
+  backend contract and must be
   accepted even when the backend can use their default behavior. Sharpe and SQN
   may be requested conditionally as public Fast Objectives; Sharpe may also be
   requested internally for DSR.
@@ -439,8 +440,10 @@ enumeration. A fast backend typically provides:
   `normalize_diversity_group_fields`.
 - A Numba inner loop that evaluates the restricted fast objective set
   (`net_profit_pct`, `max_drawdown_pct`, `romad`, `profit_factor`, `win_rate`,
-  `sharpe_ratio`, `sqn`) cheaply per candidate. Sharpe and SQN remain conditional
-  so unrequested metrics add no per-candidate calculation.
+  `sharpe_ratio`, `sharpe_daily`, `sqn`) cheaply per candidate. Daily Sharpe is
+  currently an internal, review-gated capability rather than a public objective;
+  all three metrics remain conditional so unrequested metrics add no
+  per-candidate calculation.
 - A slow-path validator that re-runs the top-N candidates through the regular
   Python strategy using `core.optuna_engine._run_single_combination` to keep
   scoring/constraints consistent with Optuna.
@@ -479,9 +482,10 @@ See `src/strategies/s04_stochrsi/` for a complete working example:
 
 ## Conditional Fast Grid metrics
 
-V1 `fast_grid.py` evaluators accept keyword-only `compute_sharpe=False` and
-`compute_sqn=False` flags. Implementations must leave the corresponding result
-field `None` when disabled. Sharpe uses Merlin's calendar-month mark-to-market
+V1 `fast_grid.py` evaluators accept keyword-only `compute_sharpe=False`,
+`compute_sharpe_daily=False`, and `compute_sqn=False` flags. Implementations
+must leave the corresponding result fields `None` when disabled. Monthly Sharpe
+uses Merlin's calendar-month mark-to-market
 returns, a fixed 2% annual risk-free rate divided by 12, population variance,
 and no `sqrt(12)`. SQN uses exact net trade PnL, sample variance, and is
 undefined below 30 completed trades or for non-finite/near-zero dispersion.
@@ -493,11 +497,16 @@ Sortino, Ulcer Index, and Consistency remain Slow-only. Non-finite selected
 objectives remove the candidate from ranking rather than falling back to zero
 or Net Profit.
 
-Daily Sharpe is not a Fast Objective or public strategy field. Reference code
-may explicitly request `compute_sharpe_daily=True` during certification; normal
-strategy, Grid, WFA, UI, and storage paths leave it disabled. Its UTC daily
-fractional-return, `rf/365`, population-variance, and `sqrt(365)` scale is not
-interchangeable with Merlin's unannualized percentage-return Monthly Sharpe.
-The optional observation/active-day diagnostics are factual only, with no
-minimum-active-days rule. Existing metrics and DSR must not be altered to add
-this Phase 1 evidence.
+Daily Sharpe is not yet a public Fast Objective or public strategy field.
+Internal Fast requests may explicitly set `compute_sharpe_daily=True`; normal
+public Grid, Optuna, WFA, UI, Queue, and storage paths leave it disabled until
+the product-integration stage is reviewed. Each backend builds canonical
+contiguous `int32` UTC day IDs once per dataset/window and streams Welford state
+without daily arrays per candidate. Its fractional-return, `rf/365`, population-
+variance, and `sqrt(365)` scale is not interchangeable with Merlin's
+unannualized percentage-return Monthly Sharpe. The observation/active-day
+diagnostics are factual integers for structurally valid series, including zero,
+with no minimum-active-days rule. A non-finite equity observation or invalid
+opening denominator invalidates all three fields. The compounded-return
+self-check remains reference-only; selected Fast rows are validated against
+that canonical reference. Existing metrics and DSR remain unchanged.

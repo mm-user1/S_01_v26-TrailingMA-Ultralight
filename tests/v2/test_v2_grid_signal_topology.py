@@ -22,6 +22,9 @@ from core.engine_v2.compiled_kernel import (
     OUTPUT_NET_PROFIT_PCT,
     OUTPUT_PROFIT_FACTOR,
     OUTPUT_ROMAD,
+    OUTPUT_SHARPE_DAILY,
+    OUTPUT_SHARPE_DAILY_ACTIVE_DAYS,
+    OUTPUT_SHARPE_DAILY_OBSERVATIONS,
     OUTPUT_SHARPE_RATIO,
     OUTPUT_SQN,
     OUTPUT_TOTAL_TRADES,
@@ -42,6 +45,7 @@ from core.engine_v2.dataprep import build_signal_execution_data
 from core.engine_v2.metrics_kernel import compute_core_metrics_from_balance_and_trades
 from core.engine_v2.profile import active_mode_values, parse_execution_profile
 from core.engine_v2.runner import run_v2_strategy
+from core.metrics import build_utc_day_ids
 from core.grid_v2 import (
     COMPILED_BATCH_KIND,
     GridV2Settings,
@@ -158,6 +162,9 @@ def _assert_rows_equal(compiled_row, reference_row):
     _assert_float_equal(compiled_row.final_balance, reference_row.final_balance)
     _assert_float_equal(compiled_row.sharpe_ratio, reference_row.sharpe_ratio)
     _assert_float_equal(compiled_row.sqn, reference_row.sqn)
+    _assert_float_equal(compiled_row.sharpe_daily, reference_row.sharpe_daily)
+    assert compiled_row.sharpe_daily_observations == reference_row.sharpe_daily_observations
+    assert compiled_row.sharpe_daily_active_days == reference_row.sharpe_daily_active_days
 
 
 def _assert_rows_exact(left, right):
@@ -322,6 +329,78 @@ def test_signal_grid_compiled_rows_match_reference_and_use_mapping_metadata(sign
     assert len(compiled.selected) == 2
     for compiled_row, reference_row in zip(compiled.rows, reference.rows):
         _assert_rows_equal(compiled_row, reference_row)
+
+
+@pytest.mark.skipif(not compiled_batch_available(), reason="Compiled signal path required.")
+def test_signal_grid_daily_sharpe_matches_reference_across_utc_days(signal_df, hooks):
+    daily_df = signal_df.copy()
+    daily_df.index = pd.date_range("2025-01-01T12:00:00Z", periods=len(daily_df), freq="12h")
+    compiled_plan = _grid_plan(prefer_compiled=True, top_n=0)
+    reference_plan = _grid_plan(prefer_compiled=False, top_n=0)
+    indices = (0, 2, 5)
+
+    compiled = execute_grid_v2_candidates(
+        compiled_plan,
+        daily_df,
+        0,
+        hooks,
+        indices,
+        compute_sharpe_daily=True,
+        compute_sqn=True,
+    )
+    reference = execute_grid_v2_candidates(
+        reference_plan,
+        daily_df,
+        0,
+        hooks,
+        indices,
+        compute_sharpe_daily=True,
+        compute_sqn=True,
+    )
+
+    assert compiled.metadata["day_id_nbytes"] == len(daily_df) * 4
+    for compiled_row, reference_row in zip(compiled.rows, reference.rows):
+        _assert_rows_equal(compiled_row, reference_row)
+        assert compiled_row.sharpe_daily_observations == len(set(build_utc_day_ids(daily_df.index)))
+        assert compiled_row.sharpe_daily_active_days is not None
+
+
+@pytest.mark.skipif(not compiled_batch_available(), reason="Compiled signal path required.")
+def test_signal_grid_daily_empty_evaluation_matches_canonical_unavailable_tuple(signal_df, hooks):
+    compiled_plan = _grid_plan(prefer_compiled=True, top_n=0)
+    reference_plan = _grid_plan(prefer_compiled=False, top_n=0)
+    trade_start_idx = len(signal_df)
+
+    compiled = execute_grid_v2_candidates(
+        compiled_plan,
+        signal_df,
+        trade_start_idx,
+        hooks,
+        (0,),
+        compute_sharpe_daily=True,
+    )
+    reference = execute_grid_v2_candidates(
+        reference_plan,
+        signal_df,
+        trade_start_idx,
+        hooks,
+        (0,),
+        compute_sharpe_daily=True,
+    )
+
+    compiled_row = compiled.rows[0]
+    reference_row = reference.rows[0]
+    compiled_tuple = (
+        None if math.isnan(compiled_row.sharpe_daily) else compiled_row.sharpe_daily,
+        compiled_row.sharpe_daily_observations,
+        compiled_row.sharpe_daily_active_days,
+    )
+    reference_tuple = (
+        None if math.isnan(reference_row.sharpe_daily) else reference_row.sharpe_daily,
+        reference_row.sharpe_daily_observations,
+        reference_row.sharpe_daily_active_days,
+    )
+    assert compiled_tuple == reference_tuple == (None, None, None)
 
 
 @pytest.mark.skipif(not compiled_batch_available(), reason="Compiled signal path required.")
@@ -546,6 +625,51 @@ def test_signal_stacked_sharpe_requires_complete_month_ids_before_dispatch(monke
     assert dispatched_month_ids[1].dtype == np.int32
     assert dispatched_month_ids[1].flags.c_contiguous
     assert dispatched_month_ids[1].size == len(data.timestamps)
+
+
+def test_signal_stacked_daily_sharpe_requires_complete_day_ids_before_dispatch(monkeypatch):
+    _require_compiled_available()
+    data = _signal_data(
+        open_=[100.0, 101.0],
+        high=[100.0, 101.0],
+        low=[100.0, 101.0],
+        close=[100.0, 101.0],
+        long=[True, False],
+    )
+    profile = parse_execution_profile(fixture_config())
+    params = [_base_params()]
+    dispatched_day_ids = []
+
+    def fake_loop(*args):
+        dispatched_day_ids.append(args[6])
+        args[-1].fill(np.nan)
+
+    monkeypatch.setattr(compiled_signal_module, "_COMPILED_SIGNAL_STACKED_BATCH_LOOP", fake_loop)
+    empty_stacked = build_signal_stacked_execution_data([data], [0])
+    with pytest.raises(ValueError, match="day_ids matching the execution bars"):
+        evaluate_compiled_signal_stacked_batch(
+            stacked_data=empty_stacked,
+            profile=profile,
+            params_batch=params,
+            trade_start_idx=0,
+            compute_sharpe_daily=True,
+        )
+    assert dispatched_day_ids == []
+
+    complete_stacked = build_signal_stacked_execution_data(
+        [data],
+        [0],
+        day_ids=build_utc_day_ids(data.timestamps),
+    )
+    evaluate_compiled_signal_stacked_batch(
+        stacked_data=complete_stacked,
+        profile=profile,
+        params_batch=params,
+        trade_start_idx=0,
+        compute_sharpe_daily=True,
+    )
+    assert dispatched_day_ids[0].dtype == np.int32
+    assert dispatched_day_ids[0].size == len(data.timestamps)
 
 
 def test_signal_execution_data_preserves_datetime_index_and_tuple_timestamps_still_stack():

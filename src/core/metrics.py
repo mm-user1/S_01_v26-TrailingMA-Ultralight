@@ -307,7 +307,7 @@ _DAILY_ACTIVE_RETURN_TOLERANCE = 1e-12
 _DAILY_COMPOUNDING_TOLERANCE = 1e-12
 
 
-def _utc_day_ids(time_index: Sequence[Any]) -> np.ndarray:
+def build_utc_day_ids(time_index: Sequence[Any]) -> np.ndarray:
     """Return UTC calendar-day identifiers without changing source order."""
     try:
         calendar_index = pd.DatetimeIndex(
@@ -326,6 +326,10 @@ def _utc_day_ids(time_index: Sequence[Any]) -> np.ndarray:
     if np.any(day_ids_64 < int32_info.min) or np.any(day_ids_64 > int32_info.max):
         raise ValueError("Daily Sharpe UTC day identifiers exceed the int32 range.")
     return day_ids_64.astype(np.int32, copy=False)
+
+
+# Compatibility alias retained for the accepted Phase 1 tests and internal callers.
+_utc_day_ids = build_utc_day_ids
 
 
 def _calculate_daily_returns(
@@ -348,7 +352,7 @@ def _calculate_daily_returns(
     if not math.isfinite(anchor) or anchor <= 0.0 or not np.isfinite(equity).all():
         return None
 
-    day_ids = _utc_day_ids(time_index)
+    day_ids = build_utc_day_ids(time_index)
     closing_indices = np.append(np.flatnonzero(day_ids[1:] != day_ids[:-1]), equity.size - 1)
     daily_closes = equity[closing_indices]
     opening_equity = np.empty(daily_closes.size, dtype=float)

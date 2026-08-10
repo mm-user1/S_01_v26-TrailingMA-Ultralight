@@ -32,6 +32,7 @@ except Exception:  # pragma: no cover - validation keeps evaluation from using i
     qmc = None
 
 from core.grid_engine import GridAllocation, format_compact_count, format_coverage_pct
+from core.metrics import build_utc_day_ids
 from core.optuna_engine import OptimizationConfig, OptimizationResult, _run_single_combination
 from indicators.ma import get_ma
 from strategies import get_strategy_config
@@ -123,6 +124,7 @@ class FastGridData:
     high_values: np.ndarray
     low_values: np.ndarray
     month_ids: np.ndarray
+    day_ids: np.ndarray
     ma_cache: Dict[Tuple[str, int], np.ndarray]
     ma_cache_entries: int
     ma_cache_build_seconds: float
@@ -717,6 +719,8 @@ def prepare_fast_data(
     df: pd.DataFrame,
     trade_start_idx: int,
     candidates: Sequence[GridCandidate],
+    *,
+    compute_sharpe_daily: bool = False,
 ) -> FastGridData:
     started = time.time()
     close = df["Close"]
@@ -744,6 +748,11 @@ def prepare_fast_data(
         low_values=np.ascontiguousarray(low.to_numpy(copy=False), dtype=np.float64),
         month_ids=np.ascontiguousarray(
             np.asarray((df.index.year * 12) + df.index.month, dtype=np.int64)
+        ),
+        day_ids=(
+            np.ascontiguousarray(build_utc_day_ids(df.index), dtype=np.int32)
+            if compute_sharpe_daily
+            else np.empty(0, dtype=np.int32)
         ),
         ma_cache=ma_cache,
         ma_cache_entries=len(ma_cache),
@@ -793,6 +802,7 @@ def _s03_fast_loop_impl(
     high_values: np.ndarray,
     low_values: np.ndarray,
     month_ids: np.ndarray,
+    day_ids: np.ndarray,
     ma_values: np.ndarray,
     trade_start_idx: int,
     date_filter: bool,
@@ -811,12 +821,13 @@ def _s03_fast_loop_impl(
     commission_pct: float,
     compute_dsr: bool,
     compute_sharpe: bool,
+    compute_sharpe_daily: bool,
     compute_sqn: bool,
     risk_free_rate: float,
-) -> Tuple[float, float, int, int, int, float, float, float, float, float, float, float, int, float, int, float, float, float]:
+) -> Tuple[float, float, int, int, int, float, float, float, float, float, float, float, int, float, int, float, float, float, float, float, float]:
     n = close_values.shape[0]
     if n == 0:
-        return (0.0, 0.0, 0, 0, 0, 0.0, 0.0, math.nan, 0.0, 0.0, 0.0, 0.0, 0, math.nan, 0, math.nan, math.nan, math.nan)
+        return (0.0, 0.0, 0, 0, 0, 0.0, 0.0, math.nan, 0.0, 0.0, 0.0, 0.0, 0, math.nan, 0, math.nan, math.nan, math.nan, math.nan, math.nan, math.nan)
 
     ma_multiplier = 1.0 + ma_offset / 100.0
     up_multiplier = 1.0 + t_band_long_pct / 100.0
@@ -852,6 +863,15 @@ def _s03_fast_loop_impl(
     consecutive_losses = 0
     current_month = -1
     month_start_equity = 0.0
+    current_day = 0
+    daily_started = False
+    daily_opening_equity = initial_capital
+    daily_last_equity = initial_capital
+    daily_count = 0
+    daily_active_days = 0
+    daily_mean = 0.0
+    daily_m2 = 0.0
+    daily_valid = True
     previous_month_equity = initial_capital
     last_equity = initial_capital
     monthly_count = 0
@@ -1137,6 +1157,36 @@ def _s03_fast_loop_impl(
                 month_start_equity = previous_month_equity
             previous_month_equity = equity_value
 
+        if compute_sharpe_daily and i >= trade_start_idx:
+            if not math.isfinite(equity_value):
+                daily_valid = False
+            elif daily_valid:
+                day_key = day_ids[i]
+                if not daily_started:
+                    daily_started = True
+                    current_day = day_key
+                    daily_opening_equity = initial_capital
+                    daily_last_equity = equity_value
+                elif day_key != current_day:
+                    if not math.isfinite(daily_opening_equity) or daily_opening_equity <= 0.0:
+                        daily_valid = False
+                    else:
+                        daily_return = daily_last_equity / daily_opening_equity - 1.0
+                        if not math.isfinite(daily_return):
+                            daily_valid = False
+                        else:
+                            daily_count += 1
+                            delta = daily_return - daily_mean
+                            daily_mean += delta / daily_count
+                            daily_m2 += delta * (daily_return - daily_mean)
+                            if abs(daily_return) > 1e-12:
+                                daily_active_days += 1
+                    current_day = day_key
+                    daily_opening_equity = daily_last_equity
+                    daily_last_equity = equity_value
+                else:
+                    daily_last_equity = equity_value
+
         if balance >= running_max_balance:
             if i > last_drawdown_boundary_index + 1 and current_drawdown_pct > max_drawdown_pct:
                 max_drawdown_pct = current_drawdown_pct
@@ -1179,6 +1229,9 @@ def _s03_fast_loop_impl(
         romad = 0.0
 
     sharpe_ratio = math.nan
+    sharpe_daily = math.nan
+    sharpe_daily_observations = math.nan
+    sharpe_daily_active = math.nan
     sqn = math.nan
     dsr_skewness = math.nan
     dsr_kurtosis = math.nan
@@ -1221,6 +1274,31 @@ def _s03_fast_loop_impl(
         if sqn_std >= 1e-10:
             sqn = math.sqrt(sqn_count) * sqn_mean / sqn_std
 
+    if compute_sharpe_daily:
+        if daily_valid and daily_started:
+            if not math.isfinite(daily_opening_equity) or daily_opening_equity <= 0.0:
+                daily_valid = False
+            else:
+                daily_return = daily_last_equity / daily_opening_equity - 1.0
+                if not math.isfinite(daily_return):
+                    daily_valid = False
+                else:
+                    daily_count += 1
+                    delta = daily_return - daily_mean
+                    daily_mean += delta / daily_count
+                    daily_m2 += delta * (daily_return - daily_mean)
+                    if abs(daily_return) > 1e-12:
+                        daily_active_days += 1
+        if daily_valid and daily_started:
+            sharpe_daily_observations = float(daily_count)
+            sharpe_daily_active = float(daily_active_days)
+            if total_trades > 0 and daily_count >= 2:
+                daily_variance = daily_m2 / daily_count
+                if math.isfinite(daily_variance) and daily_variance > 0.0:
+                    sharpe_daily = math.sqrt(365.0) * (daily_mean - 0.02 / 365.0) / math.sqrt(daily_variance)
+                    if not math.isfinite(sharpe_daily):
+                        sharpe_daily = math.nan
+
     if total_trades == 0:
         monthly_count = 0
 
@@ -1243,6 +1321,9 @@ def _s03_fast_loop_impl(
         dsr_skewness,
         dsr_kurtosis,
         sqn,
+        sharpe_daily,
+        sharpe_daily_observations,
+        sharpe_daily_active,
     )
 
 
@@ -1258,6 +1339,7 @@ def _s03_fast_batch_loop_impl(
     high_values: np.ndarray,
     low_values: np.ndarray,
     month_ids: np.ndarray,
+    day_ids: np.ndarray,
     ma_stack: np.ndarray,
     ma_indices: np.ndarray,
     trade_start_idx: int,
@@ -1277,6 +1359,7 @@ def _s03_fast_batch_loop_impl(
     commission_pcts: np.ndarray,
     compute_dsr: bool,
     compute_sharpe: bool,
+    compute_sharpe_daily: bool,
     compute_sqn: bool,
     risk_free_rate: float,
     outputs: np.ndarray,
@@ -1301,12 +1384,16 @@ def _s03_fast_batch_loop_impl(
             dsr_skewness,
             dsr_kurtosis,
             sqn,
+            sharpe_daily,
+            sharpe_daily_observations,
+            sharpe_daily_active,
         ) = _S03_FAST_LOOP(
             close_values,
             open_values,
             high_values,
             low_values,
             month_ids,
+            day_ids,
             ma_stack[ma_indices[idx]],
             trade_start_idx,
             date_filters[idx],
@@ -1325,6 +1412,7 @@ def _s03_fast_batch_loop_impl(
             commission_pcts[idx],
             compute_dsr,
             compute_sharpe,
+            compute_sharpe_daily,
             compute_sqn,
             risk_free_rate,
         )
@@ -1346,6 +1434,9 @@ def _s03_fast_batch_loop_impl(
         outputs[idx, 15] = dsr_skewness
         outputs[idx, 16] = dsr_kurtosis
         outputs[idx, 17] = sqn
+        outputs[idx, 18] = sharpe_daily
+        outputs[idx, 19] = sharpe_daily_observations
+        outputs[idx, 20] = sharpe_daily_active
 
 
 if NUMBA_AVAILABLE:
@@ -1360,6 +1451,7 @@ def _result_from_values(
     *,
     needs_dsr: bool = False,
     compute_sharpe: bool = False,
+    compute_sharpe_daily: bool = False,
     compute_sqn: bool = False,
 ) -> OptimizationResult:
     (
@@ -1381,6 +1473,9 @@ def _result_from_values(
         dsr_skewness,
         dsr_kurtosis,
         sqn,
+        sharpe_daily,
+        sharpe_daily_observations,
+        sharpe_daily_active_days,
     ) = values
     result = OptimizationResult(
         params=dict(candidate.params),
@@ -1397,6 +1492,9 @@ def _result_from_values(
         max_consecutive_losses=int(max_consecutive_losses),
         romad=float(romad),
         sharpe_ratio=None if math.isnan(float(sharpe_ratio)) else float(sharpe_ratio),
+        sharpe_daily=None if math.isnan(float(sharpe_daily)) else float(sharpe_daily),
+        sharpe_daily_observations=(None if math.isnan(float(sharpe_daily_observations)) else int(sharpe_daily_observations)),
+        sharpe_daily_active_days=(None if math.isnan(float(sharpe_daily_active_days)) else int(sharpe_daily_active_days)),
         sqn=None if math.isnan(float(sqn)) else float(sqn),
         profit_factor=None if math.isnan(float(profit_factor)) else float(profit_factor),
         optuna_trial_number=int(candidate.candidate_id),
@@ -1408,6 +1506,7 @@ def _result_from_values(
     setattr(result, "grid_generation_mode", candidate.generation_mode)
     setattr(result, "diversity_group", candidate.diversity_group)
     setattr(result, "_fast_compute_sharpe", bool(compute_sharpe or needs_dsr))
+    setattr(result, "_fast_compute_sharpe_daily", bool(compute_sharpe_daily))
     setattr(result, "_fast_compute_sqn", bool(compute_sqn))
     if needs_dsr:
         setattr(result, "dsr_track_length", int(dsr_track_length))
@@ -1423,6 +1522,7 @@ def _evaluate_one(
     *,
     needs_dsr: bool = False,
     compute_sharpe: bool = False,
+    compute_sharpe_daily: bool = False,
     compute_sqn: bool = False,
 ) -> OptimizationResult:
     params = candidate.params
@@ -1437,6 +1537,7 @@ def _evaluate_one(
         data.high_values,
         data.low_values,
         data.month_ids,
+        data.day_ids,
         ma_values,
         int(data.trade_start_idx),
         _coerce_bool(params.get("dateFilter"), False),
@@ -1455,6 +1556,7 @@ def _evaluate_one(
         float(params.get("commissionPct", 0.05)),
         bool(needs_dsr),
         bool(compute_sharpe or needs_dsr),
+        bool(compute_sharpe_daily),
         bool(compute_sqn),
         0.02,
     )
@@ -1463,6 +1565,7 @@ def _evaluate_one(
         values,
         needs_dsr=needs_dsr,
         compute_sharpe=compute_sharpe,
+        compute_sharpe_daily=compute_sharpe_daily,
         compute_sqn=compute_sqn,
     )
 
@@ -1474,6 +1577,7 @@ def evaluate_candidates(
     n_workers: int = 1,
     needs_dsr: bool = False,
     compute_sharpe: bool = False,
+    compute_sharpe_daily: bool = False,
     compute_sqn: bool = False,
 ) -> List[OptimizationResult]:
     if not candidates:
@@ -1525,7 +1629,9 @@ def evaluate_candidates(
         initial_capitals[idx] = float(params.get("initialCapital", 100.0))
         commission_pcts[idx] = float(params.get("commissionPct", 0.05))
 
-    outputs = np.empty((count, 18), dtype=np.float64)
+    if compute_sharpe_daily and data.day_ids.shape[0] != data.close_values.shape[0]:
+        raise ValueError("S03 v11 Fast Daily Sharpe requires day_ids matching the execution bars.")
+    outputs = np.empty((count, 21), dtype=np.float64)
     requested_threads = max(1, int(n_workers or 1))
     previous_threads = numba.get_num_threads()
     target_threads = max(1, min(requested_threads, previous_threads))
@@ -1538,6 +1644,7 @@ def evaluate_candidates(
             data.high_values,
             data.low_values,
             data.month_ids,
+            data.day_ids,
             ma_stack,
             ma_indices,
             int(data.trade_start_idx),
@@ -1557,6 +1664,7 @@ def evaluate_candidates(
             commission_pcts,
             bool(needs_dsr),
             bool(compute_sharpe or needs_dsr),
+            bool(compute_sharpe_daily),
             bool(compute_sqn),
             0.02,
             outputs,
@@ -1571,6 +1679,7 @@ def evaluate_candidates(
             outputs[idx],
             needs_dsr=needs_dsr,
             compute_sharpe=compute_sharpe,
+            compute_sharpe_daily=compute_sharpe_daily,
             compute_sqn=compute_sqn,
         )
         for idx, candidate in enumerate(candidates)
@@ -1589,6 +1698,9 @@ def _result_metric_dict(result: OptimizationResult) -> Dict[str, Any]:
         "profit_factor": result.profit_factor,
         "romad": result.romad,
         "sharpe_ratio": result.sharpe_ratio,
+        "sharpe_daily": result.sharpe_daily,
+        "sharpe_daily_observations": result.sharpe_daily_observations,
+        "sharpe_daily_active_days": result.sharpe_daily_active_days,
         "sqn": result.sqn,
         "max_consecutive_losses": result.max_consecutive_losses,
     }
@@ -1703,6 +1815,8 @@ def _validation_diffs(
     requested_metrics = []
     if bool(getattr(fast, "_fast_compute_sharpe", False)):
         requested_metrics.append("sharpe_ratio")
+    if bool(getattr(fast, "_fast_compute_sharpe_daily", False)):
+        requested_metrics.append("sharpe_daily")
     if bool(getattr(fast, "_fast_compute_sqn", False)):
         requested_metrics.append("sqn")
     for attr in requested_metrics:
@@ -1723,6 +1837,13 @@ def _validation_diffs(
             "relative_tolerance": relative_tolerance,
             "passed": passed,
         }
+    if bool(getattr(fast, "_fast_compute_sharpe_daily", False)):
+        for attr in ("sharpe_daily_observations", "sharpe_daily_active_days"):
+            fast_value = getattr(fast, attr, None)
+            slow_value = getattr(slow, attr, None)
+            passed = fast_value == slow_value
+            ok = ok and passed
+            diffs[attr] = {"fast": fast_value, "slow": slow_value, "passed": passed}
     return ok, diffs
 
 
@@ -1737,7 +1858,7 @@ def validate_selected_candidates(
     validated: List[OptimizationResult] = []
     for fast_result in selected_fast:
         slow_result = _run_single_combination(
-            (dict(fast_result.params), df, int(trade_start_idx), S03ReversalV11)
+            (dict(fast_result.params), df, int(trade_start_idx), S03ReversalV11, bool(getattr(fast_result, "_fast_compute_sharpe_daily", False)))
         )
         candidate_id = int(getattr(fast_result, "candidate_id", fast_result.optuna_trial_number or 0))
         setattr(slow_result, "candidate_id", candidate_id)
