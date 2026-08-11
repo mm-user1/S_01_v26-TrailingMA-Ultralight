@@ -10,3 +10,8 @@ src/storage/journals/
 tests/.tmp_db_mgmt/
 db-mgmt-*/
 docs/_work/
+
+# Strategy Lab local artifacts
+/tools/strategy_lab/output/
+/tools/strategy_lab/cache/
+/tools/strategy_lab/tmp/

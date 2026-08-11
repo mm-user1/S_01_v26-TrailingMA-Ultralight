@@ -17,11 +17,13 @@ project-root/
 |   |-- raw/                  # Source OHLCV CSV files
 |   `-- baseline/             # Regression test baselines
 |-- tools/                    # Development utilities
+|   |-- strategy_lab/         # V2-only Phase 0 run-spec, plan identity, and read-only inventory tool
 |   |-- generate_baseline_s01.py # Generate regression baselines
 |   |-- benchmark_indicators.py  # Indicator performance tests
 |   |-- benchmark_metrics.py     # Metrics performance tests
 |   `-- test_all_ma_types.py     # Test all 11 MA types
 |-- tests/                    # Pytest test suite
+|   |-- strategy_lab/          # Focused Phase 0 contract/inventory/plan tests
 |   |-- conftest.py            # Shared fixtures (isolated storage, Flask client)
 |   |-- test_sanity.py         # Infrastructure sanity checks
 |   |-- test_regression_s01.py # S01 baseline regression
@@ -218,6 +220,23 @@ Historical studies remain unchanged snapshots. Post Process, Stress Test, and
 Analytics comparisons can therefore mix pre-fix and current DD/RoMaD semantics;
 rerun an old study for exact like-for-like comparison. Future Strategy Lab
 mark-to-market drawdown is a separate metric and must use a distinct name.
+
+#### Strategy Lab (`tools/strategy_lab/`)
+
+Strategy Lab Phase 0 is a tracked, local research foundation for certified
+Backtester V2 strategies only. It owns strict portable run-spec validation,
+canonical JSON/SHA-256 identity, generic read-only V2 plan reconstruction, and
+a deterministic market-data inventory with frozen development/holdout cells.
+It reuses the existing strategy registry, execution profile, runtime versions,
+and Grid V2 planner; Backtester V1 and strategy-ID branches are rejected.
+
+Tracked run specs and inventories contain content-derived, cross-host facts.
+Resolved data roots, host/platform, source mtimes, and verification timestamps
+remain under ignored `tools/strategy_lab/output/`; `cache/` and `tmp/` are also
+local. External CSVs are read-only and are resolved only from an explicit root
+or `MERLIN_STRATEGY_LAB_DATA_ROOT`, never by filesystem search. Phase 0 does not
+execute candidates or WFA, generate datasets, calculate rules, inspect
+development/holdout results, or add MTM drawdown.
 
 #### Indicators (`src/indicators/`)
 

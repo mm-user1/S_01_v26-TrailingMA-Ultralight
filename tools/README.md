@@ -80,6 +80,23 @@ directory.
 Set `MERLIN_PYTHON` to override the interpreter. Pass `-KeepTemp` before pytest
 arguments to preserve the per-run temp directory for debugging.
 
+### strategy_lab
+
+Phase 0 foundation for the local, Backtester-V2-only Strategy Lab. It validates
+portable run specifications, rebuilds deterministic Grid V2 plan identity
+without market data, and creates a read-only source inventory with frozen
+development/holdout ownership.
+
+```bash
+python -m tools.strategy_lab.config tools/strategy_lab/runspecs/s06_bracket_mvp.json
+python -m pytest tests/strategy_lab -q
+```
+
+See `tools/strategy_lab/README.md` for the explicit data-root and Stage A/B
+commands. Strategy Lab follows the established tools bootstrap: derive the
+repository root from `__file__`, add its `src/` directory once, and import
+existing Merlin V2 contracts rather than copying core code.
+
 ### test_all_ma_types.py
 
 Tests S01 strategy with all 11 MA types to ensure indicators work correctly.
