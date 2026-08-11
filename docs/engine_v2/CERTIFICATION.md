@@ -57,6 +57,14 @@ explicitly balance-based and covered against `core.metrics` for:
 `max_drawdown`, and `romad`. Undefined optional numeric results use `nan`;
 canonical infinite profit factor uses `inf`.
 
+Realized Max DD uses the complete finite realized `balance_curve`, including
+flat warmup and the final observation. Percentage and absolute drawdown are
+independent running-peak maxima, and RoMaD uses percentage DD. Advanced metric
+boundaries do not truncate or seed this balance scan. This balance convention
+is distinct from TradingView/open-excursion or future Strategy Lab MTM DD. All
+three V1 Fast backends, the V2 Python reference, and both V2 compiled families
+are parity-gated on the corrected full-path behavior.
+
 Determinism tests cover repeated in-process V2 baseline runs, compact guardrail
 summaries, final standing state, and a small threaded harness through the public
 `S06RTrendV02B2.run()` path. The threaded test verifies repeatability of
@@ -473,7 +481,7 @@ S06 B2 Phase 2.5 gates:
 - Compiled-vs-reference V2 Grid parity is covered by
   `tests/v2/test_v2_grid_compiled.py`: deterministic 240-candidate subsets for
   `priceRounding=none` and `priceRounding=tick_outward`, plus direct synthetic
-  no-trade, zero-loss, max-days/strict-boundary, and episodic drawdown edge
+  no-trade, zero-loss, max-days/strict-boundary, and full-path drawdown edge
   cases. It must be run without `NUMBA_DISABLE_JIT=1`. Full-population compiled
   parity remains deferred to an explicit slow gate. A focused determinism test
   compares identical compiled candidate subsets under different Numba worker

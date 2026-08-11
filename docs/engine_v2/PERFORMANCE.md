@@ -850,3 +850,25 @@ all runs, with `net_profit_pct=45.74422762364992`,
 All runs retained the 48,480-row population and one chunk. The fixed 26-column
 output remained 10,083,840 bytes. Daily enabled only the shared contiguous
 27,428-byte `int32` day-ID array; disabled runs retained zero day-ID bytes.
+
+## TZ-16 realized-drawdown tail correction (2026-08-11)
+
+Windows 10, Python 3.13.7, NumPy 2.3.3, Numba 0.65.1, task-local fresh Numba
+caches. Each case used two warmups; Slow used nine measured runs, the S03 and
+V2 cases used seven, and the production-sized S06 case used five. All Fast
+measurements used one worker. The before and after runs used the same scripts,
+data, candidate populations, and host.
+
+| Family / plan | Candidates / bars | Before median | After median | Delta |
+|---|---:|---:|---:|---:|
+| Slow `calculate_basic` | 350,000 balances | 2.2323s | 0.0179s | -99.20% |
+| S03 v10 V1 | 256 / real SUI fixture | 0.0382s | 0.0398s | +4.20% |
+| S06 V1 full | 48,480 / real SUI fixture | 4.2660s | 4.3872s | +2.84% |
+| V2 position/bracket | 512 / 2,048 synthetic | 0.0110s | 0.0106s | -3.95% |
+| V2 signal-reversal | 512 / 2,048 synthetic | 0.0077s | 0.0068s | -10.78% |
+
+The Slow speedup comes from replacing the external episodic drawdown helper
+with a vectorized full-path calculation. Compiled kernels keep scalar streaming
+state and skip repeated flat balances. Every Fast after/before delta is within
+the 5% regression gate or faster. The full S06 population remains 48,480, and
+the pinned Fast drawdown/RoMaD outputs remained stable to floating-point ULPs.

@@ -272,6 +272,45 @@ def _signal_data(
     )
 
 
+@pytest.mark.parametrize("closes", [[100.0, 99.0], [100.0, 100.0, 100.0, 99.0]])
+def test_signal_compiled_includes_single_observation_terminal_drawdown(closes):
+    close = np.asarray(closes, dtype=float)
+    open_values = close.copy()
+    open_values[-1] = close[-2]
+    long = np.zeros(close.size, dtype=bool)
+    long[-2] = True
+    data = _signal_data(
+        open_=open_values,
+        high=np.maximum(open_values, close),
+        low=np.minimum(open_values, close),
+        close=close,
+        long=long,
+    )
+    profile = parse_execution_profile(fixture_config())
+    params = _base_params(useEmergencySL=False, contractSize=1.0)
+    stacked = build_signal_stacked_execution_data([data], [0])
+
+    compiled = evaluate_compiled_signal_stacked_batch(
+        stacked_data=stacked,
+        profile=profile,
+        params_batch=[params],
+        trade_start_idx=0,
+    ).outputs[0]
+    reference = run_v2_strategy(
+        data=data,
+        profile=profile,
+        params=params,
+        trade_start_idx=0,
+    ).strategy_result
+
+    assert reference.balance_curve == pytest.approx(closes)
+    assert compiled[OUTPUT_NET_PROFIT_PCT] == pytest.approx(-1.0, rel=1e-12, abs=1e-12)
+    assert compiled[OUTPUT_MAX_DRAWDOWN_PCT] == pytest.approx(1.0, rel=1e-12, abs=1e-12)
+    assert compiled[OUTPUT_ROMAD] == pytest.approx(-1.0, rel=1e-12, abs=1e-12)
+    assert compiled[OUTPUT_MAX_DRAWDOWN_PCT] == pytest.approx(reference.max_drawdown_pct)
+    assert compiled[OUTPUT_ROMAD] == pytest.approx(reference.romad)
+
+
 def test_signal_topology_plan_counts_identity_and_inactive_emergency_axis():
     plan = _grid_plan(prefer_compiled=False)
 

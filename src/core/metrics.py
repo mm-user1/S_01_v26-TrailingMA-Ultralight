@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-from backtesting import _stats
 
 if TYPE_CHECKING:
     from .backtest_engine import StrategyResult, TradeRecord
@@ -629,16 +628,19 @@ def calculate_basic(result: StrategyResult, initial_balance: Optional[float] = N
     max_drawdown = 0.0
 
     if balance_curve:
-        equity_series = pd.Series(balance_curve).ffill()
-        drawdown = 1 - equity_series / equity_series.cummax()
-        _, peak_dd = _stats.compute_drawdown_duration_peaks(drawdown)
+        balances = pd.Series(balance_curve, dtype="float64").ffill().to_numpy()
+        balances = balances[np.isfinite(balances)]
+        if balances.size:
+            running_peaks = np.maximum.accumulate(balances)
+            drawdown_abs = running_peaks - balances
+            max_drawdown = max(0.0, float(np.max(drawdown_abs)))
 
-        if not peak_dd.isna().all():
-            max_drawdown_pct = float(peak_dd.max() * 100)
-
-        peak_balance = float(equity_series.cummax().max()) if not equity_series.empty else 0.0
-        if peak_balance > 0:
-            max_drawdown = max_drawdown_pct / 100.0 * peak_balance
+            positive_peak = running_peaks > 0.0
+            if np.any(positive_peak):
+                drawdown_pct = (
+                    drawdown_abs[positive_peak] / running_peaks[positive_peak] * 100.0
+                )
+                max_drawdown_pct = max(0.0, float(np.max(drawdown_pct)))
 
     total_trades = len(trades)
     win_rate = (winning_trades / total_trades * 100.0) if total_trades > 0 else 0.0

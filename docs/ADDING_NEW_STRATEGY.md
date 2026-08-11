@@ -332,9 +332,13 @@ in Optuna optimization results but are not exposed in single-backtest output
 by design. Every producer that returns prepared warmup observations must set
 `metric_start_idx` to the first evaluation observation and
 `metric_initial_equity` to the capital immediately before it. Advanced metrics
-use only that evaluation interval; basic realized metrics keep their existing
-full-result contract. The first bar of a new calendar month belongs to the new
-month, while the preceding bar closes the prior month.
+use only that evaluation interval. Realized Max DD/RoMaD do not: they scan the
+complete finite `balance_curve`, including flat warmup and the final
+observation. Flat warmup cannot change the maximum. Percentage DD and absolute
+currency DD are independent running-peak maxima, and RoMaD uses percentage DD.
+Do not substitute `equity_curve`, `metric_initial_equity`, or a mark-to-market
+drawdown. The first bar of a new calendar month belongs to the new month, while
+the preceding bar closes the prior month.
 
 **Key patterns from existing strategies:**
 - Pre-extract NumPy arrays from DataFrame columns before the loop (e.g., `close_arr = df["Close"].to_numpy()`) for faster element access

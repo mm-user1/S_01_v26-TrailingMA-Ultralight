@@ -1399,6 +1399,68 @@ def test_best_params_source_tracked(monkeypatch):
     assert advanced_calls == [True, True] * len(result.windows)
 
 
+def test_wfa_window_metrics_receive_corrected_realized_drawdown(monkeypatch):
+    index = pd.date_range("2025-01-15", "2025-06-14", freq="D", tz="UTC")
+    df = pd.DataFrame(
+        {"Open": 1.0, "High": 1.1, "Low": 0.9, "Close": 1.0, "Volume": 100},
+        index=index,
+    )
+    selected = OptimizationResult(
+        params={"maType": "EMA", "maLength": 20},
+        net_profit_pct=-20.0,
+        max_drawdown_pct=25.0 / 105.0 * 100.0,
+        total_trades=0,
+        optuna_trial_number=1,
+        constraints_satisfied=True,
+    )
+
+    def fake_optuna(self, df_slice, start_time, end_time):  # noqa: ARG001
+        return [selected], [selected]
+
+    class TailStrategy:
+        @staticmethod
+        def run(df_slice, params, trade_start_idx):  # noqa: ARG001
+            timestamps = list(df_slice.index[:4])
+            return StrategyResult(
+                trades=[],
+                equity_curve=[100.0, 90.0, 105.0, 80.0],
+                balance_curve=[100.0, 90.0, 105.0, 80.0],
+                timestamps=timestamps,
+            )
+
+    monkeypatch.setattr(WalkForwardEngine, "_run_optuna_on_window", fake_optuna)
+    engine = WalkForwardEngine(
+        WFConfig(
+            strategy_id="s01_trailing_ma",
+            period_unit="months",
+            is_period_days=None,
+            oos_period_days=None,
+            is_period_months=1,
+            oos_period_months=1,
+            warmup_bars=5,
+        ),
+        {
+            "fixed_params": {"dateFilter": True, "start": "2025-01-15"},
+            "risk_per_trade_pct": 2.0,
+            "contract_size": 0.01,
+            "commission_rate": 0.0005,
+            "worker_processes": 1,
+            "filter_min_profit": False,
+            "min_profit_threshold": 0.0,
+            "score_config": {},
+        },
+        {},
+    )
+    engine.strategy_class = TailStrategy
+
+    result, _study_id = engine.run_wf_optimization(df)
+
+    expected = 25.0 / 105.0 * 100.0
+    assert result.windows
+    assert all(window.is_max_drawdown_pct == pytest.approx(expected) for window in result.windows)
+    assert all(window.oos_max_drawdown_pct == pytest.approx(expected) for window in result.windows)
+
+
 def test_grid_wfa_dsr_candidate_replaces_objective_winner(monkeypatch):
     index = pd.date_range("2025-01-01", periods=40, freq="D", tz="UTC")
     df = pd.DataFrame(

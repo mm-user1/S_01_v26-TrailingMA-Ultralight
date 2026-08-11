@@ -458,6 +458,7 @@ def test_small_s06_grid_run_uses_shared_ranking_dsr_and_slow_validation():
     )
     results, study_id = run_grid_optimization(config, save_study=False)
 
+    assert config.grid_strict_validation is True
     assert study_id is None
     assert len(results) == 2
     assert all(result.validation_status == "passed" for result in results)

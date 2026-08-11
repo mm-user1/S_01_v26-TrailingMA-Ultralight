@@ -92,6 +92,41 @@ def test_compute_is_baseline_one_trade_uses_inactivity_fallback():
     assert baseline["max_trade_interval"] == pytest.approx(45.0)
 
 
+def test_adaptive_baseline_and_stitched_oos_already_include_terminal_tail():
+    engine = _build_engine(dd_threshold_multiplier=1.5)
+    timestamps = list(pd.date_range("2025-01-01", periods=4, freq="D", tz="UTC"))
+    is_result = _result(
+        [_trade("2025-01-04 00:00:00", -20.0)],
+        [100.0, 90.0, 105.0, 80.0],
+        timestamps,
+    )
+
+    baseline = engine._compute_is_baseline(is_result, is_period_days=90)
+    expected = 25.0 / 105.0 * 100.0
+    assert baseline["dd_limit"] == pytest.approx(expected * 1.5)
+
+    window = WindowResult(
+        window_id=1,
+        is_start=timestamps[0],
+        is_end=timestamps[0],
+        oos_start=timestamps[0],
+        oos_end=timestamps[-1],
+        best_params={},
+        param_id="tail",
+        is_net_profit_pct=0.0,
+        is_max_drawdown_pct=0.0,
+        is_total_trades=1,
+        oos_net_profit_pct=-20.0,
+        oos_max_drawdown_pct=expected,
+        oos_total_trades=1,
+        oos_equity_curve=[100.0, 90.0, 105.0, 80.0],
+        oos_timestamps=timestamps,
+    )
+    stitched = engine._build_stitched_oos_equity([window])
+
+    assert stitched.max_drawdown_pct == pytest.approx(expected)
+
+
 def test_scan_triggers_drawdown_precedes_cusum():
     engine = _build_engine(min_oos_trades=1, check_interval_trades=1)
     baseline = {

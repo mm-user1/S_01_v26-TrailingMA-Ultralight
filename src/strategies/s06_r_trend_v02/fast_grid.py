@@ -805,10 +805,9 @@ def _s06_fast_loop_impl(
     commission_rate = commission_pct / 100.0
     day_ns = 86_400_000_000_000
     balance = initial_capital
-    running_peak = initial_capital
-    current_drawdown = 0.0
+    running_peak = math.nan
+    last_drawdown_balance = math.nan
     max_drawdown = 0.0
-    last_drawdown_boundary = -1
 
     position = 0
     previous_close_position = 0
@@ -1230,21 +1229,17 @@ def _s06_fast_loop_impl(
                 else:
                     daily_last_equity = equity_value
 
-        if balance >= running_peak:
-            if i > last_drawdown_boundary + 1 and current_drawdown > max_drawdown:
-                max_drawdown = current_drawdown
-            running_peak = balance
-            current_drawdown = 0.0
-            last_drawdown_boundary = i
-        elif running_peak > 0.0:
-            drawdown = (1.0 - balance / running_peak) * 100.0
-            if drawdown > current_drawdown:
-                current_drawdown = drawdown
+        if balance != last_drawdown_balance:
+            last_drawdown_balance = balance
+            if math.isfinite(balance):
+                if not math.isfinite(running_peak) or balance > running_peak:
+                    running_peak = balance
+                elif running_peak > 0.0 and balance < running_peak:
+                    drawdown = (running_peak - balance) / running_peak * 100.0
+                    if drawdown > max_drawdown:
+                        max_drawdown = drawdown
 
         previous_close_position = position
-
-    if last_bar_index > last_drawdown_boundary + 1 and current_drawdown > max_drawdown:
-        max_drawdown = current_drawdown
 
     net_profit_pct = (
         (balance - initial_capital) / initial_capital * 100.0

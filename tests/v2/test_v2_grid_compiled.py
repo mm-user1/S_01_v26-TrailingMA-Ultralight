@@ -904,6 +904,53 @@ def _edge_params(**overrides):
     return params
 
 
+@pytest.mark.parametrize("closes", [[100.0, 99.0], [100.0, 100.0, 100.0, 99.0]])
+def test_position_compiled_includes_single_observation_terminal_drawdown(closes):
+    close = np.asarray(closes, dtype=float)
+    open_values = close.copy()
+    open_values[-1] = close[-2]
+    long = np.zeros(close.size, dtype=bool)
+    long[-2] = True
+    data = _data(
+        open_=open_values,
+        high=np.maximum(open_values, close),
+        low=np.minimum(open_values, close),
+        close=close,
+        long=long,
+        atr=np.zeros(close.size),
+        rolling_low=np.zeros(close.size),
+        rolling_high=np.full(close.size, 200.0),
+    )
+    profile = parse_execution_profile(load_config())
+    params = _edge_params(
+        stopX=0.0,
+        stopRR=10.0,
+        stopMaxPct=100.0,
+        riskPerTrade=100.0,
+        contractSize=1.0,
+    )
+
+    compiled = evaluate_compiled_batch(
+        data=data,
+        profile=profile,
+        params_batch=[params],
+        trade_start_idx=0,
+    ).outputs[0]
+    reference = run_v2_strategy(
+        data=data,
+        profile=profile,
+        params=params,
+        trade_start_idx=0,
+    ).strategy_result
+
+    assert reference.balance_curve == pytest.approx(closes)
+    assert compiled[OUTPUT_NET_PROFIT_PCT] == pytest.approx(-1.0, rel=1e-12, abs=1e-12)
+    assert compiled[OUTPUT_MAX_DRAWDOWN_PCT] == pytest.approx(1.0, rel=1e-12, abs=1e-12)
+    assert compiled[OUTPUT_ROMAD] == pytest.approx(-1.0, rel=1e-12, abs=1e-12)
+    assert compiled[OUTPUT_MAX_DRAWDOWN_PCT] == pytest.approx(reference.max_drawdown_pct)
+    assert compiled[OUTPUT_ROMAD] == pytest.approx(reference.romad)
+
+
 def test_empty_compiled_result_initializes_appended_metric_columns():
     data = _data(open_=[], high=[], low=[], close=[])
     profile = parse_execution_profile(load_config())

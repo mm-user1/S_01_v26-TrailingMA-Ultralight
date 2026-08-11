@@ -56,6 +56,24 @@ def test_aggregate_two_studies_full_overlap():
     }
 
 
+def test_analytics_aggregate_drawdown_already_includes_terminal_tail():
+    result = aggregate_equity_curves(
+        [
+            _study(
+                [
+                    ("2025-01-01T00:00:00+00:00", 100.0),
+                    ("2025-01-02T00:00:00+00:00", 90.0),
+                    ("2025-01-03T00:00:00+00:00", 105.0),
+                    ("2025-01-04T00:00:00+00:00", 80.0),
+                ]
+            )
+        ]
+    )
+
+    assert result["curve"] == pytest.approx([100.0, 90.0, 105.0, 80.0])
+    assert result["max_drawdown_pct"] == pytest.approx(25.0 / 105.0 * 100.0, abs=1e-4)
+
+
 def test_aggregate_partial_overlap_uses_intersection():
     result = aggregate_equity_curves(
         [

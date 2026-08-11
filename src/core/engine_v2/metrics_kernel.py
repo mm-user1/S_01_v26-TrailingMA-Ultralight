@@ -1,8 +1,7 @@
 """Metric reference helpers for Backtester V2.
 
-Phase 0 pins Merlin's current drawdown episode behavior without changing
-``core.metrics``. Later fast metric kernels should match these semantics rather
-than depending directly on private third-party APIs.
+Realized maximum drawdown scans the complete realized balance path. Percentage
+and absolute drawdown are independent maxima; RoMaD uses the percentage value.
 
 Low-level V2 metric outputs are numeric-only: optional undefined values use
 ``nan`` and canonical infinite results use ``inf``.
@@ -15,8 +14,6 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Optional
 
-import numpy as np
-import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -59,67 +56,28 @@ class CoreMetrics:
         }
 
 
-def drawdown_series_from_equity(equity_curve: Iterable[float]) -> pd.Series:
-    """Return Merlin's fractional drawdown series from an equity/balance path."""
+def _max_drawdowns(balance_curve: Iterable[float]) -> tuple[float, float]:
+    """Return full-path realized percentage and absolute maximum drawdown."""
 
-    equity = pd.Series(list(equity_curve), dtype="float64").ffill()
-    if equity.empty:
-        return equity
-    with np.errstate(divide="ignore", invalid="ignore"):
-        drawdown = 1.0 - equity / equity.cummax()
-    return drawdown
+    running_peak: Optional[float] = None
+    max_drawdown_pct = 0.0
+    max_drawdown = 0.0
+    for raw_balance in balance_curve:
+        balance = float(raw_balance)
+        if not math.isfinite(balance):
+            continue
+        if running_peak is None or balance > running_peak:
+            running_peak = balance
+            continue
 
-
-def compute_drawdown_duration_peaks_reference(
-    drawdown: pd.Series,
-) -> tuple[pd.Series, pd.Series]:
-    """Vendored reference for current drawdown duration/peak behavior.
-
-    This mirrors the ``backtesting==0.6.5`` implementation currently used by
-    ``core.metrics.calculate_basic``. One important convention is that a
-    trailing unrecovered drawdown with only one drawdown sample is not emitted
-    as a separate recovered episode when earlier episodes exist.
-
-    Empty input intentionally returns empty series. The upstream helper raises
-    on empty input, but Merlin's metrics path guards empty balance curves before
-    calling it.
-    """
-
-    if drawdown.empty:
-        empty = pd.Series(dtype="float64", index=drawdown.index)
-        return empty, empty
-
-    zero_indexes = (drawdown == 0).values.nonzero()[0]
-    iloc_values = np.unique(np.r_[zero_indexes, len(drawdown) - 1])
-    iloc = pd.Series(iloc_values, index=drawdown.index[iloc_values])
-    episodes = iloc.to_frame("iloc").assign(prev=iloc.shift())
-    episodes = episodes[episodes["iloc"] > episodes["prev"] + 1].astype(np.int64)
-
-    if not len(episodes):
-        replaced = drawdown.replace(0, np.nan)
-        return replaced, replaced
-
-    episodes["duration"] = episodes["iloc"].map(drawdown.index.__getitem__) - episodes[
-        "prev"
-    ].map(drawdown.index.__getitem__)
-    episodes["peak_dd"] = episodes.apply(
-        lambda row: drawdown.iloc[row["prev"] : row["iloc"] + 1].max(),
-        axis=1,
-    )
-    reindexed = episodes.reindex(drawdown.index)
-    return reindexed["duration"], reindexed["peak_dd"]
-
-
-def max_drawdown_pct_reference(equity_curve: Iterable[float]) -> float:
-    """Return max drawdown percent using the pinned episode convention."""
-
-    drawdown = drawdown_series_from_equity(equity_curve)
-    if drawdown.empty:
-        return 0.0
-    _, peak_dd = compute_drawdown_duration_peaks_reference(drawdown)
-    if peak_dd.isna().all():
-        return 0.0
-    return float(peak_dd.max() * 100.0)
+        drawdown = running_peak - balance
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+        if running_peak > 0.0:
+            drawdown_pct = drawdown / running_peak * 100.0
+            if drawdown_pct > max_drawdown_pct:
+                max_drawdown_pct = drawdown_pct
+    return max_drawdown_pct, max_drawdown
 
 
 def _trade_pnl(trade: Any) -> float:
@@ -146,16 +104,6 @@ def _romad(net_profit_pct: float, max_drawdown_pct: float) -> float:
             return net_profit_pct * 100.0 if net_profit_pct >= 0.0 else 0.0
         return net_profit_pct / abs(max_drawdown_pct)
     return 0.0
-
-
-def _peak_balance_for_drawdown(balance_curve: list[float]) -> float:
-    if not balance_curve:
-        return 0.0
-    balance = pd.Series(balance_curve, dtype="float64").ffill()
-    if balance.empty:
-        return 0.0
-    peak_balance = float(balance.cummax().max())
-    return peak_balance if math.isfinite(peak_balance) else 0.0
 
 
 def compute_core_metrics_from_balance_and_trades(
@@ -201,9 +149,7 @@ def compute_core_metrics_from_balance_and_trades(
     win_rate_pct = (winning_trades / total_trades * 100.0) if total_trades else 0.0
     profit_factor = _profit_factor(gross_profit, gross_loss, total_trades)
 
-    max_drawdown_pct = max_drawdown_pct_reference(balances) if balances else 0.0
-    peak_balance = _peak_balance_for_drawdown(balances)
-    max_drawdown = max_drawdown_pct / 100.0 * peak_balance if peak_balance > 0.0 else 0.0
+    max_drawdown_pct, max_drawdown = _max_drawdowns(balances)
     romad = _romad(net_profit_pct, max_drawdown_pct)
 
     return CoreMetrics(
@@ -227,7 +173,4 @@ def compute_core_metrics_from_balance_and_trades(
 __all__ = [
     "CoreMetrics",
     "compute_core_metrics_from_balance_and_trades",
-    "compute_drawdown_duration_peaks_reference",
-    "drawdown_series_from_equity",
-    "max_drawdown_pct_reference",
 ]

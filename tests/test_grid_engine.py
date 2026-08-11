@@ -330,7 +330,7 @@ def _synthetic_grid_result(candidate_id, *, net_profit, win_rate=50.0, sharpe=0.
     return result
 
 
-def test_fast_grid_legacy_drawdown_ignores_unrecovered_tail_like_slow_metrics():
+def test_realized_drawdown_includes_unrecovered_tail():
     balance_path = [100.0, 90.0, 105.0, 80.0]
     slow = calculate_basic(
         StrategyResult(
@@ -342,8 +342,8 @@ def test_fast_grid_legacy_drawdown_ignores_unrecovered_tail_like_slow_metrics():
         initial_balance=100.0,
     )
 
-    assert slow.max_drawdown_pct == pytest.approx(10.0)
-    assert fast_grid.legacy_recovered_max_drawdown_pct(balance_path) == pytest.approx(slow.max_drawdown_pct)
+    assert slow.max_drawdown_pct == pytest.approx(25.0 / 105.0 * 100.0)
+    assert slow.max_drawdown == pytest.approx(25.0)
 
 
 def test_grid_dsr_selects_only_from_previous_module_top_n():
@@ -540,6 +540,38 @@ def test_fast_grid_default_objective_preserves_net_profit_order():
 
     assert [item.candidate_id for item in ranked] == [2, 3, 1]
     assert [item.grid_rank for item in ranked] == [1, 2, 3]
+
+
+def test_corrected_drawdown_feeds_grid_objectives_romad_and_constraints():
+    balance_path = [100.0, 90.0, 105.0, 80.0]
+    basic = calculate_basic(
+        StrategyResult(
+            trades=[],
+            equity_curve=list(balance_path),
+            balance_curve=list(balance_path),
+            timestamps=list(pd.date_range("2025-01-01", periods=4, freq="D", tz="UTC")),
+        ),
+        initial_balance=100.0,
+    )
+    corrected = _synthetic_grid_result(1, net_profit=basic.net_profit_pct)
+    corrected.max_drawdown_pct = basic.max_drawdown_pct
+    corrected.romad = basic.net_profit_pct / basic.max_drawdown_pct
+
+    ranked = rank_grid_results(
+        [corrected],
+        objectives=["max_drawdown_pct", "romad"],
+        primary_objective="romad",
+        constraints=[
+            ConstraintSpec(metric="max_drawdown_pct", threshold=20.0, enabled=True)
+        ],
+    )
+
+    assert ranked == [corrected]
+    assert corrected.objective_values == pytest.approx(
+        [25.0 / 105.0 * 100.0, -0.84], rel=1e-12, abs=1e-12
+    )
+    assert corrected.constraint_values == pytest.approx([25.0 / 105.0 * 100.0 - 20.0])
+    assert corrected.constraints_satisfied is False
 
 
 def test_multi_objective_grid_ranks_feasible_pareto_before_non_pareto_and_infeasible():

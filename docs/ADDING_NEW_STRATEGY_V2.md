@@ -797,6 +797,14 @@ The shared runner returns `StrategyResult.metric_start_idx=trade_start_idx` and
 `metric_initial_equity=initial_capital`; adapters must not replace or reinterpret
 those boundary facts.
 
+Those advanced-metric boundaries do not own Realized Max DD or RoMaD. The V2
+reference and compiled family must scan every finite realized `balance_curve`
+observation, including flat warmup and the final bar. Percentage DD is the
+maximum positive-peak fraction; absolute DD, where exposed, is an independent
+currency maximum. RoMaD uses percentage DD. Do not reuse `equity_curve`, the
+advanced anchor, or the optional Net Profit starting balance as a drawdown
+boundary or peak. A future MTM drawdown requires a distinct public name.
+
 ## Typed selected Slow metrics
 
 `V2RunResult` retains the complete required `BasicMetrics` and

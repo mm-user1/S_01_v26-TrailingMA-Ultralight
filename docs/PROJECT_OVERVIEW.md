@@ -203,9 +203,21 @@ Advanced metrics consume a canonical evaluation view of `StrategyResult`.
 `metric_start_idx` marks the first in-curve evaluation observation and
 `metric_initial_equity` supplies its pre-observation anchor. This keeps
 technical warmup available to strategy state while excluding it from Sharpe,
-Sortino, Ulcer Index, and Consistency. Basic realized drawdown/RoMaD semantics
-remain unchanged. Calendar-month ownership closes the old month on the bar
-before a transition and assigns the transition bar to the new month.
+Sortino, Ulcer Index, and Consistency. Realized Max DD instead scans the complete
+finite `balance_curve`, including its final observation and flat warmup prefix;
+the flat prefix is mathematically neutral. It is balance-based, not MTM, and is
+not truncated or seeded by `metric_start_idx`, `metric_initial_equity`, or the
+optional Net Profit starting balance. Percentage DD is the maximum
+`(running_peak - balance) / running_peak * 100` for positive peaks; absolute DD
+is the independent maximum `running_peak - balance`. RoMaD uses corrected
+percentage DD. Slow, V1 Fast x3, the V2 reference, and V2 compiled x2 are
+aligned. Calendar-month ownership closes the old month on the bar before a
+transition and assigns the transition bar to the new month.
+
+Historical studies remain unchanged snapshots. Post Process, Stress Test, and
+Analytics comparisons can therefore mix pre-fix and current DD/RoMaD semantics;
+rerun an old study for exact like-for-like comparison. Future Strategy Lab
+mark-to-market drawdown is a separate metric and must use a distinct name.
 
 #### Indicators (`src/indicators/`)
 

@@ -771,6 +771,17 @@ contract do not. Calendar returns assign a transition bar to its new month and
 close the old month with the preceding bar. Fast Grid implementations must
 match this contract and must not count technical warmup months.
 
+Realized Max DD is balance-based, not mark-to-market. It scans the complete
+realized `balance_curve`, including the final observation and flat technical
+warmup prefix; the flat prefix cannot change the maximum. At each finite
+observation it uses the running realized-balance peak. Percentage DD is the
+maximum `(peak - balance) / peak * 100` for positive peaks, while absolute DD
+is the independent maximum `peak - balance`. `metric_start_idx`,
+`metric_initial_equity`, and the optional Net Profit starting balance do not
+seed or truncate this scan. RoMaD uses the corrected percentage DD. Slow, all
+three V1 Fast backends, and both V2 compiled families share this contract.
+Future Strategy Lab mark-to-market DD must use a distinct metric name.
+
 Monthly Sortino requires real downside months and is often `None` on two- to
 four-month windows; selecting it as a Slow objective may remove many or all
 candidates.
