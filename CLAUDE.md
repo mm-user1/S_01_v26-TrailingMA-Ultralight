@@ -25,18 +25,21 @@ Repository directory roles:
 - `./data` contains examples, market data, and related inputs.
 - `./docs` contains documentation, plans, and reference material.
 - `./src` is the main application source directory.
-- `./tools/strategy_lab` contains the Backtester-V2-only Strategy Lab Phase 0
-  run-spec, plan-identity, and read-only inventory foundation. Its tracked
+- `./tools/strategy_lab` contains the Backtester-V2-only Strategy Lab Phase
+  0/1-A run-spec, plan identity, read-only inventory, strict source validation,
+  candidate projection, and atomic resumable dataset foundation. Its tracked
   `runspecs/` are cross-host identity; `output/`, `cache/`, and `tmp/` are local
   ignored artifacts.
-- `./tests/strategy_lab` contains focused Phase 0 tests and deliberately has no
+- `./tests/strategy_lab` contains focused Phase 0/1-A tests and deliberately has no
   package `__init__.py` or local `conftest.py`.
 
 Strategy Lab external market data is read-only. Resolve its root from an
 explicit `--data-root`, then `MERLIN_STRATEGY_LAB_DATA_ROOT`; never search for
 substitute files or track an absolute root. The confirmed Windows pack may be
 absent on Linux/VPS, where Stage A remains valid but Stage B must be reported as
-incomplete. Run Phase 0 tests from the repository root through the configured
+incomplete. Phase 1-A permits only synthetic/bounded smoke generation; full-pack
+generation, real parity, multi-thread determinism, and WFA tie-back remain Phase
+1-B. Run Strategy Lab tests from the repository root through the configured
 interpreter: `python -m pytest tests/strategy_lab -q`.
 
 ## Project: Merlin

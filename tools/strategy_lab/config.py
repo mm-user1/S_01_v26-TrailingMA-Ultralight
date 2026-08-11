@@ -444,6 +444,7 @@ def _validate_plan(
     )
     economics = _object(generation["economics"], "generation.economics")
     base_params = _object(economics["base_params"], "generation.economics.base_params")
+    resources = _object(generation["resources"], "generation.resources")
     runtime_names = {"dateFilter", "start", "end", "warmupBars"}
     if runtime_names.intersection(base_params):
         raise StrategyLabConfigError(
@@ -453,6 +454,17 @@ def _validate_plan(
         enabled_variants=variants,
         enabled_axes=axes,
         prefer_compiled=planning["grid_v2_prefer_compiled"],
+        slow_enrich_selected=False,
+        compiled_workers=_integer(
+            resources["outer_workers"],
+            "generation.resources.outer_workers",
+            minimum=1,
+        ),
+        max_signal_cache_mb=_number(
+            resources["grid_v2_max_cache_mb"],
+            "generation.resources.grid_v2_max_cache_mb",
+            positive=True,
+        ),
         planning_policy="full",
     )
     try:
