@@ -331,6 +331,26 @@ def _window_tuple(window: WindowSplit) -> tuple[int, int, int, int, int]:
     )
 
 
+def expected_complete_oos_end(
+    window: WindowSplit,
+    *,
+    oos_period_months: int,
+    timeframe_minutes: int,
+) -> pd.Timestamp:
+    """Return and validate the inclusive final bar of a complete OOS interval."""
+
+    exclusive_end = pd.Timestamp(window.oos_start) + pd.DateOffset(
+        months=oos_period_months
+    )
+    expected_end = exclusive_end - pd.Timedelta(minutes=timeframe_minutes)
+    if pd.Timestamp(window.oos_end) != expected_end:
+        raise DataQualityError(
+            f"window {window.window_id} OOS is truncated; expected final bar "
+            f"{expected_end.isoformat()}, got {pd.Timestamp(window.oos_end).isoformat()}."
+        )
+    return expected_end
+
+
 def build_authoritative_windows(
     spec: RunSpec,
     sources: Sequence[ValidatedSource],
@@ -369,6 +389,12 @@ def build_authoritative_windows(
             )
         if [window.window_id for window in built] != list(range(1, len(built) + 1)):
             raise DataQualityError("authoritative calendar window IDs are not sequential.")
+        for window in built:
+            expected_complete_oos_end(
+                window,
+                oos_period_months=int(windows_contract["oos_period_months"]),
+                timeframe_minutes=int(windows_contract["timeframe_minutes"]),
+            )
         tuples = tuple(_window_tuple(window) for window in built)
         if reference is None:
             reference = built
@@ -389,11 +415,19 @@ def prepare_segment(
     *,
     warmup_bars: int,
     timeframe_minutes: int,
+    oos_period_months: int | None = None,
 ) -> PreparedSegment:
     if segment == "is":
         start, end = window.is_start, window.is_end
     elif segment == "oos":
         start, end = window.oos_start, window.oos_end
+        if oos_period_months is None:
+            raise DataQualityError("OOS preparation requires the declared OOS month count.")
+        expected_end = expected_complete_oos_end(
+            window,
+            oos_period_months=oos_period_months,
+            timeframe_minutes=timeframe_minutes,
+        )
     else:
         raise DataQualityError(f"unsupported segment {segment!r}.")
     prepared, trade_start_idx = prepare_dataset_with_warmup(
@@ -424,6 +458,11 @@ def prepare_segment(
         raise DataQualityError(
             f"{source.entry['canonical_symbol']} window {window.window_id} {segment}: "
             "evaluation final timestamp does not match WindowSplit."
+        )
+    if segment == "oos" and prepared.index[-1] != expected_end:
+        raise DataQualityError(
+            f"{source.entry['canonical_symbol']} window {window.window_id} OOS: "
+            "prepared final timestamp is not the complete declared OOS final bar."
         )
     return PreparedSegment(
         window_id=window.window_id,
@@ -461,6 +500,7 @@ __all__ = [
     "QUALITY_COLUMNS",
     "ValidatedSource",
     "build_authoritative_windows",
+    "expected_complete_oos_end",
     "prepare_segment",
     "quality_row",
     "validate_selected_sources",

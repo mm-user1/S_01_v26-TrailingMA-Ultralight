@@ -135,10 +135,21 @@ def fake_rows(plan: GridV2Plan, *, daily_none: bool = False) -> tuple[GridV2Resu
                 sharpe_daily_observations=None if daily_none else 0,
                 sharpe_daily_active_days=None if daily_none else 0,
                 sqn=float("nan"),
+                backend_kind="compiled_numba",
             )
         )
     return tuple(rows)
 
 
 def fake_execute(plan: GridV2Plan, *_args: Any, **_kwargs: Any) -> Any:
-    return SimpleNamespace(rows=fake_rows(plan), selected=())
+    return SimpleNamespace(
+        rows=fake_rows(plan),
+        selected=(),
+        metadata={
+            "backend_kind": "compiled_numba",
+            "compiled_batch_used": True,
+            "compiled_execution_mode": "stacked",
+            "compiled_config_packing": "table",
+            "compiled_unavailable_reason": None,
+        },
+    )

@@ -6,7 +6,10 @@ import os
 import shutil
 import subprocess
 import sys
+from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import numba
 import numpy as np
@@ -19,6 +22,7 @@ from tools.strategy_lab.generate import GenerationResult, generate_dataset, main
 from tests.strategy_lab.phase1a_helpers import (
     REPO_ROOT,
     fake_execute,
+    fake_rows,
     write_full_synthetic_pack,
 )
 
@@ -56,6 +60,18 @@ def _artifact_outcome(output: Path) -> dict:
         "groups": [(record["path"], record["sha256"]) for record in manifest["groups"]],
         "identity": manifest["identity"],
         "scope": manifest["scope"],
+    }
+
+
+def _file_snapshot(root: Path) -> dict[str, tuple[str, int, int]]:
+    return {
+        path.relative_to(root).as_posix(): (
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            path.stat().st_size,
+            path.stat().st_mtime_ns,
+        )
+        for path in root.rglob("*")
+        if path.is_file()
     }
 
 
@@ -119,6 +135,26 @@ def test_plan_is_built_once_and_unranked_execution_contract_is_explicit(
     assert build_calls == manifest["provenance"]["plan_build_count"] == 1
     assert execution_calls == 2
     assert manifest["provenance"]["selected_slow_row_count"] == 0
+    assert manifest["provenance"]["execution_backend"] == {
+        "backend_kind": "compiled_numba",
+        "compiled_batch_used": True,
+        "execution_modes": ["stacked"],
+        "config_packings": ["table"],
+        "unavailable_reasons": [],
+        "segment_execution_count": 2,
+    }
+    assert manifest["groups"][0]["execution_backend"]["backend_kind"] == "compiled_numba"
+    assert manifest["groups"][0]["execution_backend"]["compiled_batch_used"] is True
+    assert manifest["identity"]["resources"] == {
+        "numba_threads": 1,
+        "compiled_workers": 1,
+        "outer_workers": 1,
+        "max_signal_cache_mb": 512.0,
+        "prefer_compiled": True,
+        "slow_enrich_selected": False,
+    }
+    assert manifest["provenance"]["timings"]["run_spec_load_seconds"] >= 0.0
+    assert manifest["provenance"]["timings"]["plan_build_seconds"] >= 0.0
     assert result.scope == "smoke"
 
 
@@ -140,6 +176,48 @@ def test_selector_order_cannot_change_inventory_or_window_order(synthetic_pack, 
     ]
     assert [item["window_id"] for item in manifest["identity"]["windows"]] == [1, 2]
     assert manifest["scope"] == "smoke"
+
+
+@pytest.mark.parametrize("case", ["fallback", "mixed_rows", "missing_metadata"])
+def test_effective_compiled_backend_is_required_before_group_publication(
+    synthetic_pack, tmp_path, monkeypatch, case
+):
+    root, run_spec, _, _ = synthetic_pack
+
+    def invalid_execute(plan, *_args, **_kwargs):
+        rows = list(fake_rows(plan))
+        metadata = {
+            "backend_kind": "compiled_numba",
+            "compiled_batch_used": True,
+            "compiled_execution_mode": "stacked",
+            "compiled_config_packing": "table",
+            "compiled_unavailable_reason": None,
+        }
+        if case == "fallback":
+            metadata["backend_kind"] = "reference"
+            metadata["compiled_batch_used"] = False
+            rows = [replace(row, backend_kind="reference") for row in rows]
+        elif case == "mixed_rows":
+            rows[0] = replace(rows[0], backend_kind="reference")
+        else:
+            metadata = {}
+        return SimpleNamespace(rows=tuple(rows), selected=(), metadata=metadata)
+
+    monkeypatch.setattr(
+        "tools.strategy_lab.generate.execute_grid_v2_candidates", invalid_execute
+    )
+    output = tmp_path / case
+    with pytest.raises(DatasetError, match="backend|compiled_batch_used"):
+        generate_dataset(
+            run_spec,
+            data_root=root / "market",
+            output_dir=output,
+            ticker_selectors=["AAAUSDT"],
+            window_selectors=[1],
+            repo_root=root,
+        )
+    assert not (output / "manifest.json").exists()
+    assert not list(output.glob("groups/**/*.npy"))
 
 
 def test_raw_failure_publishes_deterministic_quality_before_candidate_execution(
@@ -175,6 +253,42 @@ def test_raw_failure_publishes_deterministic_quality_before_candidate_execution(
     assert calls == 0
     assert quality_bytes[0] == quality_bytes[1]
     assert b"file size does not match" in quality_bytes[0]
+
+
+def test_truncated_oos_is_rejected_before_candidate_execution(
+    synthetic_pack, tmp_path, monkeypatch
+):
+    root, run_spec, _, _ = synthetic_pack
+    from tools.strategy_lab import generate as generate_module
+
+    original_builder = generate_module.build_authoritative_windows
+    calls = 0
+
+    def truncated_builder(spec, sources):
+        windows = list(original_builder(spec, sources))
+        windows[0] = replace(
+            windows[0], oos_end=windows[0].oos_end - timedelta(minutes=30)
+        )
+        return tuple(windows)
+
+    def forbidden(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("candidate execution must not start")
+
+    monkeypatch.setattr(generate_module, "build_authoritative_windows", truncated_builder)
+    monkeypatch.setattr(generate_module, "execute_grid_v2_candidates", forbidden)
+    with pytest.raises(ValueError, match="OOS is truncated"):
+        generate_dataset(
+            run_spec,
+            data_root=root / "market",
+            output_dir=tmp_path / "output",
+            ticker_selectors=["AAAUSDT"],
+            window_selectors=[1],
+            repo_root=root,
+        )
+    assert calls == 0
+    assert not (tmp_path / "output" / "manifest.json").exists()
 
 
 def test_runtime_thread_report_never_mislabels_clamped_or_single_thread_evidence():
@@ -215,6 +329,58 @@ def test_numba_thread_state_and_sources_are_restored_and_preserved_on_failure(
         for path in (root / "market").iterdir()
     }
     assert after == before
+
+
+def test_primary_execution_error_remains_primary_when_preservation_also_fails(
+    synthetic_pack, tmp_path, monkeypatch
+):
+    root, run_spec, _, _ = synthetic_pack
+
+    def execution_failure(*_args, **_kwargs):
+        raise RuntimeError("primary execution failure")
+
+    def preservation_failure(_sources):
+        raise ValueError("secondary preservation failure")
+
+    monkeypatch.setattr(
+        "tools.strategy_lab.generate.execute_grid_v2_candidates", execution_failure
+    )
+    monkeypatch.setattr(
+        "tools.strategy_lab.generate.verify_source_preservation", preservation_failure
+    )
+    with pytest.raises(RuntimeError, match="primary execution failure") as raised:
+        generate_dataset(
+            run_spec,
+            data_root=root / "market",
+            output_dir=tmp_path / "output",
+            ticker_selectors=["AAAUSDT"],
+            window_selectors=[1],
+            repo_root=root,
+        )
+    assert any("secondary preservation failure" in note for note in raised.value.__notes__)
+
+
+def test_preservation_failure_is_raised_when_generation_has_no_primary_error(
+    synthetic_pack, tmp_path, monkeypatch
+):
+    root, run_spec, _, _ = synthetic_pack
+    prior_threads = numba.get_num_threads()
+    monkeypatch.setattr("tools.strategy_lab.generate.execute_grid_v2_candidates", fake_execute)
+    monkeypatch.setattr(
+        "tools.strategy_lab.generate.verify_source_preservation",
+        lambda _sources: (_ for _ in ()).throw(ValueError("preservation-only failure")),
+    )
+    with pytest.raises(ValueError, match="preservation-only failure"):
+        generate_dataset(
+            run_spec,
+            data_root=root / "market",
+            output_dir=tmp_path / "output",
+            ticker_selectors=["AAAUSDT"],
+            window_selectors=[1],
+            repo_root=root,
+        )
+    assert numba.get_num_threads() == prior_threads
+    assert not (tmp_path / "output" / "manifest.json").exists()
 
 
 def test_interruption_resume_reuse_and_uninterrupted_outcome_equality(
@@ -310,6 +476,39 @@ def test_resume_regenerates_invalid_claimed_groups(
     assert result.regenerated_groups == 1
     assert np.load(group, mmap_mode="r", allow_pickle=False).shape == (480, 2, 20)
     assert np.load(group, mmap_mode="r", allow_pickle=False).dtype == np.float64
+
+
+def test_resume_rejects_group_without_compiled_backend_provenance(
+    synthetic_pack, tmp_path, monkeypatch
+):
+    root, run_spec, _, _ = synthetic_pack
+    monkeypatch.setattr("tools.strategy_lab.generate.execute_grid_v2_candidates", fake_execute)
+    output = tmp_path / "output"
+    with pytest.raises(RuntimeError, match="stop"):
+        generate_dataset(
+            run_spec,
+            data_root=root / "market",
+            output_dir=output,
+            ticker_selectors=["AAAUSDT"],
+            window_selectors=[1],
+            repo_root=root,
+            _after_group=lambda *_args: (_ for _ in ()).throw(RuntimeError("stop")),
+        )
+    partial_path = output / "manifest.partial.json"
+    partial = json.loads(partial_path.read_text(encoding="utf-8"))
+    partial["groups"][0].pop("execution_backend")
+    partial_path.write_text(json.dumps(partial), encoding="utf-8")
+
+    with pytest.raises(DatasetError, match="does not prove compiled_numba"):
+        generate_dataset(
+            run_spec,
+            data_root=root / "market",
+            output_dir=output,
+            ticker_selectors=["AAAUSDT"],
+            window_selectors=[1],
+            repo_root=root,
+            resume=True,
+        )
 
 
 @pytest.mark.parametrize("field", ["schema", "axes", "resources", "scope"])
@@ -411,6 +610,33 @@ def test_completed_run_is_an_exact_verified_no_op(synthetic_pack, tmp_path, monk
     assert before == after
 
 
+def test_completed_output_is_immutable_across_source_failure_restore_and_no_op(
+    synthetic_pack, tmp_path, monkeypatch
+):
+    root, run_spec, _, _ = synthetic_pack
+    output = tmp_path / "output"
+    _generate_fake(synthetic_pack, output, monkeypatch)
+    before = _file_snapshot(output)
+    source = next((root / "market").glob("OKX_AAAUSDT*.csv"))
+    original_bytes = source.read_bytes()
+    original_stat = source.stat()
+    try:
+        source.write_bytes(original_bytes + b"\n")
+        with pytest.raises(ValueError, match="source validation failed"):
+            _generate_fake(synthetic_pack, output, monkeypatch)
+        assert _file_snapshot(output) == before
+    finally:
+        source.write_bytes(original_bytes)
+        os.utime(
+            source,
+            ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+        )
+
+    result = _generate_fake(synthetic_pack, output, monkeypatch)
+    assert result.no_op is True
+    assert _file_snapshot(output) == before
+
+
 def test_completed_output_checksum_corruption_is_not_silently_overwritten(
     synthetic_pack, tmp_path, monkeypatch
 ):
@@ -418,8 +644,25 @@ def test_completed_output_checksum_corruption_is_not_silently_overwritten(
     _generate_fake(synthetic_pack, output, monkeypatch)
     candidates = output / "candidates.json"
     candidates.write_bytes(candidates.read_bytes() + b" ")
+    before = _file_snapshot(output)
     with pytest.raises(DatasetError, match="checksum/shape/dtype verification"):
         _generate_fake(synthetic_pack, output, monkeypatch)
+    assert _file_snapshot(output) == before
+
+
+def test_incompatible_completed_manifest_is_not_overwritten(
+    synthetic_pack, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    _generate_fake(synthetic_pack, output, monkeypatch)
+    manifest_path = output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["identity"]["dataset_schema"] = "incompatible"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    before = _file_snapshot(output)
+    with pytest.raises(DatasetError, match="incompatible run identity"):
+        _generate_fake(synthetic_pack, output, monkeypatch)
+    assert _file_snapshot(output) == before
 
 
 def test_cli_forwards_repeatable_smoke_selectors_and_reports_completion(tmp_path, monkeypatch, capsys):
@@ -462,6 +705,145 @@ def test_cli_forwards_repeatable_smoke_selectors_and_reports_completion(tmp_path
     assert captured["resume"] is True
     assert captured["_progress"] is not None
     assert "smoke complete" in capsys.readouterr().out
+
+
+def test_module_cli_help_bootstraps_without_pythonpath_and_writes_nothing():
+    package_root = REPO_ROOT / "tools" / "strategy_lab"
+    before = _file_snapshot(package_root)
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    completed = subprocess.run(
+        [sys.executable, "-m", "tools.strategy_lab.generate", "--help"],
+        cwd=REPO_ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "--data-root" in completed.stdout
+    assert "--output-dir" in completed.stdout
+    assert "--resume" in completed.stdout
+    assert _file_snapshot(package_root) == before
+
+
+@pytest.mark.parametrize("location", ["equal", "beneath"])
+def test_output_inside_market_data_root_is_rejected_before_writes_or_execution(
+    synthetic_pack, monkeypatch, location
+):
+    root, run_spec, _, _ = synthetic_pack
+    data_root = root / "market"
+    output = data_root if location == "equal" else data_root / "generated" / "output"
+    before = _file_snapshot(data_root)
+    calls = 0
+
+    def forbidden(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("candidate execution must not start")
+
+    monkeypatch.setattr("tools.strategy_lab.generate.execute_grid_v2_candidates", forbidden)
+    with pytest.raises(DatasetError, match="must not equal or be beneath"):
+        generate_dataset(
+            run_spec,
+            data_root=data_root,
+            output_dir=output,
+            ticker_selectors=["AAAUSDT"],
+            window_selectors=[1],
+            repo_root=root,
+        )
+    assert calls == 0
+    assert _file_snapshot(data_root) == before
+    if location == "beneath":
+        assert not output.exists()
+
+
+def test_resource_owners_are_independent_and_manifest_uses_effective_values(
+    synthetic_pack, tmp_path, monkeypatch
+):
+    root, run_spec, _, _ = synthetic_pack
+    payload = json.loads(run_spec.read_text(encoding="utf-8"))
+    payload["generation"]["resources"]["grid_v2_max_cache_mb"] = 256.0
+    changed_spec = tmp_path / "cache_run.json"
+    changed_spec.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr("tools.strategy_lab.generate.execute_grid_v2_candidates", fake_execute)
+    result = generate_dataset(
+        changed_spec,
+        data_root=root / "market",
+        output_dir=tmp_path / "output",
+        ticker_selectors=["AAAUSDT"],
+        window_selectors=[1],
+        repo_root=root,
+    )
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    resources = manifest["identity"]["resources"]
+    assert resources["outer_workers"] == 1
+    assert resources["compiled_workers"] == 1
+    assert resources["numba_threads"] == 1
+    assert resources["max_signal_cache_mb"] == 256.0
+
+
+@pytest.mark.parametrize(("field", "value"), [("outer_workers", 2), ("numba_threads", 2)])
+def test_nonsequential_resource_settings_fail_clearly(
+    synthetic_pack, tmp_path, field, value
+):
+    root, run_spec, _, _ = synthetic_pack
+    payload = json.loads(run_spec.read_text(encoding="utf-8"))
+    payload["generation"]["resources"][field] = value
+    changed_spec = tmp_path / f"{field}.json"
+    changed_spec.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match=rf"{field}.*requires exactly 1"):
+        load_run_spec(changed_spec, repo_root=root)
+
+
+def test_generation_avoids_ranking_objective_diversity_and_external_writes(
+    synthetic_pack, tmp_path, monkeypatch
+):
+    root, run_spec, _, _ = synthetic_pack
+    output = tmp_path / "output"
+    outside_before = _file_snapshot(root)
+    calls: list[str] = []
+
+    def forbidden(name):
+        def fail(*_args, **_kwargs):
+            calls.append(name)
+            raise AssertionError(f"{name} must not be called")
+
+        return fail
+
+    monkeypatch.setattr("core.grid_engine.rank_grid_results", forbidden("ranking"))
+    monkeypatch.setattr("core.grid_engine._validate_objective_set", forbidden("objectives"))
+    monkeypatch.setattr("core.grid_engine.apply_diversity_cap", forbidden("diversity"))
+    monkeypatch.setattr("tools.strategy_lab.generate.execute_grid_v2_candidates", fake_execute)
+
+    from tools.strategy_lab import dataset as dataset_module
+
+    original_atomic_write = dataset_module.atomic_write
+    write_targets: list[Path] = []
+
+    def checked_atomic_write(path, writer):
+        resolved = Path(path).resolve()
+        resolved.relative_to(output.resolve())
+        write_targets.append(resolved)
+        return original_atomic_write(path, writer)
+
+    monkeypatch.setattr(dataset_module, "atomic_write", checked_atomic_write)
+    generate_dataset(
+        run_spec,
+        data_root=root / "market",
+        output_dir=output,
+        ticker_selectors=["AAAUSDT"],
+        window_selectors=[1],
+        repo_root=root,
+    )
+    assert calls == []
+    assert write_targets
+    outside_after = {
+        path: facts for path, facts in _file_snapshot(root).items() if not path.startswith("output/")
+    }
+    assert outside_after == outside_before
 
 
 def test_two_fresh_processes_produce_identical_real_smoke_outcomes(synthetic_pack, tmp_path):

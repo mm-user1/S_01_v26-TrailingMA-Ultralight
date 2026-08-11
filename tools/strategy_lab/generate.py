@@ -17,10 +17,10 @@ from typing import Any, Callable, Mapping, Sequence
 import numba
 import numpy as np
 
-from core.grid_v2 import GridV2StrategyHooks, execute_grid_v2_candidates
-from strategies import get_strategy
-
 from .config import REPO_ROOT, RunSpec, canonical_json_bytes, load_run_spec, semantic_key_digest
+from core.grid_v2 import GridV2StrategyHooks, execute_grid_v2_candidates  # noqa: E402
+from strategies import get_strategy  # noqa: E402
+
 from .data_quality import (
     DataQualityError,
     PreparedSegment,
@@ -50,6 +50,9 @@ from .dataset import (
     validate_artifact_record,
 )
 from .inventory import resolve_data_root
+
+
+REQUIRED_BACKEND_KIND = "compiled_numba"
 
 
 @dataclass(frozen=True)
@@ -137,6 +140,7 @@ def _quality_preflight(
     *,
     warmup_bars: int,
     timeframe_minutes: int,
+    oos_period_months: int,
 ) -> tuple[dict[str, Any], ...]:
     source_rows = {
         str(row["canonical_symbol"]): dict(row)
@@ -155,6 +159,7 @@ def _quality_preflight(
                         segment_name,
                         warmup_bars=warmup_bars,
                         timeframe_minutes=timeframe_minutes,
+                        oos_period_months=oos_period_months,
                     )
                 except DataQualityError as exc:
                     message = str(exc)
@@ -233,11 +238,11 @@ def _identity(
         },
         "resources": {
             "numba_threads": int(resources["numba_threads"]),
-            "compiled_workers": 1,
+            "compiled_workers": int(spec.plan.settings.compiled_workers),
             "outer_workers": int(resources["outer_workers"]),
-            "max_signal_cache_mb": float(resources["grid_v2_max_cache_mb"]),
-            "prefer_compiled": True,
-            "slow_enrich_selected": False,
+            "max_signal_cache_mb": float(spec.plan.settings.max_signal_cache_mb),
+            "prefer_compiled": bool(spec.plan.settings.prefer_compiled),
+            "slow_enrich_selected": bool(spec.plan.settings.slow_enrich_selected),
         },
     }
 
@@ -282,6 +287,83 @@ def _git_facts(repo_root: Path) -> tuple[str, bool]:
     return head, bool(status.strip())
 
 
+def _assert_output_outside_data_root(output_dir: Path, data_root: Path) -> None:
+    try:
+        output_dir.relative_to(data_root)
+    except ValueError:
+        return
+    raise DatasetError("output directory must not equal or be beneath the market-data root.")
+
+
+def _execution_backend_facts(run: Any) -> dict[str, Any]:
+    metadata = getattr(run, "metadata", None)
+    if not isinstance(metadata, Mapping):
+        raise DatasetError("V2 execution result is missing backend metadata.")
+    if metadata.get("backend_kind") != REQUIRED_BACKEND_KIND:
+        raise DatasetError("Strategy Lab requires effective backend_kind='compiled_numba'.")
+    if metadata.get("compiled_batch_used") is not True:
+        raise DatasetError("Strategy Lab requires compiled_batch_used=True.")
+    rows = tuple(getattr(run, "rows", ()))
+    row_backends = {getattr(row, "backend_kind", None) for row in rows}
+    if row_backends != {REQUIRED_BACKEND_KIND}:
+        raise DatasetError(
+            "Strategy Lab requires homogeneous compiled_numba backend metadata on every row."
+        )
+    return {
+        "backend_kind": REQUIRED_BACKEND_KIND,
+        "compiled_batch_used": True,
+        "compiled_execution_mode": metadata.get("compiled_execution_mode"),
+        "compiled_config_packing": metadata.get("compiled_config_packing"),
+        "compiled_unavailable_reason": metadata.get("compiled_unavailable_reason"),
+    }
+
+
+def _valid_group_backend_record(record: Mapping[str, Any]) -> bool:
+    backend = record.get("execution_backend")
+    if not isinstance(backend, Mapping):
+        return False
+    if (
+        backend.get("backend_kind") != REQUIRED_BACKEND_KIND
+        or backend.get("compiled_batch_used") is not True
+    ):
+        return False
+    segments = backend.get("segments")
+    if not isinstance(segments, Mapping) or set(segments) != set(SEGMENT_AXIS):
+        return False
+    return all(
+        isinstance(segments.get(segment), Mapping)
+        and segments[segment].get("backend_kind") == REQUIRED_BACKEND_KIND
+        and segments[segment].get("compiled_batch_used") is True
+        for segment in SEGMENT_AXIS
+    )
+
+
+def _backend_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    segment_facts = [
+        record["execution_backend"]["segments"][segment]
+        for record in records
+        for segment in SEGMENT_AXIS
+    ]
+
+    def observed(field: str) -> list[str]:
+        return sorted(
+            {
+                str(facts[field])
+                for facts in segment_facts
+                if facts.get(field) is not None
+            }
+        )
+
+    return {
+        "backend_kind": REQUIRED_BACKEND_KIND,
+        "compiled_batch_used": True,
+        "execution_modes": observed("compiled_execution_mode"),
+        "config_packings": observed("compiled_config_packing"),
+        "unavailable_reasons": observed("compiled_unavailable_reason"),
+        "segment_execution_count": len(segment_facts),
+    }
+
+
 def _validate_complete(
     output_dir: Path,
     manifest: Mapping[str, Any],
@@ -311,6 +393,7 @@ def _validate_complete(
     shape = identity["expected_group_shape"]
     return all(
         isinstance(record, Mapping)
+        and _valid_group_backend_record(record)
         and validate_artifact_record(
             output_dir,
             record,
@@ -325,14 +408,17 @@ def _assert_plan_contract(spec: RunSpec) -> None:
     if spec.plan is None:
         raise DatasetError("run spec did not produce a V2 plan.")
     settings = spec.plan.settings
+    resources = spec.generation["resources"]
     if (
         settings.prefer_compiled is not True
         or settings.slow_enrich_selected is not False
         or settings.compiled_workers != 1
-        or settings.max_signal_cache_mb != 512.0
+        or settings.max_signal_cache_mb != float(resources["grid_v2_max_cache_mb"])
         or settings.planning_policy != "full"
     ):
         raise DatasetError("V2 plan execution settings do not match the Phase 1-A contract.")
+    if int(resources["outer_workers"]) != 1:
+        raise DatasetError("Phase 1-A requires outer_workers=1 for sequential orchestration.")
     for index in range(spec.plan.deduped_candidate_count):
         params = spec.plan.candidate_table.params_for_index(index)
         if "start" in params or "end" in params:
@@ -356,13 +442,20 @@ def generate_dataset(
     started = time.perf_counter()
     repo = Path(repo_root).resolve()
     output = Path(output_dir).resolve()
-    plan_started = time.perf_counter()
+    root = resolve_data_root(data_root)
+    _assert_output_outside_data_root(output, root)
+    manifest_path = output / "manifest.json"
+    partial_path = output / "manifest.partial.json"
+    existing_manifest = (
+        load_json(manifest_path, "manifest.json") if manifest_path.exists() else None
+    )
+    run_spec_started = time.perf_counter()
     spec = load_run_spec(run_spec_path, repo_root=repo)
-    plan_seconds = time.perf_counter() - plan_started
+    run_spec_load_seconds = time.perf_counter() - run_spec_started
+    plan_build_seconds = spec.plan_build_seconds
     _assert_plan_contract(spec)
     plan = spec.plan
     assert plan is not None
-    root = resolve_data_root(data_root)
     entries = _selected_entries(spec, ticker_selectors)
     timeframe = int(spec.generation["market_data"]["timeframe_minutes"])
 
@@ -385,6 +478,7 @@ def generate_dataset(
             windows,
             warmup_bars=warmup_bars,
             timeframe_minutes=timeframe,
+            oos_period_months=int(spec.generation["windows"]["oos_period_months"]),
         )
     except DataQualityError as exc:
         failure_rows = getattr(exc, "quality_rows", None)
@@ -398,10 +492,11 @@ def generate_dataset(
                 )
                 for source in sources
             )
-        atomic_write_quality_csv(
-            quality_path,
-            failure_rows,
-        )
+        if existing_manifest is None:
+            atomic_write_quality_csv(
+                quality_path,
+                failure_rows,
+            )
         raise
     source_quality_seconds = time.perf_counter() - quality_started
     if _progress is not None:
@@ -427,11 +522,8 @@ def generate_dataset(
         "candidates.json": _bytes_sha256(candidate_bytes),
         "data_quality.csv": _bytes_sha256(quality_bytes),
     }
-    manifest_path = output / "manifest.json"
-    partial_path = output / "manifest.partial.json"
-
-    if manifest_path.exists():
-        manifest = load_json(manifest_path, "manifest.json")
+    if existing_manifest is not None:
+        manifest = existing_manifest
         if not manifest_identity_matches(manifest, identity):
             raise DatasetError("completed output directory has an incompatible run identity.")
         if not _validate_complete(
@@ -455,7 +547,8 @@ def generate_dataset(
             no_op=True,
             timings={
                 "total_seconds": elapsed,
-                "plan_build_seconds": plan_seconds,
+                "run_spec_load_seconds": run_spec_load_seconds,
+                "plan_build_seconds": plan_build_seconds,
                 "source_quality_seconds": source_quality_seconds,
                 "is_execution_seconds": 0.0,
                 "oos_execution_seconds": 0.0,
@@ -480,6 +573,10 @@ def generate_dataset(
         for record in records:
             if not isinstance(record, Mapping) or record.get("path") not in expected_paths:
                 raise DatasetError("manifest.partial.json contains an unrecognized group record.")
+            if not _valid_group_backend_record(record):
+                raise DatasetError(
+                    "manifest.partial.json group does not prove compiled_numba execution."
+                )
             completed_by_path[str(record["path"])] = record
     elif resume:
         completed_by_path = {}
@@ -523,6 +620,8 @@ def generate_dataset(
     reused = len(valid_records)
     regenerated = 0
     group_index = 0
+    preservation: Mapping[str, Any] | None = None
+    primary_error: BaseException | None = None
     try:
         numba.set_num_threads(requested_threads)
         thread_report = runtime_thread_report(
@@ -539,6 +638,7 @@ def generate_dataset(
                         _progress(f"group {group_index}/{len(expected_paths)} reused: {relative}")
                     continue
                 segment_rows: dict[str, Any] = {}
+                segment_backends: dict[str, dict[str, Any]] = {}
                 for segment_name in SEGMENT_AXIS:
                     prepared: PreparedSegment = prepare_segment(
                         source,
@@ -546,6 +646,9 @@ def generate_dataset(
                         segment_name,
                         warmup_bars=warmup_bars,
                         timeframe_minutes=timeframe,
+                        oos_period_months=int(
+                            spec.generation["windows"]["oos_period_months"]
+                        ),
                     )
                     execution_started = time.perf_counter()
                     run = execute_grid_v2_candidates(
@@ -564,12 +667,18 @@ def generate_dataset(
                         oos_execution_seconds += duration
                     if run.selected:
                         raise DatasetError("Slow enrichment selected rows must be empty.")
+                    segment_backends[segment_name] = _execution_backend_facts(run)
                     segment_rows[segment_name] = run.rows
                 matrix = group_matrix(segment_rows["is"], segment_rows["oos"], plan)
                 path = output / relative
                 publish_started = time.perf_counter()
                 atomic_write_group(path, matrix)
                 record = group_record(path, output, matrix)
+                record["execution_backend"] = {
+                    "backend_kind": REQUIRED_BACKEND_KIND,
+                    "compiled_batch_used": True,
+                    "segments": segment_backends,
+                }
                 publication_seconds += time.perf_counter() - publish_started
                 valid_records[relative] = record
                 regenerated += 1
@@ -585,13 +694,37 @@ def generate_dataset(
                 atomic_write_json(partial_path, partial_payload)
                 if _after_group is not None:
                     _after_group(group_index, path)
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
+        cleanup_failures: list[tuple[str, BaseException]] = []
         try:
             numba.set_num_threads(previous_threads)
-        finally:
-            verify_source_preservation(sources)
+        except BaseException as exc:
+            cleanup_failures.append(("Numba thread restoration", exc))
+        try:
+            preservation = verify_source_preservation(sources)
+        except BaseException as exc:
+            cleanup_failures.append(("source preservation verification", exc))
+        if cleanup_failures:
+            if primary_error is not None:
+                for label, failure in cleanup_failures:
+                    primary_error.add_note(
+                        f"Secondary {label} failure: {type(failure).__name__}: {failure}"
+                    )
+            else:
+                label, cleanup_error = cleanup_failures[0]
+                for secondary_label, failure in cleanup_failures[1:]:
+                    cleanup_error.add_note(
+                        f"Secondary {secondary_label} failure: "
+                        f"{type(failure).__name__}: {failure}"
+                    )
+                cleanup_error.add_note(f"Cleanup stage: {label}")
+                raise cleanup_error
 
-    preservation = verify_source_preservation(sources)
+    if preservation is None:
+        raise DatasetError("source preservation verification did not complete.")
     ordered_records = [valid_records[path] for path in expected_paths if path in valid_records]
     if len(ordered_records) != len(expected_paths):
         raise DatasetError("not every expected group was published.")
@@ -635,9 +768,11 @@ def generate_dataset(
             },
             "plan_build_count": 1,
             "selected_slow_row_count": 0,
+            "execution_backend": _backend_summary(ordered_records),
             "thread_capability": thread_report,
             "timings": {
-                "plan_build_seconds": plan_seconds,
+                "run_spec_load_seconds": run_spec_load_seconds,
+                "plan_build_seconds": plan_build_seconds,
                 "source_quality_seconds": source_quality_seconds,
                 "is_execution_seconds": is_execution_seconds,
                 "oos_execution_seconds": oos_execution_seconds,

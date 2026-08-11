@@ -110,7 +110,10 @@ def test_raw_row_failures_are_detected_before_load_data(
             first, second = lines[1].split(","), lines[2].split(",")
             first[0], second[0] = second[0], first[0]
             lines[1], lines[2] = ",".join(first), ",".join(second)
-        elif case in {"duplicate", "masked_gap"}:
+        elif case == "duplicate":
+            lines.append(lines[-1])
+            entry["row_count"] += 1
+        elif case == "masked_gap":
             _field(lines, 3, 0, lines[2].split(",")[0])
         elif case == "gap":
             _field(lines, 3, 0, str(int(lines[3].split(",")[0]) + 60))
@@ -141,6 +144,21 @@ def test_raw_row_failures_are_detected_before_load_data(
 
     _rewrite(target, mutate)
     refresh_entry_file_facts(entry, target)
+    if case in {"duplicate", "masked_gap"}:
+        timestamps = [
+            int(line.split(",")[0]) for line in target.read_text().splitlines()[1:]
+        ]
+    if case == "duplicate":
+        assert len(timestamps) == entry["row_count"]
+        assert timestamps[-1] == timestamps[-2]
+        assert all(
+            right - left == 1800
+            for left, right in zip(timestamps[:-2], timestamps[1:-1])
+        )
+    elif case == "masked_gap":
+        deltas = [right - left for left, right in zip(timestamps, timestamps[1:])]
+        assert len(timestamps) == entry["row_count"]
+        assert 0 in deltas and 3600 in deltas
     if case == "wrong_last":
         entry["first_timestamp"] = "2025-08-01T00:30:00Z"
     called = False
@@ -297,7 +315,14 @@ def test_segment_preparation_is_independent_and_exact():
     source = _source_for_index(index)
     window = build_authoritative_windows(spec, (source,))[0]
     prepared_is = prepare_segment(source, window, "is", warmup_bars=1000, timeframe_minutes=30)
-    prepared_oos = prepare_segment(source, window, "oos", warmup_bars=1000, timeframe_minutes=30)
+    prepared_oos = prepare_segment(
+        source,
+        window,
+        "oos",
+        warmup_bars=1000,
+        timeframe_minutes=30,
+        oos_period_months=1,
+    )
 
     assert prepared_is.trade_start_idx == prepared_oos.trade_start_idx == 1000
     assert prepared_is.evaluation_row_count == 2_928

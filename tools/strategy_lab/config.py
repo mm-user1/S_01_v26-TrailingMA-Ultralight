@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import sys
+import time
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -201,6 +202,7 @@ class RunSpec:
     inventory_path: Path | None
     inventory: Any | None
     plan: GridV2Plan | None
+    plan_build_seconds: float
 
     @property
     def strategy_id(self) -> str:
@@ -455,11 +457,7 @@ def _validate_plan(
         enabled_axes=axes,
         prefer_compiled=planning["grid_v2_prefer_compiled"],
         slow_enrich_selected=False,
-        compiled_workers=_integer(
-            resources["outer_workers"],
-            "generation.resources.outer_workers",
-            minimum=1,
-        ),
+        compiled_workers=1,
         max_signal_cache_mb=_number(
             resources["grid_v2_max_cache_mb"],
             "generation.resources.grid_v2_max_cache_mb",
@@ -588,8 +586,20 @@ def _validate_common(generation: Mapping[str, Any], prereg: Mapping[str, Any]) -
 
     resources = _object(generation["resources"], "generation.resources")
     _keys(resources, "generation.resources", {"outer_workers", "numba_threads", "grid_v2_max_cache_mb"})
-    _integer(resources["outer_workers"], "generation.resources.outer_workers", minimum=1)
-    _integer(resources["numba_threads"], "generation.resources.numba_threads", minimum=1)
+    outer_workers = _integer(
+        resources["outer_workers"], "generation.resources.outer_workers", minimum=1
+    )
+    if outer_workers != 1:
+        raise StrategyLabConfigError(
+            "generation.resources.outer_workers: Phase 1-A requires exactly 1."
+        )
+    numba_threads = _integer(
+        resources["numba_threads"], "generation.resources.numba_threads", minimum=1
+    )
+    if numba_threads != 1:
+        raise StrategyLabConfigError(
+            "generation.resources.numba_threads: Phase 1-A requires exactly 1."
+        )
     _number(resources["grid_v2_max_cache_mb"], "generation.resources.grid_v2_max_cache_mb", positive=True)
 
     _keys(prereg, "preregistration", {"split", "analysis_scopes", "rule_registry", "primary_comparison", "evidence_criteria_version", "maximum_nominated_rules", "observation_contract", "evidence_criteria"})
@@ -736,7 +746,9 @@ def load_run_spec(
                 "generation.market_data.expected_exchange_counts: does not match inventory entries."
             )
 
+    plan_started = time.perf_counter()
     plan = _validate_plan(config, generation) if validate_plan else None
+    plan_build_seconds = time.perf_counter() - plan_started if validate_plan else 0.0
     return RunSpec(
         source_path=source_path,
         raw=raw,
@@ -747,6 +759,7 @@ def load_run_spec(
         inventory_path=inventory_path,
         inventory=inventory,
         plan=plan,
+        plan_build_seconds=plan_build_seconds,
     )
 
 

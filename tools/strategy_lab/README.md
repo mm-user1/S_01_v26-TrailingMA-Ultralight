@@ -18,6 +18,8 @@ execution profile uses `priceRounding=none`.
 ## Commands
 
 Run every command from the repository root with the configured project Python.
+The module commands bootstrap the repository `src/` path themselves and do not
+require `PYTHONPATH` or prior imports.
 On this Windows repository, use:
 
 ```powershell
@@ -87,10 +89,15 @@ the narrowly ignored `cache/` and `tmp/` directories.
 ## Dataset and resume contract
 
 The generator constructs one validated V2 plan and directly executes every
-candidate for independent IS and OOS prepared segments. It pins compiled
-execution, one compiled worker, one runtime Numba thread, a 512 MB signal-cache
-limit, and `slow_enrich_selected=False`; process-global Numba thread state is
-restored even after failure. Calendar boundaries come from Merlin's
+candidate for independent IS and OOS prepared segments. It requires effective
+`compiled_numba` execution for every returned row and rejects silent reference
+fallback before group publication. Group records bind IS/OOS backend facts for
+resume, and the final manifest summarizes execution modes and config packing.
+It pins one sequential outer worker, one separate compiled worker, one runtime
+Numba thread, the run-spec-owned 512 MB signal-cache limit, and
+`slow_enrich_selected=False`; process-global Numba thread state is restored even
+after failure. Cleanup failures are attached to an existing primary exception
+instead of replacing it. Calendar boundaries come from Merlin's
 authoritative calendar-month builder, and each segment must contain exactly
 1,000 warmup bars followed by its complete evaluation range.
 
@@ -109,7 +116,11 @@ have been published and checksummed. Resume requires exact schema, run,
 inventory, plan, axes, scope, version, and resource identity; claimed files are
 rechecked for SHA-256, size, shape, and dtype. Missing or corrupt claimed
 groups regenerate, while unlisted files are never reused. `manifest.json` is
-the sole complete marker, and an exact verified completed run is a no-op.
+the sole complete marker, and an exact verified completed run is a no-op. A
+completed output is immutable during every re-run: source, identity, or artifact
+failure is reported without writing diagnostics or otherwise changing that
+directory. Output paths equal to or beneath the resolved market-data root are
+rejected before any write or candidate execution.
 
 The scope label is `full` only when the exact complete accepted inventory and
 all declared windows are selected; every strict subset is `smoke`. Phase 1-A
