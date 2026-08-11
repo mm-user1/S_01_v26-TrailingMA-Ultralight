@@ -18,6 +18,10 @@ import numba
 import numpy as np
 
 from .config import REPO_ROOT, RunSpec, canonical_json_bytes, load_run_spec, semantic_key_digest
+from core.engine_v2.compiled_kernel import (  # noqa: E402
+    compiled_batch_available,
+    compiled_unavailable_reason,
+)
 from core.grid_v2 import GridV2StrategyHooks, execute_grid_v2_candidates  # noqa: E402
 from strategies import get_strategy  # noqa: E402
 
@@ -304,6 +308,13 @@ def _execution_backend_facts(run: Any) -> dict[str, Any]:
     if metadata.get("compiled_batch_used") is not True:
         raise DatasetError("Strategy Lab requires compiled_batch_used=True.")
     rows = tuple(getattr(run, "rows", ()))
+    # Run-level compiled facts are immutable; preserve row errors before checking
+    # successful-row backend homogeneity.
+    for row in rows:
+        if getattr(row, "status", None) != "ok":
+            candidate_id = getattr(row, "candidate_id", "unknown")
+            error = getattr(row, "error", None) or "execution failed"
+            raise DatasetError(f"candidate {candidate_id}: {error}")
     row_backends = {getattr(row, "backend_kind", None) for row in rows}
     if row_backends != {REQUIRED_BACKEND_KIND}:
         raise DatasetError(
@@ -316,6 +327,13 @@ def _execution_backend_facts(run: Any) -> dict[str, Any]:
         "compiled_config_packing": metadata.get("compiled_config_packing"),
         "compiled_unavailable_reason": metadata.get("compiled_unavailable_reason"),
     }
+
+
+def _require_compiled_backend_available() -> None:
+    if compiled_batch_available():
+        return
+    reason = compiled_unavailable_reason() or "unknown reason"
+    raise DatasetError(f"Strategy Lab compiled backend is unavailable: {reason}")
 
 
 def _valid_group_backend_record(record: Mapping[str, Any]) -> bool:
@@ -581,6 +599,7 @@ def generate_dataset(
     elif resume:
         completed_by_path = {}
 
+    _require_compiled_backend_available()
     output.mkdir(parents=True, exist_ok=True)
     atomic_write_json(output / "normalized_runspec.json", normalized_runspec)
     atomic_write_json(output / "candidates.json", candidate_projection)

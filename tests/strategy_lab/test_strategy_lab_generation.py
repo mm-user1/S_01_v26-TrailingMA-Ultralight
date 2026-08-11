@@ -17,7 +17,13 @@ import pytest
 
 from tools.strategy_lab.config import load_run_spec, semantic_key_digest
 from tools.strategy_lab.dataset import DatasetError, METRIC_AXIS
-from tools.strategy_lab.generate import GenerationResult, generate_dataset, main, runtime_thread_report
+from tools.strategy_lab.generate import (
+    GenerationResult,
+    _require_compiled_backend_available,
+    generate_dataset,
+    main,
+    runtime_thread_report,
+)
 
 from tests.strategy_lab.phase1a_helpers import (
     REPO_ROOT,
@@ -94,7 +100,7 @@ def test_synthetic_plan_preserves_frozen_480_candidate_identity_and_settings(syn
     )
 
 
-def test_plan_is_built_once_and_unranked_execution_contract_is_explicit(
+def test_plan_is_built_once_across_complete_eight_window_smoke(
     synthetic_pack, tmp_path, monkeypatch
 ):
     root, run_spec, _, _ = synthetic_pack
@@ -127,13 +133,13 @@ def test_plan_is_built_once_and_unranked_execution_contract_is_explicit(
         data_root=root / "market",
         output_dir=tmp_path / "output",
         ticker_selectors=["AAAUSDT"],
-        window_selectors=[1],
         repo_root=root,
     )
 
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert build_calls == manifest["provenance"]["plan_build_count"] == 1
-    assert execution_calls == 2
+    assert len(manifest["groups"]) == 8
+    assert execution_calls == 8 * 2
     assert manifest["provenance"]["selected_slow_row_count"] == 0
     assert manifest["provenance"]["execution_backend"] == {
         "backend_kind": "compiled_numba",
@@ -141,7 +147,7 @@ def test_plan_is_built_once_and_unranked_execution_contract_is_explicit(
         "execution_modes": ["stacked"],
         "config_packings": ["table"],
         "unavailable_reasons": [],
-        "segment_execution_count": 2,
+        "segment_execution_count": 16,
     }
     assert manifest["groups"][0]["execution_backend"]["backend_kind"] == "compiled_numba"
     assert manifest["groups"][0]["execution_backend"]["compiled_batch_used"] is True
@@ -218,6 +224,109 @@ def test_effective_compiled_backend_is_required_before_group_publication(
         )
     assert not (output / "manifest.json").exists()
     assert not list(output.glob("groups/**/*.npy"))
+
+
+def test_candidate_error_precedes_backend_homogeneity_diagnostic(
+    synthetic_pack, tmp_path, monkeypatch
+):
+    root, run_spec, _, _ = synthetic_pack
+
+    def error_execute(plan, *_args, **_kwargs):
+        rows = list(fake_rows(plan))
+        rows[7] = replace(
+            rows[7],
+            status="error",
+            error="build_execution_data blew up",
+            backend_kind="reference",
+        )
+        return SimpleNamespace(
+            rows=tuple(rows),
+            selected=(),
+            metadata={
+                "backend_kind": "compiled_numba",
+                "compiled_batch_used": True,
+                "compiled_execution_mode": "stacked",
+                "compiled_config_packing": "table",
+                "compiled_unavailable_reason": None,
+            },
+        )
+
+    monkeypatch.setattr(
+        "tools.strategy_lab.generate.execute_grid_v2_candidates", error_execute
+    )
+    output = tmp_path / "candidate_error"
+    with pytest.raises(
+        DatasetError, match="candidate 8: build_execution_data blew up"
+    ):
+        generate_dataset(
+            run_spec,
+            data_root=root / "market",
+            output_dir=output,
+            ticker_selectors=["AAAUSDT"],
+            window_selectors=[1],
+            repo_root=root,
+        )
+    assert not (output / "manifest.json").exists()
+    assert not list(output.glob("groups/**/*.npy"))
+
+
+def test_compiled_unavailability_fails_before_execution_or_publication(
+    synthetic_pack, tmp_path, monkeypatch
+):
+    root, run_spec, _, _ = synthetic_pack
+    output = tmp_path / "compiled_unavailable"
+    execution_calls = 0
+
+    def forbidden_execute(*_args, **_kwargs):
+        nonlocal execution_calls
+        execution_calls += 1
+        raise AssertionError("candidate execution must not start")
+
+    monkeypatch.setattr(
+        "tools.strategy_lab.generate.compiled_batch_available", lambda: False
+    )
+    monkeypatch.setattr(
+        "tools.strategy_lab.generate.compiled_unavailable_reason",
+        lambda: "NUMBA_DISABLE_JIT is set.",
+    )
+    monkeypatch.setattr(
+        "tools.strategy_lab.generate.execute_grid_v2_candidates", forbidden_execute
+    )
+
+    with pytest.raises(
+        DatasetError,
+        match="compiled backend is unavailable: NUMBA_DISABLE_JIT is set",
+    ):
+        generate_dataset(
+            run_spec,
+            data_root=root / "market",
+            output_dir=output,
+            ticker_selectors=["AAAUSDT"],
+            window_selectors=[1],
+            repo_root=root,
+        )
+
+    assert execution_calls == 0
+    assert not output.exists()
+
+
+def test_compiled_availability_precheck_accepts_live_available_backend(monkeypatch):
+    reason_calls = 0
+
+    def forbidden_reason():
+        nonlocal reason_calls
+        reason_calls += 1
+        raise AssertionError("unavailable reason must not be requested")
+
+    monkeypatch.setattr(
+        "tools.strategy_lab.generate.compiled_batch_available", lambda: True
+    )
+    monkeypatch.setattr(
+        "tools.strategy_lab.generate.compiled_unavailable_reason", forbidden_reason
+    )
+
+    _require_compiled_backend_available()
+    assert reason_calls == 0
 
 
 def test_raw_failure_publishes_deterministic_quality_before_candidate_execution(

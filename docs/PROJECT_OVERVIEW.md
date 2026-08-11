@@ -17,13 +17,13 @@ project-root/
 |   |-- raw/                  # Source OHLCV CSV files
 |   `-- baseline/             # Regression test baselines
 |-- tools/                    # Development utilities
-|   |-- strategy_lab/         # V2-only run identity, source validation, and resumable dataset tool
+|   |-- strategy_lab/         # V2-only dataset and opt-in real certification tools
 |   |-- generate_baseline_s01.py # Generate regression baselines
 |   |-- benchmark_indicators.py  # Indicator performance tests
 |   |-- benchmark_metrics.py     # Metrics performance tests
 |   `-- test_all_ma_types.py     # Test all 11 MA types
 |-- tests/                    # Pytest test suite
-|   |-- strategy_lab/          # Phase 0/1-A identity, quality, projection, and resume tests
+|   |-- strategy_lab/          # Phase 0/1 and opt-in real certification tests
 |   |-- conftest.py            # Shared fixtures (isolated storage, Flask client)
 |   |-- test_sanity.py         # Infrastructure sanity checks
 |   |-- test_regression_s01.py # S01 baseline regression
@@ -223,8 +223,9 @@ mark-to-market drawdown is a separate metric and must use a distinct name.
 
 #### Strategy Lab (`tools/strategy_lab/`)
 
-Strategy Lab Phase 0/1-A is a tracked, local research foundation for certified
-Backtester V2 strategies only. It owns strict portable run-spec validation,
+Strategy Lab Phase 0 through Phase 1-B Stage 1 is a tracked, local research
+foundation for certified Backtester V2 strategies only. It owns strict
+portable run-spec validation,
 canonical JSON/SHA-256 identity, generic read-only V2 plan reconstruction, and
 a deterministic market-data inventory with frozen development/holdout cells.
 `data_quality.py` validates raw rows before loading and reuses the authoritative
@@ -232,6 +233,8 @@ calendar/warmup helpers. `dataset.py` owns deterministic candidate projection,
 the frozen float64 metric matrix, atomic artifacts, and checksum verification.
 `generate.py` owns registry-driven unranked V2 execution, subset labelling,
 identity-bound partial/final manifests, safe resume, and the CLI.
+`certify.py` owns opt-in real-pack validation, compiled/reference and selected
+typed-Slow parity, thread determinism, and deterministic smoke evidence.
 It reuses the existing strategy registry, execution profile, runtime versions,
 and Grid V2 planner; Backtester V1 and strategy-ID branches are rejected.
 
@@ -239,10 +242,13 @@ Tracked run specs and inventories contain content-derived, cross-host facts.
 Resolved data roots, host/platform, source mtimes, and verification timestamps
 remain under ignored `tools/strategy_lab/output/`; `cache/` and `tmp/` are also
 local. External CSVs are read-only and are resolved only from an explicit root
-or `MERLIN_STRATEGY_LAB_DATA_ROOT`, never by filesystem search. Phase 1-A can
-generate bounded candidate-level smoke shards, but it does not calculate rules,
-inspect development/holdout results, add MTM drawdown, generate the configured
-full dataset, perform real parity, or run WFA tie-back.
+or `MERLIN_STRATEGY_LAB_DATA_ROOT`, never by filesystem search. Phase 1-B Stage
+1 can generate bounded candidate-level smoke shards and run opt-in
+certification, but it does not calculate rules, inspect development/holdout
+results, add MTM drawdown, or generate the configured full dataset. Its
+production WFA tie-back remains blocked on worker propagation and stored Grid
+plan/selected-candidate identity; a separate production fix and successful
+rerun are required before the Stage 2 review gate can open.
 
 #### Indicators (`src/indicators/`)
 

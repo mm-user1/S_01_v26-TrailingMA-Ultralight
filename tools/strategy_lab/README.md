@@ -1,4 +1,4 @@
-# Strategy Lab — Phase 0 and Phase 1-A
+# Strategy Lab — Phase 0 through Phase 1-B Stage 1
 
 Strategy Lab is a local, research-only tool for certified Backtester V2
 strategies. Phase 0 ships configuration, pre-registration, deterministic V2
@@ -6,6 +6,18 @@ plan identity, and a read-only market-data inventory. Phase 1-A adds strict
 source/segment validation and a bounded, resumable candidate-level dataset
 generator. It does not calculate selection rules or inspect
 development/holdout performance.
+
+Phase 1-B Stage 1 adds opt-in real-pack structural certification, compiled to
+reference and selected typed-Slow parity, direct one-thread/two-thread
+determinism evidence, deterministic real smoke generation, and an isolated
+production HTTP WFA tie-back. These are pass/fail certification surfaces, not
+strategy analysis.
+
+The real-pack parity/thread/smoke command is verified. The production WFA
+tie-back is currently an opt-in blocker reproducer: production does not yet
+propagate the requested worker count or persist the Grid V2 plan fingerprint
+and selected candidate identity. A separate reviewed production patch must fix
+those three surfaces before this tie-back can pass.
 
 The initial frozen run is `runspecs/s06_bracket_mvp.json`: S06 B2 bracket-only,
 480 full-plan candidates, 30-minute data, 2-month IS / 1-month OOS, eight
@@ -25,6 +37,28 @@ On this Windows repository, use:
 ```powershell
 C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.config tools\strategy_lab\runspecs\s06_bracket_mvp.json
 C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest tests\strategy_lab -q
+```
+
+Run the explicit real-pack certification into a fresh task-owned directory:
+
+```powershell
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.certify `
+  tools\strategy_lab\runspecs\s06_bracket_mvp.json `
+  --data-root "<read-only-data-root>" `
+  --work-dir tools\strategy_lab\tmp\phase1b-certification
+```
+
+The isolated WFA tie-back is deliberately outside normal pytest discovery and
+reuses `smoke_one` from that command. It currently must stop on the three known
+production transport/resource blockers; do not treat it as a passing
+certification until the separate production patch lands:
+
+```powershell
+$env:MERLIN_STRATEGY_LAB_DATA_ROOT = "<read-only-data-root>"
+$env:MERLIN_STRATEGY_LAB_CERT_WORK_DIR = "<absolute-phase1b-certification-dir>"
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest `
+  tests\strategy_lab\phase1b_real_wfa_certification.py -q `
+  --basetemp=tools\strategy_lab\tmp\phase1b-wfa-pytest
 ```
 
 Generate an explicitly scoped smoke dataset (replace the example root and
@@ -91,7 +125,10 @@ the narrowly ignored `cache/` and `tmp/` directories.
 The generator constructs one validated V2 plan and directly executes every
 candidate for independent IS and OOS prepared segments. It requires effective
 `compiled_numba` execution for every returned row and rejects silent reference
-fallback before group publication. Group records bind IS/OOS backend facts for
+fallback before group publication. A live availability precheck reports the
+compiled-unavailability reason before any candidate execution or publication;
+post-execution row and backend checks remain in force. Candidate error rows
+retain their candidate ID and original error text. Group records bind IS/OOS backend facts for
 resume, and the final manifest summarizes execution modes and config packing.
 It pins one sequential outer worker, one separate compiled worker, one runtime
 Numba thread, the run-spec-owned 512 MB signal-cache limit, and
@@ -146,12 +183,16 @@ re-freeze for this MVP.
 
 ## Phase boundary and explicit non-goals
 
-Phase 1-A contains no Fast/Slow metric change, Grid ranking, WFA tie-back,
-selection-rule code, holdout analyzer, MTM drawdown, UI/API/storage integration,
-database, Queue, or Preset work. It does not certify or generate the configured
-full experiment. Real-pack generation, real parity, capability-aware
-multi-thread determinism, and WFA tie-back belong to Phase 1-B. Backtester V1
-is permanently unsupported.
+Phase 1-B Stage 1 may validate the complete source pack but executes only the
+outcome-independent CRVUSDT representative, creates temporary smoke datasets,
+and runs one WFA study under pytest's isolated storage. It does not publish the
+canonical dataset. Stage 2 alone may generate the canonical 944-group output at
+`tools/strategy_lab/output/s06_bracket_mvp_pre_mtm_v1`, and only after Stage 1
+is independently reviewed, the production WFA fix lands, and the tie-back is
+rerun successfully from an approved commit. Canonical generation remains
+prohibited while that gate is blocked. No command here calculates selection
+rules, inspects development or holdout outcomes, changes metrics, or draws a
+profitability conclusion. Backtester V1 is permanently unsupported.
 
 The historical prototype archive under
 `docs/_work/dev_01_strategy-lab/prototype_01_grid-selection-research/` is

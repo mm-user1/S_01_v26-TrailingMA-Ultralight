@@ -82,21 +82,23 @@ arguments to preserve the per-run temp directory for debugging.
 
 ### strategy_lab
 
-Phase 0/1-A foundation for the local, Backtester-V2-only Strategy Lab. It validates
-portable run specifications, rebuilds deterministic Grid V2 plan identity
-without market data, and creates a read-only source inventory with frozen
-development/holdout ownership. It also provides strict raw source/window/warmup
-validation and atomic, checksummed, resumable smoke dataset generation.
+Phase 0 through Phase 1-B Stage 1 tooling for the local, Backtester-V2-only
+Strategy Lab. It validates portable run specifications, rebuilds deterministic
+Grid V2 plan identity without market data, and creates a read-only source
+inventory with frozen development/holdout ownership. It also provides strict
+raw source/window/warmup validation, atomic checksummed resumable smoke dataset
+generation, and opt-in real-pack parity/thread/smoke certification.
 
 ```bash
 python -m tools.strategy_lab.config tools/strategy_lab/runspecs/s06_bracket_mvp.json
 python -m tools.strategy_lab.generate RUN_SPEC --data-root DATA_ROOT --output-dir OUTPUT --ticker SYMBOL --window 1
+python -m tools.strategy_lab.certify RUN_SPEC --data-root DATA_ROOT --work-dir WORK_DIR
 python -m pytest tests/strategy_lab -q
 ```
 
 See `tools/strategy_lab/README.md` for data-root precedence, dataset schema,
-resume semantics, and the Phase 1-A/1-B boundary. Strategy Lab follows the
-established tools bootstrap: derive the
+resume semantics, the current production WFA tie-back blocker, and the Stage 2
+review gate. Strategy Lab follows the established tools bootstrap: derive the
 repository root from `__file__`, add its `src/` directory once, and import
 existing Merlin V2 contracts rather than copying core code.
 
