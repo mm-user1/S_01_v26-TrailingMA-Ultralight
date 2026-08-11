@@ -9,10 +9,13 @@ import pytest
 from tools.strategy_lab.config import DATA_ROOT_ENV_VAR, canonical_sha256
 from tools.strategy_lab.inventory import (
     EXPECTED_HEADER,
+    FILENAME_INTERVAL_BOUNDARY,
     InventoryError,
     build_inventory,
     calculate_size_steps,
+    inclusive_utc_day_layout,
     load_inventory,
+    normalize_timestamp,
     parse_filename,
     resolve_data_root,
 )
@@ -22,11 +25,24 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CURRENT_INVENTORY = REPO_ROOT / "tools" / "strategy_lab" / "runspecs" / "tickers_current.json"
 
 
-def _write_csv(root, exchange, symbol, closes=(100.0, 101.0), *, header=None, timeframe=30):
-    path = root / f"{exchange}_{symbol}.P, {timeframe} 2025.08.01-2026.08.01.csv"
+def _write_csv(
+    root,
+    exchange,
+    symbol,
+    closes=(100.0, 101.0),
+    *,
+    header=None,
+    timeframe=30,
+    row_count=None,
+    timestamps=None,
+):
+    path = root / f"{exchange}_{symbol}.P, {timeframe} 2025.08.01-2025.08.01.csv"
     rows = [",".join(EXPECTED_HEADER if header is None else header)]
-    for index, close in enumerate(closes):
-        rows.append(f"{1754006400 + index * 1800},100,102,99,{close},1")
+    count = 1440 // timeframe if row_count is None else row_count
+    values = timestamps or [1754006400 + index * timeframe * 60 for index in range(count)]
+    for index, timestamp in enumerate(values):
+        close = closes[index % len(closes)]
+        rows.append(f"{timestamp},100,102,99,{close},1")
     path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return path
 
@@ -59,7 +75,7 @@ def test_data_root_precedence_and_missing_contract(tmp_path):
 
 
 @pytest.mark.parametrize("exchange", ["OKX", "BYBIT"])
-def test_filename_parser_records_half_open_current_shape(exchange):
+def test_filename_parser_records_inclusive_current_shape(exchange):
     parsed = parse_filename(
         f"{exchange}_COREUSDT.P, 30 2025.08.01-2026.08.01.csv",
         expected_timeframe_minutes=30,
@@ -70,6 +86,16 @@ def test_filename_parser_records_half_open_current_shape(exchange):
     assert parsed.canonical_symbol == "COREUSDT"
     assert parsed.start == "2025-08-01T00:00:00Z"
     assert parsed.end == "2026-08-01T00:00:00Z"
+    assert parsed.boundary == FILENAME_INTERVAL_BOUNDARY == "inclusive_utc_days"
+
+
+def test_one_day_inclusive_filename_interval_is_valid():
+    parsed = parse_filename(
+        "OKX_COREUSDT.P, 30 2025.08.01-2025.08.01.csv",
+        expected_timeframe_minutes=30,
+    )
+
+    assert parsed.start == parsed.end == "2025-08-01T00:00:00Z"
 
 
 @pytest.mark.parametrize(
@@ -78,12 +104,20 @@ def test_filename_parser_records_half_open_current_shape(exchange):
         ("OKX_COREUSDT.csv", "does not match"),
         ("OKX_COREUSDT.P, 15 2025.08.01-2026.08.01.csv", "timeframe 15"),
         ("OKX_КОРUSDT.P, 30 2025.08.01-2026.08.01.csv", "non-ASCII"),
-        ("OKX_COREUSDT.P, 30 2026.08.01-2025.08.01.csv", "non-increasing"),
+        ("OKX_COREUSDT.P, 30 2026.08.01-2025.08.01.csv", "inverted"),
     ],
 )
 def test_filename_parser_rejects_invalid_current_sources(filename, message):
     with pytest.raises(InventoryError, match=message):
         parse_filename(filename, expected_timeframe_minutes=30)
+
+
+def test_filename_parser_rejects_timeframe_that_does_not_divide_utc_day():
+    with pytest.raises(InventoryError, match="does not divide a full UTC day"):
+        parse_filename(
+            "OKX_COREUSDT.P, 7 2025.08.01-2025.08.01.csv",
+            expected_timeframe_minutes=7,
+        )
 
 
 def test_inventory_is_deterministic_independent_of_filesystem_order(tmp_path, monkeypatch):
@@ -104,6 +138,49 @@ def test_inventory_is_deterministic_independent_of_filesystem_order(tmp_path, mo
     assert [entry["split_digest"] for entry in normal["entries"]] == sorted(
         entry["split_digest"] for entry in normal["entries"]
     )
+
+
+def test_inclusive_layout_derives_exact_current_pack_boundaries():
+    layout = inclusive_utc_day_layout(
+        "2025-08-01T00:00:00Z",
+        "2026-08-01T00:00:00Z",
+        30,
+    )
+
+    assert layout.expected_days == 366
+    assert layout.bars_per_day == 48
+    assert layout.expected_rows == 17_568
+    assert layout.expected_first_timestamp == "2025-08-01T00:00:00Z"
+    assert layout.expected_last_timestamp == "2026-08-01T23:30:00Z"
+
+
+@pytest.mark.parametrize("row_count", [47, 49])
+def test_inventory_rejects_missing_or_extra_outer_rows(tmp_path, row_count):
+    _write_csv(tmp_path, "OKX", "AAAUSDT", row_count=row_count)
+    _write_csv(tmp_path, "BYBIT", "BBBUSD")
+
+    with pytest.raises(InventoryError, match="row_count.*expectation 48"):
+        _build(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "timestamps",
+    [
+        [1754008200 + index * 1800 for index in range(48)],
+        [1754006400 + index * 1800 for index in range(47)] + [1754092800],
+    ],
+)
+def test_inventory_rejects_wrong_first_or_last_timestamp(tmp_path, timestamps):
+    _write_csv(tmp_path, "OKX", "AAAUSDT", timestamps=timestamps)
+    _write_csv(tmp_path, "BYBIT", "BBBUSD")
+
+    with pytest.raises(InventoryError, match="first timestamp|last timestamp"):
+        _build(tmp_path)
+
+
+def test_numeric_millisecond_timestamp_is_not_guessed():
+    with pytest.raises(InventoryError, match="Unix seconds.*milliseconds are unsupported"):
+        normalize_timestamp("1754006400000", "fixture.time")
 
 
 def test_duplicate_canonical_symbols_are_rejected(tmp_path):
@@ -182,6 +259,39 @@ def test_frozen_assignment_is_authoritative_on_load(tmp_path):
         load_inventory(path)
 
 
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda value: value["filename_interval"].__setitem__("boundary", "half_open"),
+            "inclusive_utc_days",
+        ),
+        (
+            lambda value: value["entries"][0].__setitem__("first_timestamp", "not-a-time"),
+            "invalid timestamp",
+        ),
+        (
+            lambda value: value["entries"][0].__setitem__("last_timestamp", "2025-08-01T23:00:00Z"),
+            "last_timestamp: expected",
+        ),
+        (
+            lambda value: value["entries"][0].__setitem__("row_count", 47),
+            "row_count: expected 48",
+        ),
+    ],
+)
+def test_loaded_inventory_validates_inclusive_boundary_facts(tmp_path, mutate, message):
+    _write_csv(tmp_path, "OKX", "AAAUSDT")
+    _write_csv(tmp_path, "BYBIT", "BBBUSD")
+    inventory = _build(tmp_path)
+    mutate(inventory)
+    path = tmp_path / "inventory.json"
+    path.write_text(json.dumps(inventory), encoding="utf-8")
+
+    with pytest.raises(InventoryError, match=message):
+        load_inventory(path)
+
+
 def test_current_inventory_has_exact_stage_b_shape_and_no_host_facts():
     inventory = load_inventory(CURRENT_INVENTORY)
     forbidden = {"absolute_root", "resolved_absolute_root", "host", "platform", "mtime", "generation_time", "verification_timestamp"}
@@ -202,5 +312,17 @@ def test_current_inventory_has_exact_stage_b_shape_and_no_host_facts():
     assert sum(entry["exchange"] == "BYBIT" for entry in inventory.entries) == 8
     assert len({entry["canonical_symbol"] for entry in inventory.entries}) == 118
     assert min(entry["size_steps"] for entry in inventory.entries) == 405
+    assert inventory.raw["filename_interval"] == {
+        "start": "2025-08-01T00:00:00Z",
+        "end": "2026-08-01T00:00:00Z",
+        "boundary": "inclusive_utc_days",
+    }
+    assert {entry["row_count"] for entry in inventory.entries} == {17_568}
+    assert {entry["first_timestamp"] for entry in inventory.entries} == {
+        "2025-08-01T00:00:00Z"
+    }
+    assert {entry["last_timestamp"] for entry in inventory.entries} == {
+        "2026-08-01T23:30:00Z"
+    }
     assert forbidden.isdisjoint(keys(inventory.raw))
     assert inventory.sha256 == canonical_sha256(inventory.raw)

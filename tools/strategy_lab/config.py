@@ -40,6 +40,7 @@ INVENTORY_SCHEMA_VERSION = "strategy_lab_inventory_v1"
 RULES_REGISTRY_VERSION = "strategy_lab_rules_v1"
 EVIDENCE_CRITERIA_VERSION = "strategy_lab_evidence_v1"
 DATA_ROOT_ENV_VAR = "MERLIN_STRATEGY_LAB_DATA_ROOT"
+FILENAME_INTERVAL_BOUNDARY = "inclusive_utc_days"
 
 
 ANALYSIS_SCOPES = (
@@ -138,6 +139,48 @@ EVIDENCE_CRITERIA = {
         "bootstrap_interval": False,
         "pass_fail_threshold": False,
     },
+}
+
+RULE_REGISTRY = {
+    "version": RULES_REGISTRY_VERSION,
+    "minimum_completed_trades": 15,
+    "baseline_rule": "primary_profit",
+    "selectable_rules": [
+        "primary_profit",
+        "trade_gate15_profit",
+        "trade_gate15_profit_factor",
+        "trade_gate15_daily_sharpe",
+        "trade_gate15_romad_mtm",
+        "star_mean_profit",
+        "star_worst_profit",
+        "balanced_percentile_raw",
+        "balanced_percentile_star",
+    ],
+    "nomination_eligible_rules": [
+        "trade_gate15_profit",
+        "trade_gate15_profit_factor",
+        "trade_gate15_daily_sharpe",
+        "trade_gate15_romad_mtm",
+        "star_mean_profit",
+        "star_worst_profit",
+        "balanced_percentile_raw",
+        "balanced_percentile_star",
+    ],
+    "non_nominatable_diagnostics": [
+        "trade_gate15_romad_realized",
+        "balanced_percentile_raw_realized",
+        "balanced_percentile_star_realized",
+        "pareto_plus_primary",
+        "population_no_skill",
+        "oos_oracle",
+        "oos_anti_oracle",
+    ],
+    "tie_break": [
+        {"field": "rule_score", "direction": "descending"},
+        {"field": "IS net_profit_pct", "direction": "descending"},
+        {"field": "semantic_key", "direction": "ascending"},
+        {"field": "candidate_id", "direction": "ascending"},
+    ],
 }
 
 
@@ -258,6 +301,21 @@ def _string_list(value: Any, field: str, *, allow_empty: bool = False) -> tuple[
 
 def _months_between(start: date, end: date) -> int:
     return (end.year - start.year) * 12 + end.month - start.month
+
+
+def complete_calendar_window_count(
+    start: date,
+    end: date,
+    is_period_months: int,
+    oos_period_months: int,
+) -> int:
+    """Count complete rolling calendar windows under Merlin's OOS step."""
+
+    months = _months_between(start, end)
+    required = is_period_months + oos_period_months
+    if months < required:
+        return 0
+    return (months - required) // oos_period_months + 1
 
 
 def _load_json_object(path: Path, field: str) -> Mapping[str, Any]:
@@ -419,6 +477,18 @@ def _validate_plan(
         raise StrategyLabConfigError(
             "generation.planning.expected_semantic_key_digest: rebuilt semantic digest mismatch."
         )
+    invalid_diagnostics = [
+        item
+        for item in plan.metadata.get("diagnostics", ())
+        if item.get("severity") in {"warning", "error"}
+    ]
+    if invalid_diagnostics:
+        levels = ", ".join(
+            f"{item.get('severity')}:{item.get('code')}" for item in invalid_diagnostics
+        )
+        raise StrategyLabConfigError(
+            f"generation.planning: rebuilt plan contains warning/error diagnostic(s): {levels}."
+        )
     for name in axes:
         rebuilt = list(plan.parameter_domains[name].values)
         if rebuilt != list(axis_values[name]):
@@ -460,8 +530,10 @@ def _validate_common(generation: Mapping[str, Any], prereg: Mapping[str, Any]) -
     _integer(market["timeframe_minutes"], "generation.market_data.timeframe_minutes", minimum=1)
     filename_start = _date(market["filename_start"], "generation.market_data.filename_start")
     filename_end = _date(market["filename_end"], "generation.market_data.filename_end")
-    if filename_start >= filename_end or market["filename_interval"] != "half_open":
-        raise StrategyLabConfigError("generation.market_data: filename dates must be an increasing half-open interval.")
+    if filename_start > filename_end or market["filename_interval"] != FILENAME_INTERVAL_BOUNDARY:
+        raise StrategyLabConfigError(
+            "generation.market_data: filename dates must be inclusive UTC days with start <= end."
+        )
     if market["expected_header"] != ["time", "open", "high", "low", "close", "Volume"]:
         raise StrategyLabConfigError("generation.market_data.expected_header: unsupported CSV schema.")
     exchange_counts = _object(market["expected_exchange_counts"], "generation.market_data.expected_exchange_counts")
@@ -484,13 +556,13 @@ def _validate_common(generation: Mapping[str, Any], prereg: Mapping[str, Any]) -
     end = _date(windows["requested_end"], "generation.windows.requested_end")
     if start >= end or start.day != anchor or end.day != anchor:
         raise StrategyLabConfigError("generation.windows: dates must increase and use the calendar anchor day.")
-    expected_windows = _integer(windows["expected_window_count"], "generation.windows.expected_window_count", minimum=1)
-    calculated = _months_between(start, end) - is_months - oos_months + 1
+    expected_windows = _integer(windows["expected_window_count"], "generation.windows.expected_window_count", minimum=0)
+    calculated = complete_calendar_window_count(start, end, is_months, oos_months)
     if calculated != expected_windows:
         raise StrategyLabConfigError(
             f"generation.windows.expected_window_count: expected {calculated} from the declared calendar contract."
         )
-    _integer(windows["warmup_bars"], "generation.windows.warmup_bars", minimum=0)
+    _integer(windows["warmup_bars"], "generation.windows.warmup_bars", minimum=1)
 
     economics = _object(generation["economics"], "generation.economics")
     _keys(economics, "generation.economics", {"base_params", "tick_size_provenance", "slippage_modelled", "funding_modelled"})
@@ -508,16 +580,47 @@ def _validate_common(generation: Mapping[str, Any], prereg: Mapping[str, Any]) -
     _integer(resources["numba_threads"], "generation.resources.numba_threads", minimum=1)
     _number(resources["grid_v2_max_cache_mb"], "generation.resources.grid_v2_max_cache_mb", positive=True)
 
-    _keys(prereg, "preregistration", {"split", "analysis_scopes", "rules_registry_version", "primary_comparison", "evidence_criteria_version", "maximum_nominated_rules", "observation_contract", "evidence_criteria"})
-    if prereg["rules_registry_version"] != RULES_REGISTRY_VERSION:
-        raise StrategyLabConfigError(f"preregistration.rules_registry_version: expected '{RULES_REGISTRY_VERSION}'.")
+    _keys(prereg, "preregistration", {"split", "analysis_scopes", "rule_registry", "primary_comparison", "evidence_criteria_version", "maximum_nominated_rules", "observation_contract", "evidence_criteria"})
+    if prereg["rule_registry"] != RULE_REGISTRY:
+        raise StrategyLabConfigError(
+            "preregistration.rule_registry: does not match the frozen strategy_lab_rules_v1 contract."
+        )
     if prereg["primary_comparison"] != "top1_oos_net_profit_vs_primary_profit":
         raise StrategyLabConfigError("preregistration.primary_comparison: unsupported comparison.")
     if prereg["evidence_criteria_version"] != EVIDENCE_CRITERIA_VERSION:
         raise StrategyLabConfigError(f"preregistration.evidence_criteria_version: expected '{EVIDENCE_CRITERIA_VERSION}'.")
     if _integer(prereg["maximum_nominated_rules"], "preregistration.maximum_nominated_rules", minimum=1) != 3:
         raise StrategyLabConfigError("preregistration.maximum_nominated_rules: expected 3.")
-    if prereg["analysis_scopes"] != list(ANALYSIS_SCOPES):
+    scopes = prereg["analysis_scopes"]
+    if not isinstance(scopes, list):
+        raise StrategyLabConfigError("preregistration.analysis_scopes: expected a list.")
+    for scope_index, scope in enumerate(scopes):
+        if not isinstance(scope, Mapping):
+            raise StrategyLabConfigError(
+                f"preregistration.analysis_scopes[{scope_index}]: expected an object."
+            )
+        numbers = scope.get("window_numbers")
+        if not isinstance(numbers, list):
+            raise StrategyLabConfigError(
+                f"preregistration.analysis_scopes[{scope_index}].window_numbers: expected a list."
+            )
+        validated = [
+            _integer(
+                number,
+                f"preregistration.analysis_scopes[{scope_index}].window_numbers[{index}]",
+                minimum=1,
+            )
+            for index, number in enumerate(numbers)
+        ]
+        if len(set(validated)) != len(validated):
+            raise StrategyLabConfigError(
+                f"preregistration.analysis_scopes[{scope_index}].window_numbers: duplicates are invalid."
+            )
+        if any(number > expected_windows for number in validated):
+            raise StrategyLabConfigError(
+                f"preregistration.analysis_scopes[{scope_index}].window_numbers: values must be within 1..expected_window_count."
+            )
+    if scopes != list(ANALYSIS_SCOPES):
         raise StrategyLabConfigError("preregistration.analysis_scopes: does not match the frozen four-scope contract.")
     if prereg["observation_contract"] != OBSERVATION_CONTRACT:
         raise StrategyLabConfigError("preregistration.observation_contract: does not match the frozen contract.")
@@ -551,6 +654,15 @@ def load_run_spec(
     expected_inventory_sha = _sha256(inventory_contract["inventory_sha256"], "generation.inventory.inventory_sha256")
     expected_ticker_digest = _sha256(inventory_contract["ticker_list_digest"], "generation.inventory.ticker_list_digest")
     expected_tickers = _integer(inventory_contract["expected_ticker_count"], "generation.inventory.expected_ticker_count", minimum=1)
+    market = _object(generation["market_data"], "generation.market_data")
+    expected_exchange_counts = _object(
+        market["expected_exchange_counts"],
+        "generation.market_data.expected_exchange_counts",
+    )
+    if sum(expected_exchange_counts.values()) != expected_tickers:
+        raise StrategyLabConfigError(
+            "generation.market_data.expected_exchange_counts: sum must equal generation.inventory.expected_ticker_count."
+        )
 
     split = _object(prereg["split"], "preregistration.split")
     _keys(split, "preregistration.split", {"algorithm", "development_ticker_count", "holdout_ticker_count"})
@@ -580,6 +692,37 @@ def load_run_spec(
             raise StrategyLabConfigError("generation.inventory.expected_ticker_count: inventory count mismatch.")
         if inventory.development_count != dev_count or inventory.holdout_count != holdout_count:
             raise StrategyLabConfigError("preregistration.split: inventory assignment counts mismatch.")
+        inventory_interval = inventory.raw["filename_interval"]
+        if market["timeframe_minutes"] != inventory.raw["timeframe_minutes"]:
+            raise StrategyLabConfigError(
+                "generation.market_data.timeframe_minutes: does not match inventory.timeframe_minutes."
+            )
+        expected_start = f"{market['filename_start']}T00:00:00Z"
+        expected_end = f"{market['filename_end']}T00:00:00Z"
+        if inventory_interval["start"] != expected_start:
+            raise StrategyLabConfigError(
+                "generation.market_data.filename_start: does not match inventory.filename_interval.start."
+            )
+        if inventory_interval["end"] != expected_end:
+            raise StrategyLabConfigError(
+                "generation.market_data.filename_end: does not match inventory.filename_interval.end."
+            )
+        if inventory_interval["boundary"] != market["filename_interval"]:
+            raise StrategyLabConfigError(
+                "generation.market_data.filename_interval: does not match inventory.filename_interval.boundary."
+            )
+        if inventory.raw["header"] != market["expected_header"]:
+            raise StrategyLabConfigError(
+                "generation.market_data.expected_header: does not match inventory.header."
+            )
+        observed_exchange_counts: dict[str, int] = {}
+        for entry in inventory.entries:
+            exchange = str(entry["exchange"])
+            observed_exchange_counts[exchange] = observed_exchange_counts.get(exchange, 0) + 1
+        if observed_exchange_counts != dict(expected_exchange_counts):
+            raise StrategyLabConfigError(
+                "generation.market_data.expected_exchange_counts: does not match inventory entries."
+            )
 
     plan = _validate_plan(config, generation) if validate_plan else None
     return RunSpec(

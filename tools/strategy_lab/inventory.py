@@ -12,12 +12,13 @@ import platform
 import re
 import subprocess
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .config import (
     DATA_ROOT_ENV_VAR,
+    FILENAME_INTERVAL_BOUNDARY,
     INVENTORY_SCHEMA_VERSION,
     StrategyLabConfigError,
     canonical_json_bytes,
@@ -46,6 +47,16 @@ class ParsedFilename:
     timeframe_minutes: int
     start: str
     end: str
+    boundary: str
+
+
+@dataclass(frozen=True)
+class InclusiveUtcDayLayout:
+    expected_days: int
+    bars_per_day: int
+    expected_rows: int
+    expected_first_timestamp: str
+    expected_last_timestamp: str
 
 
 @dataclass(frozen=True)
@@ -86,6 +97,51 @@ def _iso_date(raw: str, field: str) -> str:
     return parsed.isoformat().replace("+00:00", "Z")
 
 
+def inclusive_utc_day_layout(
+    start: str,
+    end: str,
+    timeframe_minutes: int,
+) -> InclusiveUtcDayLayout:
+    """Derive exact full-day coverage for an inclusive UTC filename range."""
+
+    if (
+        isinstance(timeframe_minutes, bool)
+        or not isinstance(timeframe_minutes, int)
+        or timeframe_minutes <= 0
+    ):
+        raise InventoryError("timeframe_minutes: expected a positive integer.")
+    if 1440 % timeframe_minutes != 0:
+        raise InventoryError(
+            f"timeframe_minutes: {timeframe_minutes} does not divide a full UTC day (1440 minutes)."
+        )
+    try:
+        start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        raise InventoryError("filename interval: expected valid UTC date boundaries.") from None
+    if (
+        start_dt.tzinfo is None
+        or end_dt.tzinfo is None
+        or start_dt.utcoffset() != timedelta(0)
+        or end_dt.utcoffset() != timedelta(0)
+        or start_dt.time() != datetime.min.time()
+        or end_dt.time() != datetime.min.time()
+    ):
+        raise InventoryError("filename interval: expected UTC midnight date boundaries.")
+    if start_dt > end_dt:
+        raise InventoryError("filename interval: inclusive UTC dates are inverted.")
+    expected_days = (end_dt.date() - start_dt.date()).days + 1
+    bars_per_day = 1440 // timeframe_minutes
+    last_dt = end_dt + timedelta(days=1, minutes=-timeframe_minutes)
+    return InclusiveUtcDayLayout(
+        expected_days=expected_days,
+        bars_per_day=bars_per_day,
+        expected_rows=expected_days * bars_per_day,
+        expected_first_timestamp=start_dt.isoformat().replace("+00:00", "Z"),
+        expected_last_timestamp=last_dt.isoformat().replace("+00:00", "Z"),
+    )
+
+
 def parse_filename(filename: str, *, expected_timeframe_minutes: int) -> ParsedFilename:
     if not filename.isascii():
         raise InventoryError(f"filename: {filename!r} contains a non-ASCII identifier.")
@@ -108,8 +164,9 @@ def parse_filename(filename: str, *, expected_timeframe_minutes: int) -> ParsedF
         )
     start = _iso_date(match.group("start"), "filename start")
     end = _iso_date(match.group("end"), "filename end")
-    if start >= end:
-        raise InventoryError(f"filename: {filename!r} has a non-increasing half-open date interval.")
+    if start > end:
+        raise InventoryError(f"filename: {filename!r} has an inverted inclusive UTC date interval.")
+    inclusive_utc_day_layout(start, end, timeframe)
     canonical_symbol = symbol_raw.upper()
     return ParsedFilename(
         exchange=exchange_raw.upper(),
@@ -118,6 +175,7 @@ def parse_filename(filename: str, *, expected_timeframe_minutes: int) -> ParsedF
         timeframe_minutes=timeframe,
         start=start,
         end=end,
+        boundary=FILENAME_INTERVAL_BOUNDARY,
     )
 
 
@@ -129,7 +187,9 @@ def normalize_timestamp(raw: str, field: str) -> str:
             if not math.isfinite(number):
                 raise ValueError
             if abs(number) >= 100_000_000_000:
-                number /= 1000.0
+                raise InventoryError(
+                    f"{field}: numeric timestamps must use Unix seconds; milliseconds are unsupported."
+                )
             parsed = datetime.fromtimestamp(number, tz=UTC)
         else:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -137,6 +197,8 @@ def normalize_timestamp(raw: str, field: str) -> str:
                 parsed = parsed.replace(tzinfo=UTC)
             else:
                 parsed = parsed.astimezone(UTC)
+    except InventoryError:
+        raise
     except (ValueError, OverflowError, OSError):
         raise InventoryError(f"{field}: invalid timestamp {raw!r}.") from None
     return parsed.isoformat().replace("+00:00", "Z")
@@ -235,6 +297,23 @@ def _read_source(
         raise InventoryError(f"source {path.name}: invalid UTF-8: {exc}") from None
     if row_count == 0 or first_timestamp is None or last_timestamp is None:
         raise InventoryError(f"source {path.name}: no data rows.")
+    layout = inclusive_utc_day_layout(
+        parsed.start,
+        parsed.end,
+        parsed.timeframe_minutes,
+    )
+    if row_count != layout.expected_rows:
+        raise InventoryError(
+            f"source {path.name}: row_count {row_count} does not match inclusive UTC-day expectation {layout.expected_rows}."
+        )
+    if first_timestamp != layout.expected_first_timestamp:
+        raise InventoryError(
+            f"source {path.name}: first timestamp {first_timestamp} does not match expected {layout.expected_first_timestamp}."
+        )
+    if last_timestamp != layout.expected_last_timestamp:
+        raise InventoryError(
+            f"source {path.name}: last timestamp {last_timestamp} does not match expected {layout.expected_last_timestamp}."
+        )
     if not math.isfinite(max_close):
         raise InventoryError(f"source {path.name}: no finite positive Close value.")
     size_steps = calculate_size_steps(
@@ -344,7 +423,7 @@ def build_inventory(
         "filename_interval": {
             "start": filename_interval[0],
             "end": filename_interval[1],
-            "boundary": "half_open",
+            "boundary": FILENAME_INTERVAL_BOUNDARY,
         },
         "split": {
             "algorithm": SPLIT_ALGORITHM,
@@ -388,10 +467,17 @@ def load_inventory(path: str | Path) -> Inventory:
         raise InventoryError("inventory.header: unsupported schema.")
     timeframe = _require_int(raw["timeframe_minutes"], "inventory.timeframe_minutes", minimum=1)
     interval = raw["filename_interval"]
-    if not isinstance(interval, Mapping) or set(interval) != {"start", "end", "boundary"} or interval["boundary"] != "half_open":
-        raise InventoryError("inventory.filename_interval: invalid half-open interval contract.")
-    if not isinstance(interval["start"], str) or not isinstance(interval["end"], str) or interval["start"] >= interval["end"]:
-        raise InventoryError("inventory.filename_interval: dates must be increasing UTC strings.")
+    if (
+        not isinstance(interval, Mapping)
+        or set(interval) != {"start", "end", "boundary"}
+        or interval["boundary"] != FILENAME_INTERVAL_BOUNDARY
+    ):
+        raise InventoryError(
+            f"inventory.filename_interval: boundary must be '{FILENAME_INTERVAL_BOUNDARY}'."
+        )
+    if not isinstance(interval["start"], str) or not isinstance(interval["end"], str):
+        raise InventoryError("inventory.filename_interval: start and end must be UTC strings.")
+    layout = inclusive_utc_day_layout(interval["start"], interval["end"], timeframe)
     split = raw["split"]
     if not isinstance(split, Mapping) or set(split) != {"algorithm", "development_ticker_count", "holdout_ticker_count"}:
         raise InventoryError("inventory.split: invalid split contract.")
@@ -436,7 +522,33 @@ def load_inventory(path: str | Path) -> Inventory:
             raise InventoryError(f"inventory.entries[{index}]: filename interval differs from the pack.")
         if raw_entry["header_sha256"] != canonical_sha256(EXPECTED_HEADER):
             raise InventoryError(f"inventory.entries[{index}].header_sha256: header digest mismatch.")
-        _require_int(raw_entry["row_count"], f"inventory.entries[{index}].row_count", minimum=1)
+        row_count = _require_int(raw_entry["row_count"], f"inventory.entries[{index}].row_count", minimum=1)
+        if row_count != layout.expected_rows:
+            raise InventoryError(
+                f"inventory.entries[{index}].row_count: expected {layout.expected_rows}."
+            )
+        first_timestamp = raw_entry["first_timestamp"]
+        last_timestamp = raw_entry["last_timestamp"]
+        if not isinstance(first_timestamp, str):
+            raise InventoryError(f"inventory.entries[{index}].first_timestamp: expected a timestamp string.")
+        if not isinstance(last_timestamp, str):
+            raise InventoryError(f"inventory.entries[{index}].last_timestamp: expected a timestamp string.")
+        normalized_first = normalize_timestamp(
+            first_timestamp,
+            f"inventory.entries[{index}].first_timestamp",
+        )
+        normalized_last = normalize_timestamp(
+            last_timestamp,
+            f"inventory.entries[{index}].last_timestamp",
+        )
+        if normalized_first != layout.expected_first_timestamp:
+            raise InventoryError(
+                f"inventory.entries[{index}].first_timestamp: expected {layout.expected_first_timestamp}."
+            )
+        if normalized_last != layout.expected_last_timestamp:
+            raise InventoryError(
+                f"inventory.entries[{index}].last_timestamp: expected {layout.expected_last_timestamp}."
+            )
         _require_int(raw_entry["size_steps"], f"inventory.entries[{index}].size_steps", minimum=100)
         _require_int(raw_entry["file_size"], f"inventory.entries[{index}].file_size", minimum=1)
         max_close = raw_entry["max_close"]

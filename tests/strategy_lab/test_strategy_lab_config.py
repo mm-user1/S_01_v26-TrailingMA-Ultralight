@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 import json
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from tools.strategy_lab.config import (
     ANALYSIS_SCOPES,
     EVIDENCE_CRITERIA,
     OBSERVATION_CONTRACT,
+    RULE_REGISTRY,
     StrategyLabConfigError,
     canonical_sha256,
     load_run_spec,
@@ -48,10 +50,12 @@ def test_current_runspec_is_typed_bound_and_identity_checked():
     assert spec.strategy_id == "s06_r_trend_v02_b2"
     assert spec.plan.deduped_candidate_count == 480
     assert spec.plan.metadata["planning"]["effective_policy"] == "full"
-    assert spec.inventory.sha256 == "87abcb709ad854b0b2f9d1049d34e38bdac26ad635a7b3650538fdb32426c588"
+    assert spec.inventory.sha256 == "0284a5040039d2f27211a538a4985ab6bb0702d57769bcae81e51f48e26d1d7d"
     assert spec.inventory.ticker_list_digest == "1cb80d62d30ddf5103b0b3fedb77cf193402991ecc6bc535923c3cfa73165fb5"
     assert spec.generation_sha256 == canonical_sha256(spec.generation)
     assert spec.pre_registration_sha256 == canonical_sha256(spec.raw)
+    assert spec.generation_sha256 == "d748e87e4221eb76feb33c2294788265340239c0979329a96557b3a345bdbe29"
+    assert spec.pre_registration_sha256 == "e45105989c8786fe4c36719e616671cfcefad79874ea8d2de26f87bea40d8539"
 
 
 def test_another_registered_v2_strategy_uses_the_same_generic_loader(tmp_path):
@@ -134,6 +138,10 @@ def test_malformed_and_non_object_json_are_concise(tmp_path, contents, message):
             "dates must increase",
         ),
         (
+            lambda raw: raw["generation"]["windows"].__setitem__("expected_window_count", 7),
+            "expected_window_count: expected 8",
+        ),
+        (
             lambda raw: raw["preregistration"]["split"].__setitem__("holdout_ticker_count", 93),
             "must equal expected_ticker_count",
         ),
@@ -182,6 +190,45 @@ def test_inventory_digest_and_count_binding_are_strict(tmp_path):
         load_run_spec(_write_spec(tmp_path, raw), repo_root=tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda raw: (
+                raw["generation"]["market_data"].__setitem__("timeframe_minutes", 15),
+                raw["generation"]["windows"].__setitem__("timeframe_minutes", 15),
+            ),
+            "market_data.timeframe_minutes.*inventory.timeframe_minutes",
+        ),
+        (
+            lambda raw: raw["generation"]["market_data"].__setitem__("filename_start", "2025-07-01"),
+            "market_data.filename_start.*inventory.filename_interval.start",
+        ),
+        (
+            lambda raw: raw["generation"]["market_data"].__setitem__("filename_end", "2026-07-01"),
+            "market_data.filename_end.*inventory.filename_interval.end",
+        ),
+        (
+            lambda raw: raw["generation"]["market_data"].__setitem__("filename_interval", "half_open"),
+            "inclusive UTC days",
+        ),
+        (
+            lambda raw: raw["generation"]["market_data"]["expected_exchange_counts"].update({"BYBIT": 9, "OKX": 109}),
+            "expected_exchange_counts.*inventory entries",
+        ),
+        (
+            lambda raw: raw["generation"]["market_data"]["expected_exchange_counts"].__setitem__("OKX", 109),
+            "expected_exchange_counts.*sum.*expected_ticker_count",
+        ),
+    ],
+)
+def test_market_data_contract_is_cross_checked_against_inventory(tmp_path, mutate, message):
+    raw = _raw_runspec()
+    mutate(raw)
+
+    with pytest.raises(StrategyLabConfigError, match=message):
+        load_run_spec(_write_spec(tmp_path, raw), repo_root=tmp_path)
+
 def test_evidence_and_scope_facts_round_trip_exactly():
     spec = load_run_spec(RUNSPEC_PATH)
 
@@ -189,6 +236,75 @@ def test_evidence_and_scope_facts_round_trip_exactly():
     assert spec.preregistration["observation_contract"] == OBSERVATION_CONTRACT
     assert spec.preregistration["evidence_criteria"] == EVIDENCE_CRITERIA
     assert spec.preregistration["maximum_nominated_rules"] == 3
+    assert spec.preregistration["rule_registry"] == RULE_REGISTRY
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda registry: registry["selectable_rules"].__setitem__(0, "changed"),
+        lambda registry: registry["selectable_rules"].reverse(),
+        lambda registry: registry.__setitem__("minimum_completed_trades", 14),
+        lambda registry: registry["nomination_eligible_rules"].pop(),
+        lambda registry: registry["non_nominatable_diagnostics"].pop(),
+        lambda registry: registry["tie_break"][0].__setitem__("direction", "ascending"),
+    ],
+)
+def test_rule_registry_mutations_fail_strict_validation(tmp_path, mutate):
+    raw = _raw_runspec()
+    mutate(raw["preregistration"]["rule_registry"])
+
+    with pytest.raises(StrategyLabConfigError, match="rule_registry"):
+        load_run_spec(_write_spec(tmp_path, raw), repo_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("numbers", "message"),
+    [
+        ([1, 9], "within 1..expected_window_count"),
+        ([1, 1], "duplicates are invalid"),
+    ],
+)
+def test_scope_window_numbers_are_bounded_and_unique(tmp_path, numbers, message):
+    raw = _raw_runspec()
+    raw["preregistration"]["analysis_scopes"][0]["window_numbers"] = numbers
+
+    with pytest.raises(StrategyLabConfigError, match=message):
+        load_run_spec(_write_spec(tmp_path, raw), repo_root=tmp_path)
+
+
+def test_zero_warmup_is_rejected(tmp_path):
+    raw = _raw_runspec()
+    raw["generation"]["windows"]["warmup_bars"] = 0
+
+    with pytest.raises(StrategyLabConfigError, match="warmup_bars.*>= 1"):
+        load_run_spec(_write_spec(tmp_path, raw), repo_root=tmp_path)
+
+
+@pytest.mark.parametrize("severity", ["warning", "error"])
+def test_rebuilt_plan_rejects_warning_or_error_diagnostic(tmp_path, monkeypatch, severity):
+    import tools.strategy_lab.config as config_module
+
+    raw = _raw_runspec()
+    original = config_module.build_grid_v2_plan
+
+    def build_with_diagnostic(*args, **kwargs):
+        plan = original(*args, **kwargs)
+        metadata = dict(plan.metadata)
+        metadata["diagnostics"] = tuple(metadata["diagnostics"]) + (
+            {"severity": severity, "code": "TEST_DIAGNOSTIC"},
+        )
+        return replace(plan, metadata=metadata)
+
+    monkeypatch.setattr(config_module, "build_grid_v2_plan", build_with_diagnostic)
+    with pytest.raises(StrategyLabConfigError, match="warning/error diagnostic"):
+        load_run_spec(_write_spec(tmp_path, raw), repo_root=tmp_path)
+
+
+def test_current_info_only_plan_is_allowed():
+    spec = load_run_spec(RUNSPEC_PATH, validate_inventory=False)
+
+    assert [item["severity"] for item in spec.plan.metadata["diagnostics"]] == ["info"]
 
 
 def test_canonical_digest_is_stable_in_two_independent_processes():

@@ -47,8 +47,12 @@ for alternate data or stores the absolute root in tracked identity.
 Source CSV files are opened only for reading. The inventory builder rejects
 subdirectories, source symlinks, malformed filenames/schema, duplicate
 canonical symbols, unexpected counts, and sizing headroom below 100 contract
-steps. It never sorts or rewrites source rows and never writes beside market
-data.
+steps. Filename dates are inclusive UTC days; each file must have the derived
+full-day row count and exact first/last bar boundaries. Numeric timestamps are
+Unix seconds, with no millisecond inference. The sizing gate is an
+initial-capital bound and does not claim unchanged headroom after an extreme
+equity drawdown. The builder never sorts or rewrites source rows and never
+writes beside market data.
 
 Tracked, cross-host facts live in `runspecs/`. Host/platform, resolved absolute
 root, source mtimes, verification time, and tool Git revision are local
@@ -67,6 +71,10 @@ The current primary holdout is cross-sectional confirmation on new tickers over
 the same six months as development, not independent temporal confirmation.
 Windows 7-8 are mandatory descriptive temporal checks in the eventual MVP and
 have no Phase 0 result, bootstrap interval, or pass/fail threshold.
+
+Execution resources intentionally remain inside the current generation
+identity, so changing worker, Numba-thread, or cache limits requires a reviewed
+re-freeze for this MVP.
 
 ## Explicit non-goals
 

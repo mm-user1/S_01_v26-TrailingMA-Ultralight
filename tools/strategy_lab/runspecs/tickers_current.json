@@ -2244,7 +2244,7 @@
     }
   ],
   "filename_interval": {
-    "boundary": "half_open",
+    "boundary": "inclusive_utc_days",
     "end": "2026-08-01T00:00:00Z",
     "start": "2025-08-01T00:00:00Z"
   },

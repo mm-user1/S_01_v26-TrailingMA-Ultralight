@@ -48,7 +48,7 @@
     "inventory": {
       "expected_ticker_count": 118,
       "inventory_path": "tools/strategy_lab/runspecs/tickers_current.json",
-      "inventory_sha256": "87abcb709ad854b0b2f9d1049d34e38bdac26ad635a7b3650538fdb32426c588",
+      "inventory_sha256": "0284a5040039d2f27211a538a4985ab6bb0702d57769bcae81e51f48e26d1d7d",
       "ticker_list_digest": "1cb80d62d30ddf5103b0b3fedb77cf193402991ecc6bc535923c3cfa73165fb5"
     },
     "market_data": {
@@ -65,7 +65,7 @@
         "Volume"
       ],
       "filename_end": "2026-08-01",
-      "filename_interval": "half_open",
+      "filename_interval": "inclusive_utc_days",
       "filename_start": "2025-08-01",
       "timeframe_minutes": 30
     },
@@ -306,7 +306,59 @@
       "unavailable_non_finite_metric": "excluded_from_selection_not_zero_filled"
     },
     "primary_comparison": "top1_oos_net_profit_vs_primary_profit",
-    "rules_registry_version": "strategy_lab_rules_v1",
+    "rule_registry": {
+      "baseline_rule": "primary_profit",
+      "minimum_completed_trades": 15,
+      "nomination_eligible_rules": [
+        "trade_gate15_profit",
+        "trade_gate15_profit_factor",
+        "trade_gate15_daily_sharpe",
+        "trade_gate15_romad_mtm",
+        "star_mean_profit",
+        "star_worst_profit",
+        "balanced_percentile_raw",
+        "balanced_percentile_star"
+      ],
+      "non_nominatable_diagnostics": [
+        "trade_gate15_romad_realized",
+        "balanced_percentile_raw_realized",
+        "balanced_percentile_star_realized",
+        "pareto_plus_primary",
+        "population_no_skill",
+        "oos_oracle",
+        "oos_anti_oracle"
+      ],
+      "selectable_rules": [
+        "primary_profit",
+        "trade_gate15_profit",
+        "trade_gate15_profit_factor",
+        "trade_gate15_daily_sharpe",
+        "trade_gate15_romad_mtm",
+        "star_mean_profit",
+        "star_worst_profit",
+        "balanced_percentile_raw",
+        "balanced_percentile_star"
+      ],
+      "tie_break": [
+        {
+          "direction": "descending",
+          "field": "rule_score"
+        },
+        {
+          "direction": "descending",
+          "field": "IS net_profit_pct"
+        },
+        {
+          "direction": "ascending",
+          "field": "semantic_key"
+        },
+        {
+          "direction": "ascending",
+          "field": "candidate_id"
+        }
+      ],
+      "version": "strategy_lab_rules_v1"
+    },
     "split": {
       "algorithm": "sha256_canonical_symbol_ascending_v1",
       "development_ticker_count": 24,
