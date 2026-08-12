@@ -13,11 +13,11 @@ determinism evidence, deterministic real smoke generation, and an isolated
 production HTTP WFA tie-back. These are pass/fail certification surfaces, not
 strategy analysis.
 
-The real-pack parity/thread/smoke command is verified. The production WFA
-tie-back is currently an opt-in blocker reproducer: production does not yet
-propagate the requested worker count or persist the Grid V2 plan fingerprint
-and selected candidate identity. A separate reviewed production patch must fix
-those three surfaces before this tie-back can pass.
+The real-pack parity/thread/smoke command and complete eight-window production
+HTTP WFA tie-back are verified. The transport path honours the frozen requested
+worker count, persists the exact Grid V2 plan fingerprint, and retains selected
+Fast rank plus semantic/candidate identity. Phase 1-B Stage 1 is accepted;
+Stage 2 and canonical generation remain separately approval-gated.
 
 The initial frozen run is `runspecs/s06_bracket_mvp.json`: S06 B2 bracket-only,
 480 full-plan candidates, 30-minute data, 2-month IS / 1-month OOS, eight
@@ -49,9 +49,8 @@ C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy
 ```
 
 The isolated WFA tie-back is deliberately outside normal pytest discovery and
-reuses `smoke_one` from that command. It currently must stop on the three known
-production transport/resource blockers; do not treat it as a passing
-certification until the separate production patch lands:
+reuses `smoke_one` from that command. Run it only after a successful fresh
+real-pack certification and point it at the same work directory:
 
 ```powershell
 $env:MERLIN_STRATEGY_LAB_DATA_ROOT = "<read-only-data-root>"

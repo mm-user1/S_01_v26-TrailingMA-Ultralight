@@ -1403,7 +1403,7 @@ def _preserve_fast_selection_metadata(
     selected_results: Sequence[OptimizationResult],
 ) -> None:
     for fast_result, slow_result in zip(selected_fast, selected_results):
-        for attr in ("is_pareto_optimal", "dominance_rank"):
+        for attr in ("grid_rank", "is_pareto_optimal", "dominance_rank"):
             if hasattr(fast_result, attr):
                 setattr(slow_result, attr, getattr(fast_result, attr, None))
 

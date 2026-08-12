@@ -560,10 +560,15 @@ def register_routes(app):
             except (TypeError, ValueError):
                 warmup_bars = 1000
 
+        worker_processes_raw = config_payload.get("worker_processes")
+        if worker_processes_raw is None:
+            worker_processes_raw = config_payload.get("workerProcesses")
+
         try:
             optimization_config = _build_optimization_config(
                 data_source,
                 config_payload,
+                worker_processes=worker_processes_raw,
                 warmup_bars=warmup_bars,
                 strategy_id=strategy_id,
             )

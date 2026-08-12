@@ -245,6 +245,71 @@ def test_grid_v2_sortino_is_supported_as_slow_primary_objective():
     assert all(getattr(result, "slow_refinement_rank", None) for result in results)
 
 
+def test_grid_v2_stored_grid_rank_remains_authoritative_fast_rank_after_refinement(
+    monkeypatch,
+):
+    import core.grid_engine as grid_engine
+
+    original_rank = grid_engine.rank_grid_results
+
+    def reverse_slow_refinement(*args, **kwargs):
+        ranked = original_rank(*args, **kwargs)
+        if kwargs.get("rank_attr") != "slow_refinement_rank":
+            return ranked
+        ranked = list(reversed(ranked))
+        for rank, result in enumerate(ranked, 1):
+            result.slow_refinement_rank = rank
+        return ranked
+
+    monkeypatch.setattr(grid_engine, "rank_grid_results", reverse_slow_refinement)
+    config = _v2_grid_config(save_size=True)
+    config.grid_slow_refinement_enabled = True
+    config.grid_slow_objectives = ["sortino_ratio", "net_profit_pct"]
+    config.grid_slow_primary_objective = "sortino_ratio"
+
+    results, study_id = run_grid_optimization(config, save_study=True)
+
+    assert study_id is not None
+    fast_rank_by_candidate = {
+        int(result.candidate_id): int(result.grid_rank)
+        for result in config.optuna_all_results
+    }
+    fast_key_by_candidate = {
+        int(result.candidate_id): result.semantic_key
+        for result in config.optuna_all_results
+    }
+    assert all(result.slow_refinement_rank is not None for result in results)
+    assert any(result.grid_rank != result.slow_refinement_rank for result in results)
+    assert {
+        int(result.candidate_id): int(result.grid_rank) for result in results
+    } == {
+        int(result.candidate_id): fast_rank_by_candidate[int(result.candidate_id)]
+        for result in results
+    }
+    assert all(
+        result.semantic_key == fast_key_by_candidate[int(result.candidate_id)]
+        for result in results
+    )
+
+    loaded = load_study_from_db(study_id)
+    assert loaded is not None
+    stored_rank_by_candidate = {
+        int(trial["candidate_id"]): int(trial["grid_rank"])
+        for trial in loaded["trials"]
+    }
+    assert stored_rank_by_candidate == {
+        int(result.candidate_id): fast_rank_by_candidate[int(result.candidate_id)]
+        for result in results
+    }
+    assert {
+        int(trial["candidate_id"]): trial["semantic_key"]
+        for trial in loaded["trials"]
+    } == {
+        int(result.candidate_id): fast_key_by_candidate[int(result.candidate_id)]
+        for result in results
+    }
+
+
 def test_grid_v2_undefined_sortino_stays_unusable_as_slow_objective():
     config = _v2_grid_config()
     config.fixed_params["end"] = "2025-10-01T00:00:00Z"

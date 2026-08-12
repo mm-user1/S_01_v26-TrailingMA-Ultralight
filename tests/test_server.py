@@ -3652,6 +3652,98 @@ def test_walkforward_cancelled_run_cleans_up_saved_study(client, monkeypatch, tm
     assert deleted_studies == ["study_cancel_wfa"]
 
 
+@pytest.mark.parametrize(
+    ("worker_fields", "expected_workers"),
+    [
+        ({}, 6),
+        ({"worker_processes": 1}, 1),
+        ({"workerProcesses": "2"}, 2),
+        ({"worker_processes": "3", "workerProcesses": "4"}, 3),
+        ({"worker_processes": None, "workerProcesses": "4"}, 4),
+        ({"worker_processes": 0}, 1),
+        ({"worker_processes": 99}, 32),
+    ],
+)
+def test_walkforward_route_threads_requested_workers_through_shared_builder(
+    client,
+    monkeypatch,
+    tmp_path,
+    worker_fields,
+    expected_workers,
+):
+    from core import walkforward_engine
+    from ui import server_routes_run
+
+    csv_path = tmp_path / "wfa_workers.csv"
+    csv_path.write_text("placeholder", encoding="utf-8")
+    df = pd.DataFrame(
+        {"Open": [1.0], "High": [1.0], "Low": [1.0], "Close": [1.0], "Volume": [1.0]},
+        index=pd.to_datetime(["2026-01-01T00:00:00Z"]),
+    )
+    captured = {}
+
+    class DummyWalkForwardEngine:
+        def __init__(self, _config, base_template, _optuna_settings, csv_file_path=None):
+            captured["base_template"] = base_template
+
+        def run_wf_optimization(self, _dataframe):
+            stitched = SimpleNamespace(
+                final_net_profit_pct=0.0,
+                max_drawdown_pct=0.0,
+                total_trades=0,
+                wfe=0.0,
+                oos_win_rate=0.0,
+            )
+            return SimpleNamespace(total_windows=0, stitched_oos=stitched), "worker-study"
+
+    monkeypatch.setattr(server_routes_run, "_resolve_csv_path", lambda _raw: csv_path)
+    monkeypatch.setattr(server_routes_run, "load_data", lambda _path: df)
+    monkeypatch.setattr(walkforward_engine, "WalkForwardEngine", DummyWalkForwardEngine)
+    payload = _build_minimal_optuna_payload()
+    payload.update(worker_fields)
+
+    response = client.post(
+        "/api/walkforward",
+        data={
+            "strategy": "s01_trailing_ma",
+            "csvPath": str(csv_path),
+            "config": json.dumps(payload),
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["base_template"]["worker_processes"] == expected_workers
+
+
+def test_walkforward_route_rejects_malformed_requested_workers_before_data_load(
+    client, monkeypatch, tmp_path
+):
+    from ui import server_routes_run
+
+    csv_path = tmp_path / "wfa_bad_workers.csv"
+    csv_path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(server_routes_run, "_resolve_csv_path", lambda _raw: csv_path)
+    monkeypatch.setattr(
+        server_routes_run,
+        "load_data",
+        lambda _path: pytest.fail("malformed worker count must fail before data load"),
+    )
+    payload = _build_minimal_optuna_payload()
+    payload["worker_processes"] = "not-an-integer"
+
+    response = client.post(
+        "/api/walkforward",
+        data={
+            "strategy": "s01_trailing_ma",
+            "csvPath": str(csv_path),
+            "config": json.dumps(payload),
+        },
+    )
+
+    assert response.status_code == 400
+    assert "invalid literal for int" in response.get_json()["error"]
+
+
 def test_walkforward_route_logs_value_error_details(client, monkeypatch, caplog, tmp_path):
     from ui import server_routes_run
     import core.walkforward_engine as walkforward_engine

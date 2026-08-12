@@ -1459,6 +1459,7 @@ class WalkForwardEngine:
 
         diagnostic = {
             "engine": engine or "v2",
+            "grid_v2_plan_fingerprint": summary.get("grid_v2_plan_fingerprint"),
             "backend_kind": grid_summary.get("backend_kind"),
             "compiled_batch_used": grid_summary.get("compiled_batch_used"),
             "compiled_execution_mode": grid_summary.get("compiled_execution_mode"),

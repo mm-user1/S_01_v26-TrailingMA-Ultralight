@@ -1578,6 +1578,7 @@ def test_grid_wfa_threads_window_dsr_summary_and_candidate_moments(monkeypatch):
     def fake_grid_window(self, df_slice, start_time, end_time):  # noqa: ARG001
         candidates = [make_candidate(1, dsr_rank=1), make_candidate(2)]
         summary = {
+            "grid_v2_plan_fingerprint": "synthetic-v2-plan-fingerprint",
             "candidate_count": 48_480,
             "valid_candidate_count": 2,
             "selected_candidate_count": 2,
@@ -1676,6 +1677,7 @@ def test_grid_wfa_threads_window_dsr_summary_and_candidate_moments(monkeypatch):
     for window in result.windows:
         diagnostics = window.module_status["grid_v2"]
         assert diagnostics["engine"] == "v2"
+        assert diagnostics["grid_v2_plan_fingerprint"] == "synthetic-v2-plan-fingerprint"
         assert diagnostics["backend_kind"] == "compiled_numba"
         assert diagnostics["compiled_batch_used"] is True
         assert diagnostics["compiled_workers"] == 6
@@ -1736,14 +1738,23 @@ def test_grid_wfa_threads_window_dsr_summary_and_candidate_moments(monkeypatch):
 
     loaded = storage.load_study_from_db(study_id)
     persisted = loaded["windows"][0]["module_status"]["grid_v2"]
+    assert persisted["grid_v2_plan_fingerprint"] == "synthetic-v2-plan-fingerprint"
     assert persisted["backend_kind"] == "compiled_numba"
     assert persisted["candidate_generation_seconds"] == pytest.approx(0.11)
     assert persisted["plan_reuse_hit"] is True
+    persisted_trials = storage.load_wfa_window_trials(
+        loaded["windows"][0]["window_id"]
+    )["optuna_is"]
+    for trial in persisted_trials:
+        assert trial["module_metrics"]["grid_rank"] is not None
+        assert trial["module_metrics"]["semantic_key"].startswith("candidate:")
+        assert trial["module_metrics"]["candidate_id"] in {1, 2}
 
 
 def test_grid_v2_diagnostics_uses_sibling_candidates_per_second():
     summary = {
         "engine": "v2",
+        "grid_v2_plan_fingerprint": "top-level-plan-fingerprint",
         "candidate_count": 10,
         "valid_candidate_count": 10,
         "selected_candidate_count": 2,
@@ -1776,6 +1787,7 @@ def test_grid_v2_diagnostics_uses_sibling_candidates_per_second():
 
     diagnostics = WalkForwardEngine._grid_v2_diagnostics_from_summary(summary)
 
+    assert diagnostics["grid_v2_plan_fingerprint"] == "top-level-plan-fingerprint"
     assert diagnostics["fast_evaluation_seconds"] == pytest.approx(0.3)
     assert diagnostics["plan_build_seconds"] == pytest.approx(0.08)
     assert diagnostics["plan_reuse_lookup_seconds"] == pytest.approx(0.01)
@@ -1789,6 +1801,19 @@ def test_grid_v2_diagnostics_uses_sibling_candidates_per_second():
     assert diagnostics["plan_build_count"] == 1
     assert diagnostics["plan_reuse_hit_count"] == 0
     assert diagnostics["plan_reuse_miss_count"] == 1
+
+
+def test_grid_v2_diagnostics_remain_absent_for_v1_summary():
+    assert WalkForwardEngine._grid_v2_diagnostics_from_summary(
+        {"engine": "v1", "grid_v2_plan_fingerprint": "must-not-transport"}
+    ) == {}
+
+
+def test_grid_v2_diagnostics_accept_old_summary_without_fingerprint():
+    diagnostics = WalkForwardEngine._grid_v2_diagnostics_from_summary(
+        {"engine": "v2", "grid": {"backend_kind": "reference"}}
+    )
+    assert diagnostics["grid_v2_plan_fingerprint"] is None
 
 
 def test_s03_grid_v2_wfa_smoke_persists_signal_chunk_diagnostics():
@@ -1867,7 +1892,12 @@ def test_s03_grid_v2_wfa_smoke_persists_signal_chunk_diagnostics():
     for window in result.windows:
         diagnostics = window.module_status["grid_v2"]
         assert diagnostics["engine"] == "v2"
+        assert diagnostics["grid_v2_plan_fingerprint"]
+        assert diagnostics["grid_v2_plan_fingerprint"] == engine._last_grid_summary[
+            "grid_v2_plan_fingerprint"
+        ]
         assert diagnostics["backend_kind"] == "reference"
+        assert diagnostics["compiled_workers"] == 1
         assert diagnostics["candidate_count"] == 120
         assert diagnostics["chunk_count"] > 1
         assert diagnostics["max_chunk_candidates"] < diagnostics["candidate_count"]
@@ -1876,6 +1906,10 @@ def test_s03_grid_v2_wfa_smoke_persists_signal_chunk_diagnostics():
 
     loaded = storage.load_study_from_db(study_id)
     persisted = loaded["windows"][0]["module_status"]["grid_v2"]
+    assert persisted["grid_v2_plan_fingerprint"] == result.windows[0].module_status[
+        "grid_v2"
+    ]["grid_v2_plan_fingerprint"]
+    assert persisted["compiled_workers"] == 1
     assert persisted["chunk_count"] > 1
     assert persisted["max_chunk_candidates"] < persisted["candidate_count"]
 

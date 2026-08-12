@@ -40,9 +40,10 @@ substitute files or track an absolute root. The confirmed Windows pack may be
 absent on Linux/VPS, where Stage A remains valid but Stage B must be reported as
 incomplete. Phase 1-B Stage 1 owns real-pack validation, representative parity,
 multi-thread determinism, temporary smoke generation, and an implemented
-isolated WFA tie-back. That tie-back is pending a separate production transport
-fix and successful rerun. Canonical full generation remains approval-gated
-Stage 2. Run Strategy Lab tests from the repository root through the configured
+isolated WFA tie-back. The production transport patch and complete real-pack plus
+eight-window HTTP certification have passed, so Phase 1-B Stage 1 is accepted.
+Canonical full generation remains approval-gated Stage 2 and has not started.
+Run Strategy Lab tests from the repository root through the configured
 interpreter: `python -m pytest tests/strategy_lab -q`.
 
 ## Project: Merlin
@@ -417,6 +418,13 @@ backend advertises capability via `get_backend_metadata()` (normalized by
   - Preview/run/WFA/Queue/storage report full, requested, planned/delivered,
     effective policy, versions, per-block facts, and plan fingerprint. V1 Grid,
     Optuna, semantic-key payloads, and selected reference reruns are unchanged.
+  - `/api/walkforward` passes the raw requested worker count through the shared
+    optimization-config builder. Its existing default/clamp/error policy is the
+    sole normalization authority, and the normalized value is reused by Grid,
+    Optuna, Forward Test, and replay configuration. New Grid V2 WFA window
+    diagnostics retain the actual compiled worker count and exact top-level plan
+    fingerprint. Historical windows can omit these additive facts and are not
+    rewritten.
   - `full_enumeration_v2` is a static backend profile, not proof that a specific
     plan is full. Use `effective_planning_policy` and the effective allocation
     facts to distinguish full from sampled execution.
@@ -482,6 +490,11 @@ backend advertises capability via `get_backend_metadata()` (normalized by
     selected slow-validated top candidates.
   - Selected fast candidates are always slow-validated against the real strategy
     (`validate_selected_candidates`); WFA OOS is also slow-authoritative.
+  - Slow-enriched selected results retain the authoritative Fast `grid_rank`;
+    optional Slow Refinement writes its independent `slow_refinement_rank`.
+    Direct Grid V2 storage and selected WFA trial metadata preserve that Fast
+    rank together with exact `candidate_id` and `semantic_key`. Historical rows
+    lacking additive WFA module metadata remain readable.
   - Final objectives, primary objective, and constraint feasibility are stored on
     each trial; UI sorts feasible Pareto → feasible non-Pareto → infeasible. The
     shared Grid V1/V2 path computes exact two-objective Pareto membership in

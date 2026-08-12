@@ -577,6 +577,14 @@ def test_streaming_fingerprint_matches_small_canonical_reference_without_sequenc
     ) == expected
 
 
+def test_plan_fingerprint_is_invariant_to_compiled_worker_count():
+    one_worker = build_grid_v2_plan(_small_config(), _sampled_settings(workers=1))
+    many_workers = build_grid_v2_plan(_small_config(), _sampled_settings(workers=6))
+
+    assert one_worker.plan_fingerprint == many_workers.plan_fingerprint
+    assert _semantic_digest(one_worker) == _semantic_digest(many_workers)
+
+
 def test_v2_allocation_reconciles_only_automatic_zero_targets_in_declared_order():
     initial = allocate_ordered_block_budgets(
         ("small", "large_a", "large_b"),

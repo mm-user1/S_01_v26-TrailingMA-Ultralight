@@ -97,8 +97,8 @@ python -m pytest tests/strategy_lab -q
 ```
 
 See `tools/strategy_lab/README.md` for data-root precedence, dataset schema,
-resume semantics, the current production WFA tie-back blocker, and the Stage 2
-review gate. Strategy Lab follows the established tools bootstrap: derive the
+resume semantics, the accepted production WFA tie-back, and the still-separate
+Stage 2 review gate. Strategy Lab follows the established tools bootstrap: derive the
 repository root from `__file__`, add its `src/` directory once, and import
 existing Merlin V2 contracts rather than copying core code.
 

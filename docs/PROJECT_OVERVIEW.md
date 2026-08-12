@@ -246,9 +246,19 @@ or `MERLIN_STRATEGY_LAB_DATA_ROOT`, never by filesystem search. Phase 1-B Stage
 1 can generate bounded candidate-level smoke shards and run opt-in
 certification, but it does not calculate rules, inspect development/holdout
 results, add MTM drawdown, or generate the configured full dataset. Its
-production WFA tie-back remains blocked on worker propagation and stored Grid
-plan/selected-candidate identity; a separate production fix and successful
-rerun are required before the Stage 2 review gate can open.
+production WFA transport now honours the shared normalized worker count and
+stores each new Grid V2 window's actual compiled workers and exact plan
+fingerprint. Selected WFA trials retain authoritative Fast rank, semantic key,
+and candidate ID; direct Grid V2 stored Rank likewise means Fast rank while Slow
+Refinement keeps a separate rank. Older Grid V2 studies may instead contain the
+selected-list position in the same `grid_rank` / Rank field; historical studies
+remain unchanged and are not backfilled, so rerun an old study for exact
+like-for-like rank semantics. This is metadata and display history only; it does
+not imply changed metrics, winners, candidate identity, or trading behavior.
+The complete real-pack and eight-window HTTP tie-back passed, so Phase 1-B Stage
+1 is accepted. Historical studies may also lack the additive transport facts
+and are not rewritten. Stage 2 and the canonical full dataset remain
+approval-gated and have not started.
 
 #### Indicators (`src/indicators/`)
 
@@ -414,6 +424,7 @@ SQLite database stored in `src/storage/` directory. Multiple `.db` files support
 
 **wfa_window_trials** - Per-module top-N trial retention for a window
 - Stores per-module (`optuna_is`, `dsr`, `forward_test`, `stress_test`) ranked trials with `is_selected` flag, params, and metrics
+- Grid module metadata retains authoritative Fast `grid_rank`, exact `semantic_key`, and `candidate_id`; `slow_refinement_rank` remains independent
 - Indexed by window, module, trial number, and selection
 - Backs the Results page module drill-down and the WFA Lancelot export resolution
 
