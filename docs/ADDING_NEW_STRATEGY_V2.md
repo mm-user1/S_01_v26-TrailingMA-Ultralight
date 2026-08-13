@@ -345,6 +345,10 @@ module-global DataFrame caches.
 timestamps, OHLC arrays, entry signals, and any profile-required arrays. It must
 not place orders or simulate exits.
 
+Do not assume OHLC Series in a caller-created DataFrame already have a floating
+dtype. A preparation boundary that needs NaN sentinels or floating arithmetic
+must explicitly obtain floating-point working arrays.
+
 ## Supported Phase 2.5 Modes
 
 Phase 2.5 supports:

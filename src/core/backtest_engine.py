@@ -118,7 +118,15 @@ def load_data(csv_source: CSVSource) -> pd.DataFrame:
     }
     normalized_cols = {col: renamed.get(col.lower(), col) for col in df.columns}
     df = df.rename(columns=normalized_cols)
-    return df[["Open", "High", "Low", "Close", "Volume"]]
+    result = df[["Open", "High", "Low", "Close", "Volume"]]
+    float_columns = {
+        column: "float64"
+        for column in result.columns
+        if result[column].dtype != "float64"
+    }
+    if float_columns:
+        result = result.astype(float_columns)
+    return result
 
 
 def prepare_dataset_with_warmup(

@@ -46,6 +46,11 @@ Canonical full generation remains approval-gated Stage 2 and has not started.
 Run Strategy Lab tests from the repository root through the configured
 interpreter: `python -m pytest tests/strategy_lab -q`.
 
+`core.backtest_engine.load_data()` returns valid numeric OHLCV columns as
+`float64`. Strategy data-preparation boundaries that can be called directly
+with caller-created DataFrames must still normalize any arrays that require a
+floating dtype.
+
 ## Project: Merlin
 
 Cryptocurrency trading strategy backtesting and Optuna optimization platform with a Flask SPA frontend.

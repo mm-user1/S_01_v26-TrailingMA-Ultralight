@@ -288,9 +288,9 @@ def build_indicator_arrays(df: pd.DataFrame, params: S06B2Params) -> dict[str, n
     high = df["High"]
     low = df["Low"]
     close = df["Close"]
-    high_values = high.to_numpy(copy=False)
-    low_values = low.to_numpy(copy=False)
-    close_values = close.to_numpy(copy=False)
+    high_values = np.asarray(high.to_numpy(copy=False), dtype=np.float64)
+    low_values = np.asarray(low.to_numpy(copy=False), dtype=np.float64)
+    close_values = np.asarray(close.to_numpy(copy=False), dtype=np.float64)
 
     fast_percent_r = pine_ema(
         williams_r(high, low, close, params.fastLength).to_numpy(copy=False),
