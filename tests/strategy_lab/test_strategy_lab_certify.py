@@ -13,6 +13,7 @@ from core.optuna_engine import OptimizationResult
 from tools.strategy_lab import certify as certify_module
 from tools.strategy_lab.certify import (
     MISMATCH_SAMPLE_LIMIT,
+    PROTECTED_CANONICAL_OUTPUTS,
     SELECTED_TRIAL_NET_PROFIT_BASIS,
     WINDOW_NET_PROFIT_BASIS,
     _compare_grid_runs,
@@ -20,10 +21,13 @@ from tools.strategy_lab.certify import (
     _selected_slow_parity,
     _selected_slow_row_mismatches,
     allowed_roots_with_data_root,
+    assert_certification_work_dir_allowed,
     assert_path_contained,
     candidate_identity_mappings,
     changed_snapshot_paths,
     geometry_candidate_ids,
+    finite_mtm_group_facts,
+    legacy_column_preservation_facts,
     select_primary_candidate,
     selected_trial_net_profit_from_lab,
     semantic_float_equal,
@@ -195,6 +199,100 @@ def test_storage_containment_is_explicit_and_actionable(tmp_path):
     )
     with pytest.raises(DatasetError, match="not contained"):
         assert_path_contained(REPO_ROOT, tmp_path, field="storage")
+
+
+@pytest.mark.parametrize("protected", PROTECTED_CANONICAL_OUTPUTS)
+@pytest.mark.parametrize("location", ["exact", "descendant"])
+def test_certification_work_dir_rejects_both_canonical_outputs(protected, location):
+    work_dir = protected if location == "exact" else protected / "certification" / "run"
+    with pytest.raises(DatasetError, match="protected canonical output paths"):
+        assert_certification_work_dir_allowed(work_dir)
+
+
+def test_certification_work_dir_allows_unrelated_output_and_tmp_paths():
+    allowed = (
+        REPO_ROOT / "tools" / "strategy_lab" / "output" / "unrelated-smoke",
+        REPO_ROOT / "tools" / "strategy_lab" / "tmp" / "tz04-follow-up",
+    )
+    assert [assert_certification_work_dir_allowed(path) for path in allowed] == [
+        path.resolve() for path in allowed
+    ]
+
+
+def test_finite_mtm_group_gate_accepts_partial_availability_and_rejects_empty_column():
+    group = np.full((480, 2, len(METRIC_AXIS)), np.nan, dtype=np.float64)
+    group[7, 1, METRIC_AXIS.index("max_drawdown_mtm_pct")] = 2.5
+    assert finite_mtm_group_facts(group, group_label="CRVUSDT/window_01.npy") == {
+        "finite_mtm_count": 1,
+        "mtm_value_count": 960,
+    }
+    group[7, 1, METRIC_AXIS.index("max_drawdown_mtm_pct")] = np.nan
+    with pytest.raises(
+        DatasetError,
+        match=r"CRVUSDT/window_01.npy: generated MTM column has no finite values",
+    ):
+        finite_mtm_group_facts(group, group_label="CRVUSDT/window_01.npy")
+
+
+def test_legacy_column_preservation_accepts_exact_equal_nan_values():
+    rng = np.random.default_rng(41)
+    schema_v1 = rng.normal(size=(480, 2, 20)).astype(np.float64)
+    schema_v1[3, 1, 6] = np.nan
+    schema_v2 = np.concatenate(
+        [schema_v1.copy(), np.zeros((480, 2, 1), dtype=np.float64)], axis=2
+    )
+    facts = legacy_column_preservation_facts(
+        schema_v2,
+        schema_v1,
+        schema_v2_label="v2/CRVUSDT/window_01.npy",
+        schema_v1_label="v1/CRVUSDT/window_01.npy",
+    )
+    assert facts["mismatch_count"] == 0
+    assert facts["compared_value_count"] == 480 * 2 * 20
+    assert facts["bitwise_equal_with_equal_nan"] is True
+
+
+@pytest.mark.parametrize(
+    ("target", "replacement", "diagnostic"),
+    [
+        ("v2", np.zeros((479, 2, 21), dtype=np.float64), "v2-label"),
+        ("v1", np.zeros((480, 2, 20), dtype=np.float32), "v1-label"),
+    ],
+)
+def test_legacy_column_preservation_rejects_shape_or_dtype(
+    target, replacement, diagnostic
+):
+    schema_v2 = np.zeros((480, 2, 21), dtype=np.float64)
+    schema_v1 = np.zeros((480, 2, 20), dtype=np.float64)
+    if target == "v2":
+        schema_v2 = replacement
+    else:
+        schema_v1 = replacement
+    with pytest.raises(DatasetError, match=diagnostic):
+        legacy_column_preservation_facts(
+            schema_v2,
+            schema_v1,
+            schema_v2_label="v2-label",
+            schema_v1_label="v1-label",
+        )
+
+
+def test_legacy_column_preservation_reports_bounded_mismatches():
+    schema_v1 = np.zeros((480, 2, 20), dtype=np.float64)
+    schema_v2 = np.zeros((480, 2, 21), dtype=np.float64)
+    schema_v2[: MISMATCH_SAMPLE_LIMIT + 2, 0, 0] = 1.0
+    with pytest.raises(DatasetError) as raised:
+        legacy_column_preservation_facts(
+            schema_v2,
+            schema_v1,
+            schema_v2_label="v2/CRVUSDT/window_01.npy",
+            schema_v1_label="v1/CRVUSDT/window_01.npy",
+        )
+    message = str(raised.value)
+    assert "mismatch_count=7" in message
+    assert "additional_mismatches_omitted=2" in message
+    assert "candidate_id=1" in message
+    assert "field=net_profit_pct" in message
 
 
 def test_candidate_identity_maps_do_not_depend_on_projection_list_position():
@@ -375,6 +473,38 @@ def test_compiled_reference_mismatch_samples_are_bounded():
             expected_candidate_count=spec.plan.deduped_candidate_count,
         )
     assert "additional_mismatches_omitted=3" in str(raised.value)
+
+
+def test_compiled_reference_rejects_small_finite_mtm_difference_as_exact():
+    spec = load_run_spec(
+        REPO_ROOT / "tools" / "strategy_lab" / "runspecs" / "s06_bracket_mvp.json"
+    )
+    assert spec.plan is not None
+    rows = list(fake_rows(spec.plan))
+    rows[0] = replace(rows[0], max_drawdown_mtm_pct=1.0 + 1e-13)
+    compiled, reference = _parity_surfaces(spec.plan, rows)
+    reference.rows = (
+        replace(reference.rows[0], max_drawdown_mtm_pct=1.0),
+        *reference.rows[1:],
+    )
+
+    evidence, samples = _grid_run_parity_facts(
+        compiled,
+        reference,
+        spec.plan,
+        expected_candidate_count=spec.plan.deduped_candidate_count,
+    )
+    assert evidence["availability_pattern_mismatch_count"] == 0
+    assert evidence["exact_field_mismatch_count"] == 1
+    assert evidence["floating_mismatch_count"] == 0
+    assert samples[0]["field"] == "max_drawdown_mtm_pct"
+    with pytest.raises(DatasetError, match="exact_field_mismatch_count=1"):
+        _compare_grid_runs(
+            compiled,
+            reference,
+            spec.plan,
+            expected_candidate_count=spec.plan.deduped_candidate_count,
+        )
 
 
 def test_compiled_reference_missing_row_diagnostic_names_position_and_id():

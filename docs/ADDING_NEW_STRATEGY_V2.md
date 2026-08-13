@@ -818,7 +818,14 @@ observation, including flat warmup and the final bar. Percentage DD is the
 maximum positive-peak fraction; absolute DD, where exposed, is an independent
 currency maximum. RoMaD uses percentage DD. Do not reuse `equity_curve`, the
 advanced anchor, or the optional Net Profit starting balance as a drawdown
-boundary or peak. A future MTM drawdown requires a distinct public name.
+boundary or peak. Strategy Lab's separate request-gated
+`max_drawdown_mtm_pct` is valid only for the generic position family. It scans
+bar-close MTM equity from `trade_start_idx`, seeds the peak with initial
+capital, propagates non-finite observations to `NaN`, and transports compiled
+results in an optional sidecar without changing the 26-column output ABI.
+Signal-reversal requests fail explicitly. This is not TradingView intrabar
+drawdown. Future `romad_mtm` uses `NaN` when MTM DD is zero; existing realized
+RoMaD intentionally retains its legacy convention.
 
 ## Typed selected Slow metrics
 

@@ -52,19 +52,27 @@ from .inventory import resolve_data_root
 EXPECTED_SOURCE_COUNT = 118
 EXPECTED_SEGMENT_COUNT = 1_888
 EXPECTED_QUALITY_ROW_COUNT = 2_006
+EXPECTED_CANDIDATE_COUNT = 480
 REPRESENTATIVE_TICKER = "CRVUSDT"
 REL_TOL = 1e-9
 ABS_TOL = 1e-12
 MISMATCH_SAMPLE_LIMIT = 5
 WINDOW_NET_PROFIT_BASIS = "legacy_wfa_100"
 SELECTED_TRIAL_NET_PROFIT_BASIS = "initial_capital_1000"
-CANONICAL_OUTPUT = (
-    REPO_ROOT
-    / "tools"
-    / "strategy_lab"
-    / "output"
-    / "s06_bracket_mvp_pre_mtm_v1"
-).resolve()
+PROTECTED_CANONICAL_OUTPUTS = tuple(
+    (
+        REPO_ROOT
+        / "tools"
+        / "strategy_lab"
+        / "output"
+        / name
+    ).resolve()
+    for name in (
+        "s06_bracket_mvp_pre_mtm_v1",
+        "s06_bracket_mvp_mtm_v2",
+    )
+)
+LEGACY_METRIC_COUNT = 20
 WINDOW_PINS = {
     1: (
         "2025-10-01T00:00:00Z",
@@ -88,6 +96,111 @@ def _iso(value: Any) -> str:
 def _assert(condition: bool, message: str) -> None:
     if not condition:
         raise DatasetError(message)
+
+
+def assert_certification_work_dir_allowed(work_dir: str | Path) -> Path:
+    """Reject work directories that could overwrite either canonical dataset."""
+
+    work = Path(work_dir).resolve()
+    protected = next(
+        (
+            path
+            for path in PROTECTED_CANONICAL_OUTPUTS
+            if work == path or path in work.parents
+        ),
+        None,
+    )
+    if protected is not None:
+        raise DatasetError(
+            "certification work directory must not equal or be nested under "
+            f"protected canonical output paths: {protected}."
+        )
+    return work
+
+
+def finite_mtm_group_facts(
+    group: np.ndarray,
+    *,
+    group_label: str,
+) -> dict[str, int]:
+    """Require at least one populated MTM value in a generated schema-v2 group."""
+
+    expected_shape = (
+        EXPECTED_CANDIDATE_COUNT,
+        len(SEGMENT_AXIS),
+        len(METRIC_AXIS),
+    )
+    if group.shape != expected_shape or group.dtype != np.float64:
+        raise DatasetError(
+            f"{group_label}: schema-v2 group shape/dtype must be "
+            f"{expected_shape}/float64; observed {group.shape}/{group.dtype}."
+        )
+    column = group[:, :, METRIC_AXIS.index("max_drawdown_mtm_pct")]
+    finite_count = int(np.isfinite(column).sum())
+    if finite_count == 0:
+        raise DatasetError(f"{group_label}: generated MTM column has no finite values.")
+    return {"finite_mtm_count": finite_count, "mtm_value_count": int(column.size)}
+
+
+def legacy_column_preservation_facts(
+    schema_v2_group: np.ndarray,
+    schema_v1_group: np.ndarray,
+    *,
+    schema_v2_label: str,
+    schema_v1_label: str,
+) -> dict[str, Any]:
+    """Prove that schema-v2 preserves all immutable schema-v1 metric values."""
+
+    expected_v2_shape = (
+        EXPECTED_CANDIDATE_COUNT,
+        len(SEGMENT_AXIS),
+        len(METRIC_AXIS),
+    )
+    expected_v1_shape = (
+        EXPECTED_CANDIDATE_COUNT,
+        len(SEGMENT_AXIS),
+        LEGACY_METRIC_COUNT,
+    )
+    for group, expected_shape, label in (
+        (schema_v2_group, expected_v2_shape, schema_v2_label),
+        (schema_v1_group, expected_v1_shape, schema_v1_label),
+    ):
+        if group.shape != expected_shape or group.dtype != np.float64:
+            raise DatasetError(
+                f"{label}: group shape/dtype must be {expected_shape}/float64; "
+                f"observed {group.shape}/{group.dtype}."
+            )
+
+    legacy_v2 = schema_v2_group[:, :, :LEGACY_METRIC_COUNT]
+    if not np.array_equal(legacy_v2, schema_v1_group, equal_nan=True):
+        equal = (legacy_v2 == schema_v1_group) | (
+            np.isnan(legacy_v2) & np.isnan(schema_v1_group)
+        )
+        mismatch_indices = np.argwhere(~equal)
+        samples = []
+        for candidate, segment, metric in mismatch_indices[:MISMATCH_SAMPLE_LIMIT]:
+            samples.append(
+                {
+                    "candidate_id": int(candidate) + 1,
+                    "segment": SEGMENT_AXIS[int(segment)],
+                    "field": METRIC_AXIS[int(metric)],
+                    "schema_v2": repr(float(legacy_v2[candidate, segment, metric])),
+                    "schema_v1": repr(float(schema_v1_group[candidate, segment, metric])),
+                }
+            )
+        raise DatasetError(
+            f"legacy columns differ between {schema_v2_label} and {schema_v1_label}: "
+            f"mismatch_count={len(mismatch_indices)}; "
+            f"{_format_mismatch_samples(samples, mismatch_count=len(mismatch_indices))}."
+        )
+    return {
+        "legacy_column_count": LEGACY_METRIC_COUNT,
+        "compared_value_count": int(schema_v1_group.size),
+        "mismatch_count": 0,
+        "bitwise_equal_with_equal_nan": True,
+        "schema_v2_label": schema_v2_label,
+        "schema_v1_label": schema_v1_label,
+    }
 
 
 def semantic_float_equal(left: Any, right: Any) -> bool:
@@ -433,15 +546,15 @@ def _grid_run_parity_facts(
         "zero_size_entry_count",
         "invalid_stop_distance_count",
         "flags",
+        "max_drawdown_mtm_pct",
     }
     discrepancies: dict[str, dict[str, float | int]] = {}
     for column, name in enumerate(METRIC_AXIS):
         column_finite = finite[:, column]
         if name in exact_names:
-            equal = (left[:, column] == right[:, column]) | (
-                np.isnan(left[:, column]) & np.isnan(right[:, column])
-            )
-            for row_index in np.flatnonzero(~equal):
+            finite_indices = np.flatnonzero(column_finite)
+            equal = left[column_finite, column] == right[column_finite, column]
+            for row_index in finite_indices[~equal]:
                 _record_mismatch(
                     counts,
                     samples,
@@ -626,6 +739,7 @@ def _slow_values(run: Any) -> dict[str, Any]:
                 "flags",
             )
         },
+        "max_drawdown_mtm_pct": run.max_drawdown_mtm_pct,
     }
 
 
@@ -776,6 +890,7 @@ def _selected_slow_parity(
                 params=params,
                 trade_start_idx=prepared.trade_start_idx,
                 compute_sharpe_daily=True,
+                compute_max_drawdown_mtm=True,
             )
             values = _slow_values(slow)
             fast = reference_by_id.get(candidate_id)
@@ -839,6 +954,7 @@ def _thread_determinism(plan: Any, hooks: GridV2StrategyHooks, prepared: Any) ->
                 compute_sharpe=False,
                 compute_sharpe_daily=True,
                 compute_sqn=True,
+                compute_max_drawdown_mtm=True,
             )
             _execution_backend_facts(run)
             _assert(
@@ -930,7 +1046,8 @@ def _smoke_gate(
         json.loads((output / "manifest.json").read_text(encoding="utf-8"))
         for output in outputs
     ]
-    for manifest in manifests:
+    finite_mtm = []
+    for output, manifest in zip(outputs, manifests):
         _assert(manifest["scope"] == "smoke", "real smoke scope must be smoke.")
         _assert(
             len(manifest["groups"]) == window_count,
@@ -956,6 +1073,10 @@ def _smoke_gate(
                 and record["dtype"] == "float64",
                 "real smoke group shape/dtype mismatch.",
             )
+            relative = str(record["path"])
+            group = np.load(output / relative, allow_pickle=False)
+            facts = finite_mtm_group_facts(group, group_label=relative)
+            finite_mtm.append({"output": str(output), "path": relative, **facts})
     deterministic_equal = bool(
         _deterministic_manifest(manifests[0])
         == _deterministic_manifest(manifests[1])
@@ -972,6 +1093,21 @@ def _smoke_gate(
     after = _snapshot_tree(outputs[0])
     immutable_no_op = bool(result.no_op and before == after)
     _assert(immutable_no_op, "real smoke rerun was not an immutable no-op.")
+    window_one_relative = (
+        f"groups/{REPRESENTATIVE_TICKER}/window_01.npy"
+    )
+    schema_v2_path = outputs[0] / window_one_relative
+    schema_v1_path = PROTECTED_CANONICAL_OUTPUTS[0] / window_one_relative
+    _assert(
+        schema_v1_path.is_file(),
+        f"immutable schema-v1 comparison group is missing: {schema_v1_path}.",
+    )
+    legacy_columns = legacy_column_preservation_facts(
+        np.load(schema_v2_path, allow_pickle=False),
+        np.load(schema_v1_path, allow_pickle=False),
+        schema_v2_label=str(schema_v2_path),
+        schema_v1_label=str(schema_v1_path),
+    )
     return {
         "outputs": [str(path) for path in outputs],
         "group_sha256": [
@@ -987,6 +1123,8 @@ def _smoke_gate(
             "source_mtime_ns",
         ],
         "immutable_no_op": immutable_no_op,
+        "finite_mtm": finite_mtm,
+        "legacy_columns": legacy_columns,
     }
 
 
@@ -1000,11 +1138,7 @@ def certify_real_pack(
     repo = Path(repo_root).resolve()
     run_spec_path = Path(run_spec_path).resolve()
     root = resolve_data_root(data_root)
-    work = Path(work_dir).resolve()
-    _assert(
-        work != CANONICAL_OUTPUT and CANONICAL_OUTPUT not in work.parents,
-        "certification work directory must not be the canonical Stage 2 output.",
-    )
+    work = assert_certification_work_dir_allowed(work_dir)
     work.mkdir(parents=True, exist_ok=False)
     _require_compiled_backend_available()
     disk_free_bytes_before = shutil.disk_usage(work).free
@@ -1111,6 +1245,7 @@ def certify_real_pack(
             compute_sharpe=False,
             compute_sharpe_daily=True,
             compute_sqn=True,
+            compute_max_drawdown_mtm=True,
         )
         reference_runs[name] = execute_grid_v2_candidates(
             reference_plan,
@@ -1120,6 +1255,7 @@ def certify_real_pack(
             compute_sharpe=False,
             compute_sharpe_daily=True,
             compute_sqn=True,
+            compute_max_drawdown_mtm=True,
         )
         parity[name] = _compare_grid_runs(
             compiled_runs[name],

@@ -36,7 +36,7 @@ def plan():
 
 
 def test_frozen_schema_axes_are_exact():
-    assert DATASET_SCHEMA_VERSION == "strategy_lab_dataset_v1"
+    assert DATASET_SCHEMA_VERSION == "strategy_lab_dataset_v2"
     assert CANDIDATE_SCHEMA_VERSION == "strategy_lab_candidates_v1"
     assert SEGMENT_AXIS == ("is", "oos")
     assert METRIC_AXIS == (
@@ -60,6 +60,7 @@ def test_frozen_schema_axes_are_exact():
         "invalid_stop_distance_count",
         "max_required_leverage",
         "flags",
+        "max_drawdown_mtm_pct",
     )
 
 
@@ -120,7 +121,7 @@ def test_group_matrix_has_exact_alignment_shape_dtype_and_keeps_all_rows(plan):
     rows = fake_rows(plan)
     matrix = group_matrix(rows, rows, plan)
 
-    assert matrix.shape == (480, 2, 20)
+    assert matrix.shape == (480, 2, 21)
     assert matrix.dtype == np.float64
     assert matrix[0, 0, METRIC_AXIS.index("total_trades")] == 0.0
     assert matrix[479, 1, METRIC_AXIS.index("net_profit_pct")] == pytest.approx(47.9)
@@ -160,7 +161,7 @@ def test_missing_guardrail_and_wrong_execution_order_are_rejected(plan):
 
 def test_atomic_writer_uses_exact_float64_3d_contract_and_validates_artifact(tmp_path):
     target = tmp_path / "groups" / "AAAUSDT" / "window_01.npy"
-    matrix = np.zeros((480, 2, 20), dtype=np.float64)
+    matrix = np.zeros((480, 2, 21), dtype=np.float64)
     atomic_write_group(target, matrix)
 
     assert np.array_equal(np.load(target, allow_pickle=False), matrix)
@@ -169,11 +170,11 @@ def test_atomic_writer_uses_exact_float64_3d_contract_and_validates_artifact(tmp
         "path": target.relative_to(tmp_path).as_posix(),
         "size": target.stat().st_size,
         "sha256": __import__("hashlib").sha256(target.read_bytes()).hexdigest(),
-        "shape": [480, 2, 20],
+        "shape": [480, 2, 21],
         "dtype": "float64",
     }
     assert validate_artifact_record(
-        tmp_path, record, expected_shape=[480, 2, 20], expected_dtype="float64"
+        tmp_path, record, expected_shape=[480, 2, 21], expected_dtype="float64"
     )
     with pytest.raises(DatasetError, match="three-dimensional float64"):
         atomic_write_group(tmp_path / "bad.npy", matrix.astype(np.float32))

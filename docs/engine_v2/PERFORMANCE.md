@@ -872,3 +872,33 @@ with a vectorized full-path calculation. Compiled kernels keep scalar streaming
 state and skip repeated flat balances. Every Fast after/before delta is within
 the 5% regression gate or faster. The full S06 population remains 48,480, and
 the pinned Fast drawdown/RoMaD outputs remained stable to floating-point ULPs.
+
+## TZ-04 Phase 2 Stage 1 MTM sidecar (2026-08-13)
+
+Windows 10, Python 3.13.7, NumPy 2.3.3, Numba 0.65.1, task-local Numba
+caches. The benchmark uses the real CRVUSDT Window 1 IS segment, 480 frozen
+S06 bracket candidates, 3,928 bars, one compiled worker/thread, exact-signature
+warmup, and medians of repeated calls after setup/JIT.
+
+The pre-patch disabled median captured before editing was 0.016662s over nine
+runs. Repeated patched measurements showed material host-frequency drift, so a
+cross-build percentage is not accepted as stable evidence. Within the patched
+build, 31-run medians with the normal Strategy Lab Daily Sharpe/SQN request
+were 0.023712s disabled and 0.025295s MTM-enabled (+6.68%). Repeats ranged from
+roughly +6.7% to +11.5%, above the 5% investigation threshold. The
+implementation remains one O(n) streaming accumulator; meeting 5% would
+require broader kernel specialization or fusion outside this narrow Stage 1
+scope. The residual performance gate is reported for review rather than hidden
+by changing the workload.
+
+The requested sidecar is exactly 3,840 bytes (`480 * sizeof(float64)`);
+disabled calls expose `None` and use only the internal zero-length placeholder.
+
+The measured `+6.68%` best stable MTM-enabled overhead (with repeats around
+`+6.7%` to `+11.5%`) is accepted as a request-only exception to the 5%
+investigation threshold. It reflects the additional streaming drawdown work on
+each evaluation bar. Normal Merlin callers leave the request disabled and are
+unaffected. The follow-up certification gates do not change the formula,
+operation order, sidecar ABI, Numba architecture, or compiled loop structure;
+no speculative kernel optimization is warranted for this bounded research-only
+cost.

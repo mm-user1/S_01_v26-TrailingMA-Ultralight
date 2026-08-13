@@ -15,6 +15,7 @@ import numba
 import numpy as np
 import pytest
 
+from tools.strategy_lab import generate as generate_module
 from tools.strategy_lab.config import load_run_spec, semantic_key_digest
 from tools.strategy_lab.dataset import DatasetError, METRIC_AXIS
 from tools.strategy_lab.generate import (
@@ -123,6 +124,7 @@ def test_plan_is_built_once_across_complete_eight_window_smoke(
             "compute_sharpe": False,
             "compute_sharpe_daily": True,
             "compute_sqn": True,
+            "compute_max_drawdown_mtm": generate_module.COMPUTE_MAX_DRAWDOWN_MTM,
         }
         return fake_execute(plan)
 
@@ -141,6 +143,10 @@ def test_plan_is_built_once_across_complete_eight_window_smoke(
     assert len(manifest["groups"]) == 8
     assert execution_calls == 8 * 2
     assert manifest["provenance"]["selected_slow_row_count"] == 0
+    assert generate_module.COMPUTE_MAX_DRAWDOWN_MTM is True
+    assert manifest["identity"]["metric_requests"][
+        "compute_max_drawdown_mtm"
+    ] is generate_module.COMPUTE_MAX_DRAWDOWN_MTM
     assert manifest["provenance"]["execution_backend"] == {
         "backend_kind": "compiled_numba",
         "compiled_batch_used": True,
@@ -158,6 +164,34 @@ def test_plan_is_built_once_across_complete_eight_window_smoke(
         "max_signal_cache_mb": 512.0,
         "prefer_compiled": True,
         "slow_enrich_selected": False,
+    }
+
+
+def test_manifest_and_execution_share_mtm_request_authority(
+    synthetic_pack, tmp_path, monkeypatch
+):
+    root, run_spec, _, _ = synthetic_pack
+    observed_requests = []
+
+    def checked_execute(plan, *_args, **kwargs):
+        observed_requests.append(kwargs["compute_max_drawdown_mtm"])
+        return fake_execute(plan)
+
+    monkeypatch.setattr(generate_module, "COMPUTE_MAX_DRAWDOWN_MTM", False)
+    monkeypatch.setattr(generate_module, "execute_grid_v2_candidates", checked_execute)
+    result = generate_dataset(
+        run_spec,
+        data_root=root / "market",
+        output_dir=tmp_path / "output",
+        ticker_selectors=["AAAUSDT"],
+        window_selectors=[1],
+        repo_root=root,
+    )
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+
+    assert observed_requests == [False, False]
+    assert manifest["identity"]["metric_requests"] == {
+        "compute_max_drawdown_mtm": False,
     }
     assert manifest["provenance"]["timings"]["run_spec_load_seconds"] >= 0.0
     assert manifest["provenance"]["timings"]["plan_build_seconds"] >= 0.0
@@ -570,7 +604,7 @@ def test_resume_regenerates_invalid_claimed_groups(
     elif corruption == "shape":
         np.save(group, np.zeros((1, 2, 20), dtype=np.float64), allow_pickle=False)
     else:
-        np.save(group, np.zeros((480, 2, 20), dtype=np.float32), allow_pickle=False)
+        np.save(group, np.zeros((480, 2, 21), dtype=np.float32), allow_pickle=False)
 
     result = generate_dataset(
         run_spec,
@@ -583,7 +617,7 @@ def test_resume_regenerates_invalid_claimed_groups(
     )
     assert result.reused_groups == 0
     assert result.regenerated_groups == 1
-    assert np.load(group, mmap_mode="r", allow_pickle=False).shape == (480, 2, 20)
+    assert np.load(group, mmap_mode="r", allow_pickle=False).shape == (480, 2, 21)
     assert np.load(group, mmap_mode="r", allow_pickle=False).dtype == np.float64
 
 
@@ -674,7 +708,7 @@ def test_unlisted_group_and_temp_file_are_not_reused(synthetic_pack, tmp_path, m
     output = tmp_path / "output"
     unlisted = output / "groups" / "AAAUSDT" / "window_01.npy"
     unlisted.parent.mkdir(parents=True)
-    np.save(unlisted, np.zeros((480, 2, 20), dtype=np.float64), allow_pickle=False)
+    np.save(unlisted, np.zeros((480, 2, 21), dtype=np.float64), allow_pickle=False)
     temporary = unlisted.with_name(".window_01.npy.unowned.tmp")
     temporary.write_bytes(b"unowned")
 
@@ -995,9 +1029,12 @@ def test_two_fresh_processes_produce_identical_real_smoke_outcomes(synthetic_pac
     assert first_manifest["scope"] == "smoke"
     assert first_manifest["provenance"]["selected_slow_row_count"] == 0
     assert first_manifest["provenance"]["plan_build_count"] == 1
-    assert first_manifest["identity"]["expected_group_shape"] == [480, 2, 20]
+    assert first_manifest["identity"]["expected_group_shape"] == [480, 2, 21]
     relative = first_manifest["groups"][0]["path"]
     array = np.load(outputs[0] / relative, allow_pickle=False)
-    assert array.shape == (480, 2, 20) and array.dtype == np.float64
+    assert array.shape == (480, 2, 21) and array.dtype == np.float64
     assert array.shape[0] == 480
     assert np.isnan(array[:, :, METRIC_AXIS.index("sqn")]).any()
+    assert np.isfinite(
+        array[:, :, METRIC_AXIS.index("max_drawdown_mtm_pct")]
+    ).any()

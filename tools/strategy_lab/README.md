@@ -1,4 +1,4 @@
-# Strategy Lab — Phase 0 through Phase 1-B
+# Strategy Lab — Phase 0 through Phase 2 Stage 1
 
 Strategy Lab is a local, research-only tool for certified Backtester V2
 strategies. Phase 0 ships configuration, pre-registration, deterministic V2
@@ -20,6 +20,15 @@ Fast rank plus semantic/candidate identity. Phase 1-B is complete: the immutable
 944-group canonical pre-MTM dataset was generated from clean commit `1bdfda76`
 at `output/s06_bracket_mvp_pre_mtm_v1`, and its second invocation was a verified
 no-op. Phase 2 must use a new schema and output directory.
+
+Phase 2 Stage 1 adds the research-only, request-gated bar-close metric
+`max_drawdown_mtm_pct` for generic V2 position-family execution. Dataset schema
+`strategy_lab_dataset_v2` appends it after the 20 pre-MTM metrics, producing
+`float64` groups shaped `[480, 2, 21]`. The first 20 columns and all frozen
+candidate, plan, source, and window identities remain unchanged. MTM is not a
+public objective or persisted Merlin result; requested signal-reversal
+execution is unsupported and fails explicitly. Canonical 944-group v2
+generation is Stage 2 and is not performed by this patch.
 
 The initial frozen run is `runspecs/s06_bracket_mvp.json`: S06 B2 bracket-only,
 480 full-plan candidates, 30-minute data, 2-month IS / 1-month OOS, eight
@@ -69,7 +78,7 @@ inventory member with local values):
 C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.generate `
   tools\strategy_lab\runspecs\s06_bracket_mvp.json `
   --data-root "<read-only-data-root>" `
-  --output-dir tools\strategy_lab\output\phase1a-smoke `
+  --output-dir tools\strategy_lab\tmp\phase2-mtm-smoke `
   --ticker <canonical-symbol> --window 1
 ```
 
@@ -191,6 +200,16 @@ Its accepted Stage 2 published the canonical 944-group pre-MTM output at
 and is not extended in place. No current command calculates selection rules,
 inspects development or holdout outcomes, changes metrics, or draws a
 profitability conclusion. Backtester V1 is permanently unsupported.
+
+The v2 generator requests the appended MTM metric but does not rank or
+interpret it. `max_drawdown_mtm_pct` uses every finite bar-close equity
+observation from `trade_start_idx` through the final bar with initial capital
+as its positive pre-evaluation peak anchor. Empty evaluation intervals and any
+non-finite observation return `NaN`; a present flat interval returns `0.0`;
+negative equity may produce values above 100%. It is distinct from
+balance-based realized Max DD and TradingView's intrabar High/Low drawdown.
+Future `romad_mtm` will return `NaN` when this denominator is zero,
+intentionally different from legacy realized RoMaD.
 
 The historical prototype archive under
 `docs/_work/dev_01_strategy-lab/prototype_01_grid-selection-research/` is

@@ -76,6 +76,7 @@ class CompiledBatchOutput:
     """Fixed-width compiled metrics for one compiled batch."""
 
     outputs: np.ndarray
+    max_drawdown_mtm_pct: np.ndarray | None = None
     backend_kind: str = COMPILED_BATCH_KIND
     execution_mode: str = "grouped"
 
@@ -165,6 +166,7 @@ def evaluate_compiled_batch(
     compute_sharpe: bool = False,
     compute_sharpe_daily: bool = False,
     compute_sqn: bool = False,
+    compute_max_drawdown_mtm: bool = False,
     month_ids: np.ndarray | None = None,
     day_ids: np.ndarray | None = None,
 ) -> CompiledBatchOutput:
@@ -183,10 +185,20 @@ def evaluate_compiled_batch(
     )
     _validate_sharpe_daily_day_ids(metric_day_ids, len(data.timestamps), compute_sharpe_daily)
     if not params_batch:
-        return CompiledBatchOutput(outputs=np.empty((0, OUTPUT_COLUMN_COUNT), dtype=np.float64))
+        return CompiledBatchOutput(
+            outputs=np.empty((0, OUTPUT_COLUMN_COUNT), dtype=np.float64),
+            max_drawdown_mtm_pct=(
+                np.empty(0, dtype=np.float64) if compute_max_drawdown_mtm else None
+            ),
+        )
 
     packed = _pack_config_arrays(profile, params_batch, trade_start_idx)
     outputs = np.empty((len(params_batch), OUTPUT_COLUMN_COUNT), dtype=np.float64)
+    mtm_sidecar = (
+        np.full(len(params_batch), np.nan, dtype=np.float64)
+        if compute_max_drawdown_mtm
+        else np.empty(0, dtype=np.float64)
+    )
     worker_count = _validated_worker_count(n_workers)
     previous_threads = numba.get_num_threads()
     target_threads = max(1, min(worker_count, previous_threads))
@@ -234,12 +246,17 @@ def evaluate_compiled_batch(
             bool(compute_sharpe),
             bool(compute_sharpe_daily),
             bool(compute_sqn),
+            bool(compute_max_drawdown_mtm),
             outputs,
+            mtm_sidecar,
         )
     finally:
         if numba.get_num_threads() != previous_threads:
             numba.set_num_threads(previous_threads)
-    return CompiledBatchOutput(outputs=outputs)
+    return CompiledBatchOutput(
+        outputs=outputs,
+        max_drawdown_mtm_pct=mtm_sidecar if compute_max_drawdown_mtm else None,
+    )
 
 
 def build_stacked_execution_data(
@@ -337,6 +354,7 @@ def evaluate_compiled_stacked_batch(
     compute_sharpe: bool = False,
     compute_sharpe_daily: bool = False,
     compute_sqn: bool = False,
+    compute_max_drawdown_mtm: bool = False,
 ) -> CompiledBatchOutput:
     """Evaluate one stacked compiled batch with per-candidate data row indices."""
 
@@ -361,6 +379,9 @@ def evaluate_compiled_stacked_batch(
         if not params_batch:
             return CompiledBatchOutput(
                 outputs=np.empty((0, OUTPUT_COLUMN_COUNT), dtype=np.float64),
+                max_drawdown_mtm_pct=(
+                    np.empty(0, dtype=np.float64) if compute_max_drawdown_mtm else None
+                ),
                 execution_mode="stacked",
             )
         if len(params_batch) != stacked_data.candidate_count:
@@ -378,10 +399,18 @@ def evaluate_compiled_stacked_batch(
     if candidate_count == 0:
         return CompiledBatchOutput(
             outputs=np.empty((0, OUTPUT_COLUMN_COUNT), dtype=np.float64),
+            max_drawdown_mtm_pct=(
+                np.empty(0, dtype=np.float64) if compute_max_drawdown_mtm else None
+            ),
             execution_mode="stacked",
         )
 
     outputs = np.empty((candidate_count, OUTPUT_COLUMN_COUNT), dtype=np.float64)
+    mtm_sidecar = (
+        np.full(candidate_count, np.nan, dtype=np.float64)
+        if compute_max_drawdown_mtm
+        else np.empty(0, dtype=np.float64)
+    )
     worker_count = _validated_worker_count(n_workers)
     previous_threads = numba.get_num_threads()
     target_threads = max(1, min(worker_count, previous_threads))
@@ -430,12 +459,18 @@ def evaluate_compiled_stacked_batch(
             bool(compute_sharpe),
             bool(compute_sharpe_daily),
             bool(compute_sqn),
+            bool(compute_max_drawdown_mtm),
             outputs,
+            mtm_sidecar,
         )
     finally:
         if numba.get_num_threads() != previous_threads:
             numba.set_num_threads(previous_threads)
-    return CompiledBatchOutput(outputs=outputs, execution_mode="stacked")
+    return CompiledBatchOutput(
+        outputs=outputs,
+        max_drawdown_mtm_pct=mtm_sidecar if compute_max_drawdown_mtm else None,
+        execution_mode="stacked",
+    )
 
 
 def _contiguous_1d(values: Any, name: str, dtype: Any) -> np.ndarray:
@@ -966,12 +1001,16 @@ def _compiled_loop_one(
     compute_sharpe: bool,
     compute_sharpe_daily: bool,
     compute_sqn: bool,
+    compute_max_drawdown_mtm: bool,
     outputs: np.ndarray,
+    mtm_sidecar: np.ndarray,
 ) -> None:
     n = close_values.shape[0]
     initial_capital = initial_capital_values[candidate_index]
     if n == 0:
         _write_empty_result(outputs, candidate_index, initial_capital)
+        if compute_max_drawdown_mtm:
+            mtm_sidecar[candidate_index] = math.nan
         return
 
     commission_rate = commission_pct_values[candidate_index] / 100.0
@@ -1051,6 +1090,8 @@ def _compiled_loop_one(
     sqn_count = 0
     sqn_mean = 0.0
     sqn_m2 = 0.0
+    mtm_peak = initial_capital
+    max_drawdown_mtm = 0.0
 
     invalid_stop_distance_count = 0
     zero_size_entry_count = 0
@@ -1366,7 +1407,11 @@ def _compiled_loop_one(
                         pending_target = target
                     pending_size = order_size
 
-        if (compute_sharpe or compute_sharpe_daily) and i >= trade_start_idx:
+        if (
+            compute_sharpe
+            or compute_sharpe_daily
+            or compute_max_drawdown_mtm
+        ) and i >= trade_start_idx:
             unrealized = 0.0
             if position > 0:
                 unrealized = (close - entry_price) * size
@@ -1374,6 +1419,16 @@ def _compiled_loop_one(
                 unrealized = (entry_price - close) * size
             equity_value = balance + unrealized
             last_equity = equity_value
+            if compute_max_drawdown_mtm:
+                if not math.isfinite(equity_value):
+                    max_drawdown_mtm = math.nan
+                elif not math.isnan(max_drawdown_mtm):
+                    if equity_value > mtm_peak:
+                        mtm_peak = equity_value
+                    elif mtm_peak > 0.0 and equity_value < mtm_peak:
+                        mtm_drawdown = (mtm_peak - equity_value) / mtm_peak * 100.0
+                        if mtm_drawdown > max_drawdown_mtm:
+                            max_drawdown_mtm = mtm_drawdown
             if compute_sharpe:
                 month_key = month_ids[i]
                 if current_month < 0:
@@ -1527,6 +1582,11 @@ def _compiled_loop_one(
     outputs[candidate_index, OUTPUT_SHARPE_DAILY] = sharpe_daily
     outputs[candidate_index, OUTPUT_SHARPE_DAILY_OBSERVATIONS] = sharpe_daily_observations
     outputs[candidate_index, OUTPUT_SHARPE_DAILY_ACTIVE_DAYS] = sharpe_daily_active
+    if compute_max_drawdown_mtm:
+        if trade_start_idx >= n:
+            mtm_sidecar[candidate_index] = math.nan
+        else:
+            mtm_sidecar[candidate_index] = max_drawdown_mtm
 
 
 def _batch_loop_impl(
@@ -1570,7 +1630,9 @@ def _batch_loop_impl(
     compute_sharpe: bool,
     compute_sharpe_daily: bool,
     compute_sqn: bool,
+    compute_max_drawdown_mtm: bool,
     outputs: np.ndarray,
+    mtm_sidecar: np.ndarray,
 ) -> None:
     for index in numba.prange(outputs.shape[0]):
         _compiled_loop_one(
@@ -1615,7 +1677,9 @@ def _batch_loop_impl(
             compute_sharpe,
             compute_sharpe_daily,
             compute_sqn,
+            compute_max_drawdown_mtm,
             outputs,
+            mtm_sidecar,
         )
 
 
@@ -1661,7 +1725,9 @@ def _stacked_batch_loop_impl(
     compute_sharpe: bool,
     compute_sharpe_daily: bool,
     compute_sqn: bool,
+    compute_max_drawdown_mtm: bool,
     outputs: np.ndarray,
+    mtm_sidecar: np.ndarray,
 ) -> None:
     for index in numba.prange(outputs.shape[0]):
         row = data_index[index]
@@ -1707,7 +1773,9 @@ def _stacked_batch_loop_impl(
             compute_sharpe,
             compute_sharpe_daily,
             compute_sqn,
+            compute_max_drawdown_mtm,
             outputs,
+            mtm_sidecar,
         )
 
 

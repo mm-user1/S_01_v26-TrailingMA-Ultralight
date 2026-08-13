@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+import math
+from typing import Any, Mapping, Optional, Sequence
 
 import pandas as pd
 
@@ -29,6 +30,30 @@ class V2RunResult:
     guardrail_summary: GuardrailSummary
     standing_state: StandingState
     kernel_result: KernelResult
+    max_drawdown_mtm_pct: float | None = None
+
+
+def _max_drawdown_mtm_from_equity(
+    equity_curve: Sequence[float],
+    trade_start_idx: int,
+    initial_equity: float,
+) -> float:
+    """Return sticky-NaN bar-close MTM drawdown for the evaluation interval."""
+
+    start = max(0, int(trade_start_idx))
+    if start >= len(equity_curve):
+        return float("nan")
+    peak = float(initial_equity)
+    maximum = 0.0
+    for value in equity_curve[start:]:
+        equity = float(value)
+        if not math.isfinite(equity):
+            return float("nan")
+        if equity > peak:
+            peak = equity
+        elif peak > 0.0 and equity < peak:
+            maximum = max(maximum, (peak - equity) / peak * 100.0)
+    return maximum
 
 
 def _coerce_bool(value: Any, default: bool) -> bool:
@@ -148,12 +173,17 @@ def run_v2_strategy(
     params: Mapping[str, Any],
     trade_start_idx: int = 0,
     compute_sharpe_daily: bool = False,
+    compute_max_drawdown_mtm: bool = False,
 ) -> V2RunResult:
     """Run V2 execution and return an enriched Merlin strategy result."""
 
     modes = active_mode_values(profile, params)
     topology = modes.get("topology")
     if topology == "signal_reversal":
+        if compute_max_drawdown_mtm:
+            raise ValueError(
+                "max_drawdown_mtm_pct requires a V2 position-family execution topology."
+            )
         config = build_signal_kernel_config(profile=profile, params=params, trade_start_idx=trade_start_idx)
         kernel_result = run_signal_reversal_kernel(data, config)
         initial_balance = config.initial_capital
@@ -184,6 +214,15 @@ def run_v2_strategy(
         guardrail_summary=kernel_result.guardrail_summary,
         standing_state=kernel_result.standing_state,
         kernel_result=kernel_result,
+        max_drawdown_mtm_pct=(
+            _max_drawdown_mtm_from_equity(
+                kernel_result.equity_curve,
+                trade_start_idx,
+                initial_balance,
+            )
+            if compute_max_drawdown_mtm
+            else None
+        ),
     )
 
 

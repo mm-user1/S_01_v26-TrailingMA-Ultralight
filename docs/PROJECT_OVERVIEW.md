@@ -230,7 +230,7 @@ canonical JSON/SHA-256 identity, generic read-only V2 plan reconstruction, and
 a deterministic market-data inventory with frozen development/holdout cells.
 `data_quality.py` validates raw rows before loading and reuses the authoritative
 calendar/warmup helpers. `dataset.py` owns deterministic candidate projection,
-the frozen float64 metric matrix, atomic artifacts, and checksum verification.
+the float64 metric matrix, atomic artifacts, and checksum verification.
 `generate.py` owns registry-driven unranked V2 execution, subset labelling,
 identity-bound partial/final manifests, safe resume, and the CLI.
 `certify.py` owns opt-in real-pack validation, compiled/reference and selected
@@ -260,6 +260,14 @@ generation passed, so Phase 1-B is accepted. The immutable local dataset is
 `tools/strategy_lab/output/s06_bracket_mvp_pre_mtm_v1`; Phase 2 must regenerate
 under a new schema/output rather than append to it. Historical studies may lack
 the additive transport facts and are not rewritten.
+
+Phase 2 Stage 1 introduces `strategy_lab_dataset_v2`, whose group shape is
+`[480, 2, 21]`; the appended column is evaluation-only bar-close
+`max_drawdown_mtm_pct`. The request is private to Strategy Lab and generic V2
+position execution. It is not an objective, stored production result,
+realized drawdown, or TradingView intrabar drawdown. The fixed compiled output
+matrix remains 26 columns and MTM uses a request-gated float64 sidecar. The
+canonical 944-group v2 regeneration remains a separate clean Stage 2 action.
 
 #### Indicators (`src/indicators/`)
 

@@ -26,7 +26,8 @@ Repository directory roles:
 - `./docs` contains documentation, plans, and reference material.
 - `./src` is the main application source directory.
 - `./tools/strategy_lab` contains the Backtester-V2-only Strategy Lab Phase
-  0/1 run-spec, plan identity, read-only inventory, strict source validation,
+  0/1 foundation and Phase 2 Stage 1 schema-v2/MTM path: run-spec, plan
+  identity, read-only inventory, strict source validation,
   candidate projection, atomic resumable dataset foundation, and opt-in real
   certification command. Its tracked
   `runspecs/` are cross-host identity; `output/`, `cache/`, and `tmp/` are local
@@ -45,6 +46,11 @@ eight-window HTTP, and 944-group generation gates have passed. The immutable
 canonical pre-MTM dataset is local under
 `tools/strategy_lab/output/s06_bracket_mvp_pre_mtm_v1`; Phase 2 must publish a
 new schema/output rather than modify it in place.
+Phase 2 Stage 1 adds request-gated bar-close `max_drawdown_mtm_pct` for the
+generic V2 position family and appends it as metric 21 in
+`strategy_lab_dataset_v2`. Signal-reversal requests fail explicitly. The
+canonical v2 dataset is not generated until a separately approved clean Stage
+2 baseline.
 Run Strategy Lab tests from the repository root through the configured
 interpreter: `python -m pytest tests/strategy_lab -q`.
 
@@ -819,7 +825,11 @@ is the independent maximum `peak - balance`. `metric_start_idx`,
 `metric_initial_equity`, and the optional Net Profit starting balance do not
 seed or truncate this scan. RoMaD uses the corrected percentage DD. Slow, all
 three V1 Fast backends, and both V2 compiled families share this contract.
-Future Strategy Lab mark-to-market DD must use a distinct metric name.
+Strategy Lab mark-to-market DD is the distinct request-gated metric
+`max_drawdown_mtm_pct`. It uses evaluation-only bar-close equity and the
+initial-capital anchor; it is not realized Max DD or TradingView intrabar
+drawdown. Future `romad_mtm` returns `NaN` when MTM DD is zero, unlike legacy
+realized RoMaD.
 
 Monthly Sortino requires real downside months and is often `None` on two- to
 four-month windows; selecting it as a Slow objective may remove many or all

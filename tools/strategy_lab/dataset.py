@@ -21,7 +21,7 @@ from .config import canonical_json_bytes, semantic_key_digest
 from .data_quality import QUALITY_COLUMNS
 
 
-DATASET_SCHEMA_VERSION = "strategy_lab_dataset_v1"
+DATASET_SCHEMA_VERSION = "strategy_lab_dataset_v2"
 CANDIDATE_SCHEMA_VERSION = "strategy_lab_candidates_v1"
 SEGMENT_AXIS = ("is", "oos")
 METRIC_AXIS = (
@@ -45,6 +45,7 @@ METRIC_AXIS = (
     "invalid_stop_distance_count",
     "max_required_leverage",
     "flags",
+    "max_drawdown_mtm_pct",
 )
 GUARDRAIL_FIELDS = (
     "rejected_fill_count",
@@ -221,6 +222,7 @@ def result_row_values(row: GridV2ResultRow) -> np.ndarray:
         "sharpe_daily_active_days": row.sharpe_daily_active_days,
         "sqn": row.sqn,
         **{name: guardrails[name] for name in GUARDRAIL_FIELDS},
+        "max_drawdown_mtm_pct": row.max_drawdown_mtm_pct,
     }
     if tuple(raw) != METRIC_AXIS:
         raise DatasetError("result mapping order does not match the frozen metric axis.")
@@ -266,7 +268,7 @@ def group_matrix(
     )
     expected = (plan.deduped_candidate_count, len(SEGMENT_AXIS), len(METRIC_AXIS))
     if result.shape != expected or result.dtype != np.float64:
-        raise DatasetError("group matrix shape or dtype violates strategy_lab_dataset_v1.")
+        raise DatasetError("group matrix shape or dtype violates strategy_lab_dataset_v2.")
     return result
 
 

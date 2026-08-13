@@ -57,6 +57,7 @@ from .inventory import resolve_data_root
 
 
 REQUIRED_BACKEND_KIND = "compiled_numba"
+COMPUTE_MAX_DRAWDOWN_MTM = True
 
 
 @dataclass(frozen=True)
@@ -223,6 +224,9 @@ def _identity(
         "candidate_axis": list(range(1, spec.plan.deduped_candidate_count + 1)),
         "segment_axis": list(SEGMENT_AXIS),
         "metric_axis": list(METRIC_AXIS),
+        "metric_requests": {
+            "compute_max_drawdown_mtm": COMPUTE_MAX_DRAWDOWN_MTM,
+        },
         "included_tickers": [
             {"canonical_symbol": source.entry["canonical_symbol"], "cell": source.entry["cell"]}
             for source in sources
@@ -678,6 +682,7 @@ def generate_dataset(
                         compute_sharpe=False,
                         compute_sharpe_daily=True,
                         compute_sqn=True,
+                        compute_max_drawdown_mtm=COMPUTE_MAX_DRAWDOWN_MTM,
                     )
                     duration = time.perf_counter() - execution_started
                     if segment_name == "is":
