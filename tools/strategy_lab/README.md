@@ -1,4 +1,4 @@
-# Strategy Lab — Phase 0 through Phase 1-B Stage 1
+# Strategy Lab — Phase 0 through Phase 1-B
 
 Strategy Lab is a local, research-only tool for certified Backtester V2
 strategies. Phase 0 ships configuration, pre-registration, deterministic V2
@@ -16,8 +16,10 @@ strategy analysis.
 The real-pack parity/thread/smoke command and complete eight-window production
 HTTP WFA tie-back are verified. The transport path honours the frozen requested
 worker count, persists the exact Grid V2 plan fingerprint, and retains selected
-Fast rank plus semantic/candidate identity. Phase 1-B Stage 1 is accepted;
-Stage 2 and canonical generation remain separately approval-gated.
+Fast rank plus semantic/candidate identity. Phase 1-B is complete: the immutable
+944-group canonical pre-MTM dataset was generated from clean commit `1bdfda76`
+at `output/s06_bracket_mvp_pre_mtm_v1`, and its second invocation was a verified
+no-op. Phase 2 must use a new schema and output directory.
 
 The initial frozen run is `runspecs/s06_bracket_mvp.json`: S06 B2 bracket-only,
 480 full-plan candidates, 30-minute data, 2-month IS / 1-month OOS, eight
@@ -182,15 +184,12 @@ re-freeze for this MVP.
 
 ## Phase boundary and explicit non-goals
 
-Phase 1-B Stage 1 may validate the complete source pack but executes only the
-outcome-independent CRVUSDT representative, creates temporary smoke datasets,
-and runs one WFA study under pytest's isolated storage. It does not publish the
-canonical dataset. Stage 2 alone may generate the canonical 944-group output at
-`tools/strategy_lab/output/s06_bracket_mvp_pre_mtm_v1`, and only after Stage 1
-is independently reviewed, the production WFA fix lands, and the tie-back is
-rerun successfully from an approved commit. Canonical generation remains
-prohibited while that gate is blocked. No command here calculates selection
-rules, inspects development or holdout outcomes, changes metrics, or draws a
+Phase 1-B certification uses the outcome-independent CRVUSDT representative,
+temporary smoke datasets, and one WFA study under pytest's isolated storage.
+Its accepted Stage 2 published the canonical 944-group pre-MTM output at
+`tools/strategy_lab/output/s06_bracket_mvp_pre_mtm_v1`. That dataset is immutable
+and is not extended in place. No current command calculates selection rules,
+inspects development or holdout outcomes, changes metrics, or draws a
 profitability conclusion. Backtester V1 is permanently unsupported.
 
 The historical prototype archive under

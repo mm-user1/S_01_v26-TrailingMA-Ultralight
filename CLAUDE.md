@@ -38,11 +38,13 @@ Strategy Lab external market data is read-only. Resolve its root from an
 explicit `--data-root`, then `MERLIN_STRATEGY_LAB_DATA_ROOT`; never search for
 substitute files or track an absolute root. The confirmed Windows pack may be
 absent on Linux/VPS, where Stage A remains valid but Stage B must be reported as
-incomplete. Phase 1-B Stage 1 owns real-pack validation, representative parity,
-multi-thread determinism, temporary smoke generation, and an implemented
-isolated WFA tie-back. The production transport patch and complete real-pack plus
-eight-window HTTP certification have passed, so Phase 1-B Stage 1 is accepted.
-Canonical full generation remains approval-gated Stage 2 and has not started.
+incomplete. Phase 1-B owns real-pack validation, representative parity,
+multi-thread determinism, temporary smoke generation, an isolated WFA tie-back,
+and canonical generation. Its production transport, complete real-pack,
+eight-window HTTP, and 944-group generation gates have passed. The immutable
+canonical pre-MTM dataset is local under
+`tools/strategy_lab/output/s06_bracket_mvp_pre_mtm_v1`; Phase 2 must publish a
+new schema/output rather than modify it in place.
 Run Strategy Lab tests from the repository root through the configured
 interpreter: `python -m pytest tests/strategy_lab -q`.
 

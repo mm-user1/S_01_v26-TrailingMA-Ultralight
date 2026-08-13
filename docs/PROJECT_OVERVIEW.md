@@ -223,7 +223,7 @@ mark-to-market drawdown is a separate metric and must use a distinct name.
 
 #### Strategy Lab (`tools/strategy_lab/`)
 
-Strategy Lab Phase 0 through Phase 1-B Stage 1 is a tracked, local research
+Strategy Lab Phase 0 through Phase 1-B is a tracked, local research
 foundation for certified Backtester V2 strategies only. It owns strict
 portable run-spec validation,
 canonical JSON/SHA-256 identity, generic read-only V2 plan reconstruction, and
@@ -242,10 +242,10 @@ Tracked run specs and inventories contain content-derived, cross-host facts.
 Resolved data roots, host/platform, source mtimes, and verification timestamps
 remain under ignored `tools/strategy_lab/output/`; `cache/` and `tmp/` are also
 local. External CSVs are read-only and are resolved only from an explicit root
-or `MERLIN_STRATEGY_LAB_DATA_ROOT`, never by filesystem search. Phase 1-B Stage
-1 can generate bounded candidate-level smoke shards and run opt-in
-certification, but it does not calculate rules, inspect development/holdout
-results, add MTM drawdown, or generate the configured full dataset. Its
+or `MERLIN_STRATEGY_LAB_DATA_ROOT`, never by filesystem search. Phase 1-B can
+generate bounded candidate-level smoke shards, run opt-in certification, and
+publish the configured full pre-MTM dataset, but it does not calculate rules,
+inspect development/holdout results, or add MTM drawdown. Its
 production WFA transport now honours the shared normalized worker count and
 stores each new Grid V2 window's actual compiled workers and exact plan
 fingerprint. Selected WFA trials retain authoritative Fast rank, semantic key,
@@ -255,10 +255,11 @@ selected-list position in the same `grid_rank` / Rank field; historical studies
 remain unchanged and are not backfilled, so rerun an old study for exact
 like-for-like rank semantics. This is metadata and display history only; it does
 not imply changed metrics, winners, candidate identity, or trading behavior.
-The complete real-pack and eight-window HTTP tie-back passed, so Phase 1-B Stage
-1 is accepted. Historical studies may also lack the additive transport facts
-and are not rewritten. Stage 2 and the canonical full dataset remain
-approval-gated and have not started.
+The complete real-pack, eight-window HTTP tie-back, and canonical 944-group
+generation passed, so Phase 1-B is accepted. The immutable local dataset is
+`tools/strategy_lab/output/s06_bracket_mvp_pre_mtm_v1`; Phase 2 must regenerate
+under a new schema/output rather than append to it. Historical studies may lack
+the additive transport facts and are not rewritten.
 
 #### Indicators (`src/indicators/`)
 
