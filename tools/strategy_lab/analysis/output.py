@@ -74,31 +74,196 @@ def _report(result: AnalysisResult) -> bytes:
     dataset = metadata["dataset"]
     scope = metadata["analysis_scope"]
     population = summary["population"]
+
     def display(value: Any) -> str:
-        return "unavailable" if value is None else f"{value:.6f}"
+        if value is None:
+            return "unavailable"
+        if isinstance(value, (int, np.integer)):
+            return str(int(value))
+        if isinstance(value, (float, np.floating)):
+            return f"{float(value):.6f}"
+        return str(value)
+
+    actual_ids = scope["actual_window_ids"]
+    missing_ids = scope["missing_window_ids"]
+    smoke_note = (
+        " **SMOKE / NON-FULL DATASET:** completeness does not make this a full dataset."
+        if dataset["scope"] == "smoke"
+        else ""
+    )
 
     lines = [
         "# Strategy Lab analysis report",
         "",
-        f"- Dataset schema/status: `{dataset['schema_version']}` / `{dataset['status']}`",
+        f"- Dataset schema/scope/status: `{dataset['schema_version']}` / `{dataset['scope']}` / `{dataset['status']}`.{smoke_note}",
         f"- Manifest SHA-256: `{dataset['manifest_sha256']}`",
-        f"- Analysis scope: `{scope['name']}` ({scope['ticker_count']} tickers, {len(scope['actual_window_ids'])} UTC blocks)",
+        f"- Requested analysis scope/cell: `{scope['name']}` / `{scope['ticker_cell']}`",
+        f"- Actual tickers / full ticker-cell authority: {scope['ticker_count']} / {scope['ticker_cell_count']}",
+        f"- Actual calendar blocks: {scope['actual_calendar_block_count']}",
+        f"- Declared / actual / missing window IDs: `{scope['declared_window_ids']}` / `{actual_ids}` / `{missing_ids}`",
         f"- Partial scope: `{str(scope['is_partial']).lower()}`",
+        f"- Scope requires unlock: `{str(scope['requires_unlock']).lower()}`",
         f"- Population observations: {population['observation_count']}",
         f"- OOS Net Profit mean / median: {display(population['mean'])} / {display(population['median'])}",
         f"- OOS profitable share: {display(population['profitable_share'])}",
         "",
+        "### Actual UTC calendar blocks",
+        "",
+        "| Window | Block key (OOS start, OOS end) | IS boundaries |",
+        "|---:|---|---|",
+    ]
+    for block in scope["utc_blocks"]:
+        lines.append(
+            f"| {block['window_id']} | `{block['oos_start']}` — `{block['oos_end']}` "
+            f"| `{block['is_start']}` — `{block['is_end']}` |"
+        )
+    if scope.get("unlock_evidence") is not None:
+        unlock = scope["unlock_evidence"]
+        lines.extend(
+            [
+                "",
+                "### Holdout unlock evidence",
+                "",
+                f"- Policy: `{unlock['policy_ref']}`",
+                f"- Policy SHA-256: `{unlock['policy_sha256']}`",
+                f"- Unlock code commit / dirty: `{unlock['code_commit']}` / `{str(unlock['dirty_worktree']).lower()}`",
+            ]
+        )
+    lines.extend(
+        [
+        "",
         "## Rule results",
         "",
-        "| Rule | State | Selected pairs | Top-1 headline | Lift | Robust lift |",
-        "|---|---:|---:|---:|---:|---:|",
-    ]
+        "| Rule | Kind/state | Selected pairs | Unavailable reason | Top-1 headline | Lift | Robust lift |",
+        "|---|---|---:|---|---:|---:|---:|",
+        ]
+    )
     for name, row in summary["rules"].items():
         lines.append(
-            f"| `{name}` | {row['rule_status']} | {row['selected_pairs']} / {row['total_pairs']} "
+            f"| `{name}` | {row['rule_kind']} / {row['rule_status']} | {row['selected_pairs']} / {row['total_pairs']} "
+            f"| {row['unavailable_pair_reason'] or ''} "
             f"| {display(row['top1_headline_mean'])} | {display(row['top1_lift_headline'])} "
             f"| {display(row['robustness']['robust_lift_headline'])} |"
         )
+    unsupported = [
+        (name, state)
+        for name, state in metadata["rule_states"].items()
+        if state["status"] != "supported"
+    ]
+    if unsupported:
+        lines.extend(
+            [
+                "",
+                "### Unsupported registered rules",
+                "",
+                "| Rule | Kind | State/reason |",
+                "|---|---|---|",
+            ]
+        )
+        for name, state in unsupported:
+            reason = "missing metrics: " + ", ".join(state["missing_metrics"])
+            lines.append(f"| `{name}` | {state['kind']} | {state['status']}: {reason} |")
+
+    lines.extend(
+        [
+            "",
+            "## Descriptive month-block bootstrap intervals",
+            "",
+            "These intervals are descriptive only. With five or six blocks they are weak and are not statistical proof.",
+            "",
+            "| Rule | Headline | Effect | Blocks | CI95 low | CI95 high | CI95 width | Status/reason |",
+            "|---|---|---:|---:|---:|---:|---:|---|",
+        ]
+    )
+    selectable = metadata["contracts"]["rule_registry"]["selectable_rules"]
+    for name in selectable:
+        row = summary["rules"].get(name)
+        if row is None:
+            continue
+        for headline, interval in row["bootstraps"].items():
+            reason = interval["status"] if interval["reason"] is None else f"{interval['status']}: {interval['reason']}"
+            lines.append(
+                f"| `{name}` | `{headline}` | {display(interval['effect'])} | {interval['block_count']} "
+                f"| {display(interval['lower'])} | {display(interval['upper'])} "
+                f"| {display(interval['width'])} | {reason} |"
+            )
+
+    lines.extend(["", "## Mechanical evidence", ""])
+    evidence_by_rule = summary["evidence_by_selectable_rule"]
+    for name in selectable:
+        rows = evidence_by_rule.get(name)
+        if rows is None:
+            state = metadata["rule_states"][name]
+            lines.extend(
+                [
+                    f"### `{name}`",
+                    "",
+                    f"Evidence unavailable: {state['status']}; missing metrics: {', '.join(state['missing_metrics'])}.",
+                    "",
+                ]
+            )
+            continue
+        lines.extend(
+            [
+                f"### `{name}`",
+                "",
+                "| Criterion | Operator | Threshold | Of | Observed | Status | Reason |",
+                "|---|---:|---:|---:|---:|---|---|",
+            ]
+        )
+        for evidence in rows:
+            declared_of = "" if evidence["of"] is None else display(evidence["of"])
+            lines.append(
+                f"| `{evidence['criterion']}` | `{evidence['operator']}` | {display(evidence['threshold'])} "
+                f"| {declared_of} | {display(evidence['observed'])} "
+                f"| {evidence['status']} | {evidence['reason'] or ''} |"
+            )
+        lines.append("")
+
+    diagnostics = summary["diagnostics"]
+    lines.extend(
+        [
+            "## Guardrails and availability diagnostics",
+            "",
+            "| Flag bit | Value | OOS observation count | Interpretation |",
+            "|---|---:|---:|---|",
+        ]
+    )
+    interpretations = {
+        "rejected_fill": "strategy-filter diagnostic; not automatically an execution fault",
+        "invalid_stop_distance": "execution-fault flag",
+        "zero_size_entry": "execution-fault flag",
+    }
+    for name, bit in diagnostics["known_flag_bits"].items():
+        lines.append(
+            f"| `{name}` | {bit} | {diagnostics['known_flag_bit_counts'][name]} | {interpretations[name]} |"
+        )
+    lines.append(f"\n- Unknown flag bits (bitwise mask): `{diagnostics['unknown_flag_bits']}`")
+    faults = diagnostics["guardrail_fault_observation_counts"]
+    lines.append(
+        f"- Fault observations: `zero_size_entry_count={faults['zero_size_entry_count']}`, "
+        f"`invalid_stop_distance_count={faults['invalid_stop_distance_count']}`."
+    )
+    rejected = diagnostics["guardrails"].get("rejected_fill_count", {})
+    lines.append(
+        f"- Rejected-fill diagnostic observations: `{rejected.get('nonzero_observation_count', 'unavailable')}` "
+        "(not classified wholesale as execution faults)."
+    )
+    lines.extend(
+        [
+            "",
+            "### Metric availability",
+            "",
+            "| Segment | Metric | Finite | Unavailable |",
+            "|---|---|---:|---:|",
+        ]
+    )
+    for segment, metrics in diagnostics["metric_summaries"].items():
+        for metric, facts in metrics.items():
+            if facts["unavailable_count"]:
+                lines.append(
+                    f"| {segment} | `{metric}` | {facts['finite_count']} | {facts['unavailable_count']} |"
+                )
     lines.extend(
         [
             "",

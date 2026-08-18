@@ -356,7 +356,12 @@ def evaluate_custom_rule(
 ) -> RuleResult:
     if not isinstance(name, str) or not name or not isinstance(version, str) or not version:
         raise AnalysisError("custom rule name and version must be non-empty strings.")
-    raw = function(view, geometry, context)
+    try:
+        raw = function(view, geometry, context)
+    except AnalysisError:
+        raise
+    except Exception as exc:
+        raise AnalysisError(f"custom rule {name!r} failed: {exc}") from exc
     if isinstance(raw, RuleResult):
         if raw.name != name:
             raise AnalysisError(

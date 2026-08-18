@@ -137,6 +137,8 @@ def outlier_robustness(
     selected: np.ndarray,
     tickers: Sequence[str],
     procedure: Mapping[str, Any],
+    *,
+    ticker_cell_count: int | None = None,
 ) -> Mapping[str, Any]:
     if (
         procedure.get("contribution")
@@ -148,6 +150,8 @@ def outlier_robustness(
         != ["mean_contribution_desc", "canonical_symbol_asc"]
         or procedure.get("recompute")
         != "monthly_means_then_equal_weight_six_month_headline"
+        or procedure.get("criterion_scope")
+        != "recomputed_headline_only_monthly_signs_descriptive"
     ):
         raise AnalysisError("unsupported outlier procedure contract.")
     lift = np.asarray(paired_lift, dtype=np.float64)
@@ -159,7 +163,15 @@ def outlier_robustness(
         contribution = _finite_mean(lift[index])
         if contribution is not None and contribution > 0.0:
             contributions.append((str(ticker), index, contribution))
-    quota = math.ceil(0.10 * len(tickers))
+    quota_authority = len(tickers) if ticker_cell_count is None else ticker_cell_count
+    if (
+        isinstance(quota_authority, bool)
+        or not isinstance(quota_authority, int)
+        or quota_authority < len(tickers)
+        or quota_authority < 1
+    ):
+        raise AnalysisError("outlier ticker-cell count is invalid for the analyzed subset.")
+    quota = math.ceil(0.10 * quota_authority)
     contributions.sort(key=lambda item: (-item[2], item[0]))
     removed = contributions[: min(quota, len(contributions))]
     removed_indices = {item[1] for item in removed}
@@ -171,6 +183,7 @@ def outlier_robustness(
         "removed_tickers": [item[0] for item in removed],
         "positive_contributor_count": len(contributions),
         "quota": quota,
+        "ticker_cell_count": quota_authority,
         "original_lift_headline": original,
         "robust_lift_headline": robust,
         "robust_absolute_selected_headline": robust_absolute,
@@ -197,6 +210,8 @@ def evaluate_evidence(
     *,
     actual_block_count: int,
     scope_complete: bool = True,
+    rule_supported: bool = True,
+    unsupported_reason: str | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
     observed_map = {
         ("broad_population_edge", "median_candidate_oos_net_profit_pct"): population.get("median"),
@@ -222,7 +237,10 @@ def evaluate_evidence(
             declared_of = leaf.get("of")
             observed = observed_map[(block_name, leaf_name)]
             reason = None
-            if not scope_complete:
+            if not rule_supported:
+                status = "unavailable"
+                reason = unsupported_reason or "official rule is unsupported for this dataset"
+            elif not scope_complete:
                 status = "unavailable"
                 reason = "actual analysis is a partial intersection of the frozen scope"
             elif declared_of is not None and declared_of != actual_block_count:
@@ -422,14 +440,21 @@ def evaluate_scope(
     active_formula_rules = tuple(
         name for name in formula_rules if not missing_by_rule[name]
     )
+    active_selectable_rules = tuple(
+        name for name in selectable if not missing_by_rule[name]
+    )
     active_oos_diagnostics = tuple(
         name
         for name in declared_diagnostics
         if name in OOS_DIAGNOSTICS and rule_states[name]["status"] == "supported"
     )
+    if not active_selectable_rules and not custom_rules:
+        raise AnalysisError(
+            "analysis has no supported official rule and no valid custom rule to evaluate."
+        )
     neighbours = star_neighbours(dataset.geometry)
     ticker_position = {ticker: index for index, ticker in enumerate(scope.tickers)}
-    window_position = {window.window_id: index for index, window in enumerate(scope.windows)}
+    block_position = {window.block_key: index for index, window in enumerate(scope.windows)}
     ticker_count, window_count, candidate_count = (
         len(scope.tickers),
         len(scope.windows),
@@ -450,7 +475,6 @@ def evaluate_scope(
     }
     is_net_grid = np.full((ticker_count, window_count, candidate_count), np.nan)
     oos_net_grid = np.full_like(is_net_grid, np.nan)
-    population_by_window: list[list[np.ndarray]] = [[] for _ in scope.windows]
     metric_finite = {
         segment: {metric: 0 for metric in dataset.metric_axis}
         for segment in ("is", "oos")
@@ -477,7 +501,6 @@ def evaluate_scope(
         for segment in ("is", "oos")
     }
     pair_decisions: list[Mapping[str, Any]] = []
-    pending: dict[tuple[str, int, str], tuple[Selection | None, RuleResult | None, Any]] = {}
     gate = float(dataset.contract.rule_registry["minimum_completed_trades"])
     flag_values: list[np.ndarray] = []
     guardrail_faults = {"zero_size_entry_count": 0, "invalid_stop_distance_count": 0}
@@ -486,10 +509,11 @@ def evaluate_scope(
     win_rates: list[np.ndarray] = []
     gate_eligible_count = 0
     for window in scope.windows:
-        is_views = dataset.load_is_window(scope, window)
+        pending: dict[tuple[str, str], tuple[Selection | None, RuleResult | None]] = {}
+        window_views = dataset.load_is_window(scope, window)
         for ticker in scope.tickers:
-            view = is_views[ticker]
-            ti, wi = ticker_position[ticker], window_position[window.window_id]
+            view = window_views[ticker]
+            ti, wi = ticker_position[ticker], block_position[window.block_key]
             is_net = np.asarray(view.metrics["net_profit_pct"], dtype=np.float64)
             is_net_grid[ti, wi] = is_net
             trade_values = view.metrics.get("total_trades")
@@ -508,7 +532,7 @@ def evaluate_scope(
                     name, view, dataset.geometry, gate, neighbours=neighbours
                 )
                 selection = select_candidates(result, is_net, dataset.geometry)
-                pending[(ticker, window.window_id, name)] = (selection, result, view)
+                pending[(ticker, name)] = (selection, result)
             for custom in custom_rules:
                 result = evaluate_custom_rule(
                     custom.name,
@@ -519,15 +543,14 @@ def evaluate_scope(
                     {"minimum_completed_trades": gate, "rule_version": "exploratory"},
                 )
                 selection = select_candidates(result, is_net, dataset.geometry)
-                pending[(ticker, window.window_id, custom.name)] = (selection, result, view)
+                pending[(ticker, custom.name)] = (selection, result)
         # OOS is not loaded until every selection for this window is frozen above.
         oos_matrices = dataset.load_oos_window(scope, window)
         for ticker in scope.tickers:
             matrix = oos_matrices[ticker]
-            ti, wi = ticker_position[ticker], window_position[window.window_id]
+            ti, wi = ticker_position[ticker], block_position[window.block_key]
             oos_net = matrix[:, dataset.metric_index["net_profit_pct"]]
             oos_net_grid[ti, wi] = oos_net
-            population_by_window[wi].append(oos_net.copy())
             for metric, index in dataset.metric_index.items():
                 metric_finite["oos"][metric] += int(np.isfinite(matrix[:, index]).sum())
                 if metric in metric_values["oos"]:
@@ -551,7 +574,8 @@ def evaluate_scope(
                     values = values[np.isfinite(trades) & (trades > 0.0)]
                 win_rates.append(values.copy())
             for name in active_formula_rules + tuple(custom.name for custom in custom_rules):
-                selection, result, view = pending[(ticker, window.window_id, name)]
+                selection, result = pending[(ticker, name)]
+                view = window_views[ticker]
                 if selection is None or not selection.row_indices:
                     status = "unavailable_pair"
                     reason = "no eligible finite candidate"
@@ -636,7 +660,7 @@ def evaluate_scope(
                     )
                 else:
                     selection = None
-                view = pending[(ticker, window.window_id, active_formula_rules[0])][2]
+                view = window_views[ticker]
                 row = _decision_row(
                     rule=name,
                     kind="diagnostic",
@@ -655,21 +679,26 @@ def evaluate_scope(
                 if selection:
                     value = row["top1_oos_net_profit_pct"]
                     pair_values[name][ti, wi, :] = value
-        del is_views, oos_matrices
+        pending.clear()
+        window_views.clear()
+        oos_matrices.clear()
+        selection = result = view = matrix = oos_net = None
+        del pending, window_views, oos_matrices
     baseline_name = str(dataset.contract.rule_registry["baseline_rule"])
-    baseline = pair_values[baseline_name]
+    baseline = pair_values.get(
+        baseline_name,
+        np.full((ticker_count, window_count, 3), np.nan, dtype=np.float64),
+    )
     monthly_rows: list[Mapping[str, Any]] = []
     rule_summaries: dict[str, Mapping[str, Any]] = {}
     uncertainty = dataset.contract.evidence["uncertainty"]
     procedure = dataset.contract.evidence["outlier_procedure"]
-    population_flat = np.concatenate(
-        [np.concatenate(values) for values in population_by_window if values]
-    )
+    population_flat = oos_net_grid.ravel()
     population_monthly_mean: list[float | None] = []
     population_monthly_median: list[float | None] = []
     population_monthly_profitable: list[float | None] = []
     for wi, window in enumerate(scope.windows):
-        values = np.concatenate(population_by_window[wi])
+        values = oos_net_grid[:, wi, :].ravel()
         population_monthly_mean.append(_finite_mean(values))
         population_monthly_median.append(_finite_median(values))
         population_monthly_profitable.append(profitable_share(values))
@@ -718,14 +747,46 @@ def evaluate_scope(
         lift5 = top5 - baseline[:, :, 1]
         lift1_monthly, lift1_headline = monthly_headline(lift1)
         lift5_monthly, lift5_headline = monthly_headline(lift5)
-        robustness = outlier_robustness(lift1, top1, scope.tickers, procedure)
+        robustness = outlier_robustness(
+            lift1,
+            top1,
+            scope.tickers,
+            procedure,
+            ticker_cell_count=scope.ticker_cell_count,
+        )
         selected_pairs = int(np.isfinite(top1).sum())
+        bootstraps = {
+            "top1_absolute": {
+                "effect": top1_headline,
+                **descriptive_bootstrap(top1_monthly, uncertainty),
+            },
+            "top1_lift": {
+                "effect": lift1_headline,
+                **descriptive_bootstrap(lift1_monthly, uncertainty),
+            },
+            "top5_lift": {
+                "effect": lift5_headline,
+                **descriptive_bootstrap(lift5_monthly, uncertainty),
+            },
+            "robust_top1_lift": {
+                "effect": robustness["robust_lift_headline"],
+                **descriptive_bootstrap(
+                    robustness["robust_monthly_lift_descriptive"], uncertainty
+                ),
+            },
+        }
         summary = {
             "rule_kind": rule_states[name]["kind"],
             "rule_status": rule_states[name]["status"],
             "selected_pairs": selected_pairs,
             "total_pairs": scope.total_pairs,
             "availability_share": float(selected_pairs / scope.total_pairs) if scope.total_pairs else None,
+            "unavailable_pair_count": scope.total_pairs - selected_pairs,
+            "unavailable_pair_reason": (
+                "no eligible finite candidate"
+                if selected_pairs < scope.total_pairs
+                else None
+            ),
             "top1_headline_mean": top1_headline,
             "top1_pooled_median": _finite_median(top1),
             "profitable_selected_observation_share": profitable_share(
@@ -743,7 +804,8 @@ def evaluate_scope(
             "top1_oos_percentile_mean": _finite_mean(pair_ranks[name][:, :, 0]),
             "top5_oos_percentile_mean": _finite_mean(pair_ranks[name][:, :, 1]),
             "robustness": robustness,
-            "bootstrap_top1_lift": descriptive_bootstrap(lift1_monthly, uncertainty),
+            "bootstraps": bootstraps,
+            "bootstrap_top1_lift": bootstraps["top1_lift"],
         }
         rule_summaries[name] = summary
         for wi, window in enumerate(scope.windows):
@@ -766,21 +828,36 @@ def evaluate_scope(
                     "population_profitable_share": None,
                 }
             )
-    evidence_by_rule = {
-        name: evaluate_evidence(
+    evidence_by_rule = {}
+    for name in selectable:
+        supported = name in rule_summaries
+        missing = rule_states[name]["missing_metrics"]
+        evidence_by_rule[name] = evaluate_evidence(
             dataset.contract.evidence,
             population,
-            rule_summaries[name],
-            actual_block_count=window_count,
+            rule_summaries.get(name, {}),
+            actual_block_count=len(scope.block_keys),
             scope_complete=not scope.is_partial,
+            rule_supported=supported,
+            unsupported_reason=(
+                f"official rule is unsupported; missing metrics: {', '.join(missing)}"
+                if not supported
+                else None
+            ),
         )
-        for name in selectable
-        if name in rule_summaries
-    }
     flags = np.concatenate(flag_values) if flag_values else np.empty(0)
     finite_flags = flags[np.isfinite(flags)].astype(np.int64)
     known_mask = 2 | 4 | 8
     unknown_bits = int(np.bitwise_or.reduce(finite_flags & ~known_mask, initial=0))
+    known_flag_bits = {
+        "rejected_fill": 2,
+        "invalid_stop_distance": 4,
+        "zero_size_entry": 8,
+    }
+    known_flag_bit_counts = {
+        name: int(np.sum((finite_flags & bit) != 0))
+        for name, bit in known_flag_bits.items()
+    }
     total_observations = ticker_count * window_count * candidate_count
     metric_summaries: dict[str, dict[str, Mapping[str, Any]]] = {"is": {}, "oos": {}}
     for segment in ("is", "oos"):
@@ -850,7 +927,8 @@ def evaluate_scope(
         "flags_nonzero_share": (
             float(np.mean(finite_flags != 0)) if finite_flags.size else None
         ),
-        "known_flag_bits": {"rejected_fill": 2, "invalid_stop_distance": 4, "zero_size_entry": 8},
+        "known_flag_bits": known_flag_bits,
+        "known_flag_bit_counts": known_flag_bit_counts,
         "unknown_flag_bits": unknown_bits,
         "guardrail_fault_observation_counts": guardrail_faults,
         "guardrails": {
@@ -913,6 +991,8 @@ def evaluate_scope(
             "ticker_cell": scope.ticker_cell,
             "tickers": list(scope.tickers),
             "ticker_count": ticker_count,
+            "ticker_cell_count": scope.ticker_cell_count,
+            "actual_calendar_block_count": len(scope.block_keys),
             "declared_window_ids": list(scope.declared_window_ids),
             "actual_window_ids": [window.window_id for window in scope.windows],
             "missing_window_ids": list(scope.missing_window_ids),
@@ -920,6 +1000,7 @@ def evaluate_scope(
             "utc_blocks": [
                 {
                     "window_id": window.window_id,
+                    "block_key": list(window.block_key),
                     "is_start": window.is_start,
                     "is_end": window.is_end,
                     "oos_start": window.oos_start,
@@ -941,7 +1022,7 @@ def evaluate_scope(
             "maximum_nominated_rules": dataset.contract.maximum_nominated_rules,
             "primary_comparison": dataset.contract.primary_comparison,
         },
-        "git": git_facts(dataset.root),
+        "git": git_facts(),
         "rule_states": rule_states,
         "omissions": [
             "ticker allocation and policy comparison are deferred to Phase 3L-B",

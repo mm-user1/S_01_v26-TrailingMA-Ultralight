@@ -8,6 +8,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -35,6 +36,7 @@ EXPECTED_TIE_BREAK = (
     ("semantic_key", "ascending"),
     ("candidate_id", "ascending"),
 )
+CODE_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
 class AnalysisError(ValueError):
@@ -90,6 +92,7 @@ class ResolvedScope:
     name: str
     ticker_cell: str
     tickers: tuple[str, ...]
+    ticker_cell_count: int
     windows: tuple[Window, ...]
     declared_window_ids: tuple[int, ...]
     missing_window_ids: tuple[int, ...]
@@ -100,6 +103,10 @@ class ResolvedScope:
     @property
     def total_pairs(self) -> int:
         return len(self.tickers) * len(self.windows)
+
+    @property
+    def block_keys(self) -> tuple[tuple[str, str], ...]:
+        return tuple(window.block_key for window in self.windows)
 
 
 @dataclass(frozen=True)
@@ -164,6 +171,20 @@ def _require_mapping(value: Any, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise AnalysisError(f"{label} must be an object.")
     return value
+
+
+def _validate_calendar_blocks(
+    scope_name: str, windows: Sequence[Window]
+) -> None:
+    seen: dict[tuple[str, str], int] = {}
+    for window in windows:
+        prior = seen.get(window.block_key)
+        if prior is not None:
+            raise AnalysisError(
+                f"scope {scope_name!r} has duplicate UTC OOS block "
+                f"{window.block_key!r} in windows {prior} and {window.window_id}."
+            )
+        seen[window.block_key] = window.window_id
 
 
 def _validate_contract(run_spec: Mapping[str, Any]) -> AnalysisContract:
@@ -314,7 +335,7 @@ class AnalysisDataset:
             evidence = {
                 "policy_ref": str(policy),
                 "policy_sha256": _sha256(policy),
-                **git_facts(self.root),
+                **git_facts(),
             }
         actual_by_id = {window.window_id: window for window in self.windows}
         declared_ids = tuple(int(value) for value in definition["window_numbers"])
@@ -326,6 +347,12 @@ class AnalysisDataset:
                 "use the explicit partial-scope override to analyze the intersection."
             )
         windows = tuple(actual_by_id[value] for value in declared_ids if value in actual_by_id)
+        if not windows:
+            raise AnalysisError(
+                f"scope {name!r} has no actual windows in its declared intersection "
+                f"{list(declared_ids)}."
+            )
+        _validate_calendar_blocks(name, windows)
         cell = str(definition["ticker_cell"])
         tickers = tuple(symbol for symbol in self.tickers if self.ticker_cells[symbol] == cell)
         if not tickers:
@@ -334,6 +361,7 @@ class AnalysisDataset:
             name=name,
             ticker_cell=cell,
             tickers=tickers,
+            ticker_cell_count=len(tickers),
             windows=windows,
             declared_window_ids=declared_ids,
             missing_window_ids=missing,
@@ -352,6 +380,11 @@ class AnalysisDataset:
         chosen_tickers = scope.tickers if tickers is None else tuple(tickers)
         if any(ticker not in scope.tickers for ticker in chosen_tickers):
             raise AnalysisError("scope subset includes a ticker outside the resolved scope.")
+        if not chosen_tickers:
+            raise AnalysisError(
+                f"scope {scope.name!r} subset has no tickers in cell "
+                f"{scope.ticker_cell!r}."
+            )
         chosen_ids = (
             tuple(window.window_id for window in scope.windows)
             if window_ids is None
@@ -360,11 +393,18 @@ class AnalysisDataset:
         by_id = {window.window_id: window for window in scope.windows}
         if any(window_id not in by_id for window_id in chosen_ids):
             raise AnalysisError("scope subset includes a window outside the resolved scope.")
+        if not chosen_ids:
+            raise AnalysisError(
+                f"scope {scope.name!r} subset has no actual windows in the requested intersection."
+            )
+        chosen_windows = tuple(by_id[window_id] for window_id in chosen_ids)
+        _validate_calendar_blocks(scope.name, chosen_windows)
         return ResolvedScope(
             name=scope.name,
             ticker_cell=scope.ticker_cell,
             tickers=chosen_tickers,
-            windows=tuple(by_id[window_id] for window_id in chosen_ids),
+            ticker_cell_count=scope.ticker_cell_count,
+            windows=chosen_windows,
             declared_window_ids=scope.declared_window_ids,
             missing_window_ids=tuple(
                 sorted(set(scope.declared_window_ids) - set(chosen_ids))
@@ -422,19 +462,21 @@ class AnalysisDataset:
         self, scope: ResolvedScope, window: Window
     ) -> dict[str, ISView]:
         matrices = self._load_segment(scope, window, "is")
-        return {
-            ticker: ISView(
-                metrics={
-                    name: matrix[:, index]
-                    for index, name in enumerate(self.metric_axis)
-                },
+        views: dict[str, ISView] = {}
+        for ticker, matrix in matrices.items():
+            metrics: dict[str, np.ndarray] = {}
+            for index, name in enumerate(self.metric_axis):
+                values = matrix[:, index]
+                values.setflags(write=False)
+                metrics[name] = values
+            views[ticker] = ISView(
+                metrics=MappingProxyType(metrics),
                 ticker=ticker,
                 window_id=window.window_id,
                 is_start=window.is_start,
                 is_end=window.is_end,
             )
-            for ticker, matrix in matrices.items()
-        }
+        return views
 
     def load_oos_window(
         self, scope: ResolvedScope, window: Window
@@ -481,8 +523,38 @@ def _candidate_geometry(
     axes = payload.get("global_axis_names")
     if not isinstance(axes, list) or any(not isinstance(axis, str) for axis in axes):
         raise AnalysisError("global_axis_names must be a string list.")
-    codes = np.asarray([row.get("axis_value_codes") for row in ordered], dtype=np.int64)
-    masks = np.asarray([row.get("active_axis_mask") for row in ordered], dtype=bool)
+    width = len(axes)
+    raw_codes: list[Sequence[int]] = []
+    raw_masks: list[Sequence[bool]] = []
+    for row_index, row in enumerate(ordered):
+        code_row = row.get("axis_value_codes")
+        mask_row = row.get("active_axis_mask")
+        for field, values in (
+            ("axis_value_codes", code_row),
+            ("active_axis_mask", mask_row),
+        ):
+            if (
+                not isinstance(values, Sequence)
+                or isinstance(values, (str, bytes))
+                or len(values) != width
+                or any(isinstance(value, Sequence) and not isinstance(value, (str, bytes)) for value in values)
+            ):
+                raise AnalysisError(
+                    f"candidate row {row_index} {field} must be a flat sequence "
+                    f"of width {width}."
+                )
+        if any(isinstance(value, bool) or not isinstance(value, int) for value in code_row):
+            raise AnalysisError(
+                f"candidate row {row_index} axis_value_codes must contain integers, not booleans."
+            )
+        if any(not isinstance(value, bool) for value in mask_row):
+            raise AnalysisError(
+                f"candidate row {row_index} active_axis_mask must contain booleans."
+            )
+        raw_codes.append(code_row)
+        raw_masks.append(mask_row)
+    codes = np.asarray(raw_codes, dtype=np.int64)
+    masks = np.asarray(raw_masks, dtype=bool)
     if codes.shape != (count, len(axes)) or masks.shape != codes.shape:
         raise AnalysisError("candidate geometry width does not match global axes.")
     for row_index, (code_row, mask_row) in enumerate(zip(codes, masks)):
@@ -524,29 +596,39 @@ def _quality_cells(root: Path) -> Mapping[str, str]:
 
 
 def _git_output(root: Path, *args: str) -> str:
-    try:
-        completed = subprocess.run(
-            ["git", "-C", str(root), *args],
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        raise AnalysisError(f"cannot inspect Git state: {exc}") from exc
+    completed = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={root.as_posix()}",
+            "-C",
+            str(root),
+            *args,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
     return completed.stdout.strip()
 
 
-def git_facts(path: Path) -> Mapping[str, Any]:
-    repo = Path(path).resolve()
-    while repo != repo.parent and not (repo / ".git").exists():
-        repo = repo.parent
-    return {
-        "code_commit": _git_output(repo, "rev-parse", "HEAD"),
-        "dirty_worktree": bool(
-            _git_output(repo, "status", "--porcelain", "--untracked-files=all")
-        ),
-    }
+def git_facts() -> Mapping[str, Any]:
+    """Annotate the code checkout; Git availability must never block analysis."""
+    try:
+        return {
+            "code_commit": _git_output(CODE_REPOSITORY_ROOT, "rev-parse", "HEAD"),
+            "dirty_worktree": bool(
+                _git_output(
+                    CODE_REPOSITORY_ROOT,
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=all",
+                )
+            ),
+        }
+    except (OSError, subprocess.CalledProcessError):
+        return {"code_commit": "unavailable", "dirty_worktree": True}
 
 
 def open_dataset(

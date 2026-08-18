@@ -75,11 +75,23 @@ frozen.
 
 Headline means equal-weight valid tickers inside each UTC OOS block and then
 equal-weight blocks. Medians and profitable shares remain pooled according to
-the observation contract. The month-block bootstrap is deterministic and
-descriptive, but weak with only five or six independent blocks. Locked scopes
-require both `--unlock-scope` and a frozen `--policy` file; development is the
-default. Real holdout and temporal outcomes are not used by Phase 3L-A
-certification.
+the observation contract. Every official selectable rule reports deterministic
+descriptive month-block intervals for Top-1 absolute return, Top-1 paired lift,
+Top-5 paired lift, and the recomputed outlier-robust Top-1 paired lift. These
+intervals are weak with only five or six independent blocks and are never a
+pass/fail criterion. `report.md` includes the complete scope and UTC-block
+identity, all 11 evaluable evidence rows per supported selectable rule,
+bootstrap facts, unsupported/unavailable reasons, flag-bit counts, execution
+fault observations, rejected-fill diagnostics, and material metric
+unavailability.
+
+Analysis Git provenance is anchored to the Merlin code repository containing
+the analysis module, never to the dataset or output location. If Git cannot be
+executed or inspected, publication continues conservatively with
+`code_commit: unavailable` and `dirty_worktree: true`; holdout unlock evidence
+uses the same code-root facts. Locked scopes require both `--unlock-scope` and
+a frozen `--policy` file; development is the default. Real holdout and temporal
+outcomes are not used by Phase 3L-A certification.
 
 The explicit non-default real certification first runs a bounded development
 subset, then reproduces only frozen point-estimate oracles on the full 24 by 6
