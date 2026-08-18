@@ -1,4 +1,4 @@
-# Strategy Lab — Phase 0 through Phase 2 Stage 1
+# Strategy Lab — Phase 0 through Phase 3L-A
 
 Strategy Lab is a local, research-only tool for certified Backtester V2
 strategies. Phase 0 ships configuration, pre-registration, deterministic V2
@@ -27,8 +27,11 @@ Phase 2 Stage 1 adds the research-only, request-gated bar-close metric
 `float64` groups shaped `[480, 2, 21]`. The first 20 columns and all frozen
 candidate, plan, source, and window identities remain unchanged. MTM is not a
 public objective or persisted Merlin result; requested signal-reversal
-execution is unsupported and fails explicitly. Canonical 944-group v2
-generation is Stage 2 and is not performed by this patch.
+execution is unsupported and fails explicitly. The immutable canonical
+944-group v2 dataset is the read-only input to Phase 3L-A. Phase 3L-A adds a
+compact, version-dispatched analysis core for the frozen development rules and
+evidence contract. It does not nominate rules, allocate tickers, or perform
+Phase 3L-B policy analysis.
 
 The initial frozen run is `runspecs/s06_bracket_mvp.json`: S06 B2 bracket-only,
 480 full-plan candidates, 30-minute data, 2-month IS / 1-month OOS, eight
@@ -48,6 +51,43 @@ On this Windows repository, use:
 ```powershell
 C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.config tools\strategy_lab\runspecs\s06_bracket_mvp.json
 C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest tests\strategy_lab -q
+```
+
+Run the safe development analysis. The output must be outside the input
+dataset and contains exactly five deterministic files:
+
+```powershell
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.analysis.cli analyze `
+  --dataset tools\strategy_lab\output\s06_bracket_mvp_mtm_v2 `
+  --scope development `
+  --output tools\strategy_lab\tmp\phase3la-development
+```
+
+The reader supports `strategy_lab_dataset_v2`, `strategy_lab_rules_v1`, and
+`strategy_lab_evidence_v1`. The manifest owns axes, actual windows, group
+records, and identities; the normalized run spec owns scopes, aggregation,
+the trade gate, rule membership, tie-breaking, evidence thresholds, outlier
+handling, and bootstrap parameters. Missing dataset columns make only their
+dependent rules `unsupported_for_dataset`; non-finite candidate values make
+that candidate unavailable; finite zero remains a real observation. Rules see
+an IS-only view, and OOS labels are loaded only after ordered candidate IDs are
+frozen.
+
+Headline means equal-weight valid tickers inside each UTC OOS block and then
+equal-weight blocks. Medians and profitable shares remain pooled according to
+the observation contract. The month-block bootstrap is deterministic and
+descriptive, but weak with only five or six independent blocks. Locked scopes
+require both `--unlock-scope` and a frozen `--policy` file; development is the
+default. Real holdout and temporal outcomes are not used by Phase 3L-A
+certification.
+
+The explicit non-default real certification first runs a bounded development
+subset, then reproduces only frozen point-estimate oracles on the full 24 by 6
+development cell:
+
+```powershell
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.analysis.certify `
+  --dataset tools\strategy_lab\output\s06_bracket_mvp_mtm_v2
 ```
 
 Run the explicit real-pack certification into a fresh task-owned directory:
