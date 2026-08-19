@@ -39,7 +39,7 @@ from tools.strategy_lab.analysis.rules import (
     select_candidates,
     star_neighbours,
 )
-from tools.strategy_lab.config import canonical_json_bytes
+from tools.strategy_lab.analysis.json_utils import canonical_json_bytes
 
 
 METRICS = (
@@ -217,10 +217,20 @@ def _remove_metric(root: Path, metric: str) -> None:
     _write_json(manifest_path, manifest)
 
 
-def _synthetic_dataset(tmp_path: Path, *, actual_windows=(1, 2), metric_axis=METRICS) -> Path:
+def _synthetic_dataset(
+    tmp_path: Path,
+    *,
+    actual_windows=(1, 2),
+    metric_axis=METRICS,
+    tickers=None,
+    declared_window_ids=(1, 2),
+    declared_dev_pool=None,
+) -> Path:
     root = tmp_path / "dataset"
     root.mkdir(parents=True)
-    prereg = _contract()
+    prereg = _contract(declared_window_ids)
+    if declared_dev_pool is not None:
+        prereg["split"]["development_ticker_count"] = declared_dev_pool
     run_spec = {"schema_version": "strategy_lab_runspec_v1", "run_name": "synthetic", "generation": {}, "preregistration": prereg}
     _write_json(root / "normalized_runspec.json", run_spec)
     candidates = {
@@ -245,7 +255,8 @@ def _synthetic_dataset(tmp_path: Path, *, actual_windows=(1, 2), metric_axis=MET
         ],
     }
     _write_json(root / "candidates.json", candidates)
-    tickers = (("AAA", "dev"), ("BBB", "dev"), ("HHH", "holdout"))
+    if tickers is None:
+        tickers = (("AAA", "dev"), ("BBB", "dev"), ("HHH", "holdout"))
     with (root / "data_quality.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=("segment", "canonical_symbol", "cell"))
         writer.writeheader()

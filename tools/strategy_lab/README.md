@@ -1,4 +1,4 @@
-# Strategy Lab — Phase 0 through Phase 3L-A
+# Strategy Lab — Phase 0 through Phase 3L-B
 
 Strategy Lab is a local, research-only tool for certified Backtester V2
 strategies. Phase 0 ships configuration, pre-registration, deterministic V2
@@ -30,8 +30,9 @@ public objective or persisted Merlin result; requested signal-reversal
 execution is unsupported and fails explicitly. The immutable canonical
 944-group v2 dataset is the read-only input to Phase 3L-A. Phase 3L-A adds a
 compact, version-dispatched analysis core for the frozen development rules and
-evidence contract. It does not nominate rules, allocate tickers, or perform
-Phase 3L-B policy analysis.
+evidence contract. Phase 3L-B adds a separate fixed-capacity development
+allocation and exact-calendar dataset-comparison path. Neither phase nominates
+a policy or concludes strategy quality.
 
 The initial frozen run is `runspecs/s06_bracket_mvp.json`: S06 B2 bracket-only,
 480 full-plan candidates, 30-minute data, 2-month IS / 1-month OOS, eight
@@ -93,6 +94,10 @@ uses the same code-root facts. Locked scopes require both `--unlock-scope` and
 a frozen `--policy` file; development is the default. Real holdout and temporal
 outcomes are not used by Phase 3L-A certification.
 
+Analysis and allocation use an analysis-local canonical JSON serializer so
+package imports, CLI help, command JSON, and certifier JSON remain free of
+production strategy-discovery output.
+
 The explicit non-default real certification first runs a bounded development
 subset, then reproduces only frozen point-estimate oracles on the full 24 by 6
 development cell:
@@ -100,6 +105,63 @@ development cell:
 ```powershell
 C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.analysis.certify `
   --dataset tools\strategy_lab\output\s06_bracket_mvp_mtm_v2
+```
+
+Run fixed-capacity allocation with explicit stable dataset labels. N=1 and N>1
+use the same path and align only exact `(canonical ticker, OOS start UTC, OOS
+end UTC)` cells; labels are never inferred in comparison mode:
+
+```powershell
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.analysis.cli allocate `
+  --dataset canonical=tools\strategy_lab\output\s06_bracket_mvp_mtm_v2 `
+  --scope development `
+  --rule primary_profit `
+  --primary-k 6 --sensitivity-k 8 `
+  --output tools\strategy_lab\tmp\phase3lb-canonical
+```
+
+The candidate rule first freezes one candidate per ticker from current IS.
+The official second-level ticker score is that candidate's finite current-IS
+`net_profit_pct`; it ranks descending, then finite selected IS trades
+descending, then canonical symbol ascending. A Python-only custom
+`TickerScorer` receives an immutable scalar `SelectedISTickerView`, explicit
+name/version/JSON configuration, and no arrays, data accessors, OOS, or future
+facts. Candidate decisions and ordered ticker sets freeze before OOS is loaded.
+
+For each concrete primary, sensitivity, and matched-fraction K, slot weight is
+always `1/K`. Underfill leaves cash and never renormalizes selected tickers.
+`requested_capacity_fraction` is K divided by the available pool and may exceed
+one; `realized_selected_fraction` and canonical `selectivity` are selected
+count divided by available and remain within zero to one. Matched fraction is a
+diagnostic K derived from the declared development pool and never replaces the
+operational fixed K.
+
+Every K reports all-available breadth, Bottom-K, Random-K, oracle, and
+anti-oracle controls plus named spreads. Random-K uses the persisted uncertainty
+seed/draw count and a canonical SHA-256 seed payload; publication retains only
+one random summary per K/block, never individual draws. Oracle controls are
+hindsight and non-deployable. Turnover counts common cash slots, while a
+matched-fraction K change makes that transition unavailable. Compounding and
+full-tail drawdown use calendar-block capacity returns and are explicitly not
+bar-level portfolio equity.
+
+Allocation publishes exactly six deterministic files, adding
+`ticker_allocations.csv` to its own output set. The existing `analyze` command
+remains five-file-only and byte-compatible. Both writers reject output beneath
+an input dataset, preserve incompatible existing output, and return
+`verified_noop` for a byte-identical rerun. Locked holdout and temporal scopes
+still require the accepted explicit policy/unlock path and are not accessed by
+Phase 3L-B development certification. Universe sizes, tickers, and windows come
+from accepted dataset contracts rather than hardcoded counts.
+
+The opt-in allocation certifier runs bounded, underfilled, and full-development
+checks against a direct independent oracle. Repeat `--dataset label=path` for
+an aligned N=2 check:
+
+```powershell
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.analysis.allocation_certify `
+  --dataset canonical=tools\strategy_lab\output\s06_bracket_mvp_mtm_v2 `
+  --rule primary_profit
 ```
 
 Run the explicit real-pack certification into a fresh task-owned directory:

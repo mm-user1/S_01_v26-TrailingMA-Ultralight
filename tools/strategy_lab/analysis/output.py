@@ -15,6 +15,7 @@ import numpy as np
 
 from .dataset import AnalysisError
 from .evaluate import AnalysisResult
+from .allocation import AllocationResult
 
 
 OUTPUT_FILES = (
@@ -22,6 +23,15 @@ OUTPUT_FILES = (
     "summary.json",
     "pair_decisions.csv",
     "monthly_results.csv",
+    "report.md",
+)
+
+ALLOCATION_OUTPUT_FILES = (
+    "run_metadata.json",
+    "summary.json",
+    "pair_decisions.csv",
+    "monthly_results.csv",
+    "ticker_allocations.csv",
     "report.md",
 )
 
@@ -327,6 +337,146 @@ def render_files(result: AnalysisResult) -> Mapping[str, bytes]:
     }
 
 
+def _allocation_report(result: AllocationResult) -> bytes:
+    metadata, summary = result.run_metadata, result.summary
+    scorer = metadata["ticker_scorer"]
+    alignment = metadata["alignment"]
+    lines = [
+        "# Strategy Lab fixed-capacity allocation report",
+        "",
+        f"- Candidate rule: `{metadata['candidate_rule']}`",
+        f"- Ticker scorer: `{scorer['name']}` / `{scorer['version']}` / "
+        f"`{scorer['identity_sha256']}`",
+        f"- Primary / sensitivity K: `{metadata['primary_k']}` / `{metadata['sensitivity_k']}`",
+        f"- Common tickers / exact UTC blocks: `{alignment['common_ticker_count']}` / "
+        f"`{alignment['common_block_count']}`",
+        "- Allocation return uses fixed `1/K` slot weights; unfilled slots remain cash.",
+        "- `requested_capacity_fraction` is K/available; canonical `selectivity` is "
+        "selected/available.",
+        "",
+        "## Dataset results",
+        "",
+    ]
+    for label in metadata["dataset_labels"]:
+        facts = summary["datasets"][label]
+        lines.extend(
+            [
+                f"### `{label}`",
+                "",
+                f"- Manifest SHA-256: `{facts['manifest_sha256']}`",
+                f"- Declared/requested/common tickers: "
+                f"`{metadata['datasets'][label]['declared_ticker_count']}` / "
+                f"`{facts['requested_ticker_count']}` / "
+                f"`{facts['common_ticker_count']}`",
+                f"- Omitted tickers: `{facts['omitted_tickers']}`",
+                f"- Omitted exact UTC blocks: `{facts['omitted_blocks']}`",
+                "",
+                "| Variant | K values | Mean capacity return | Compounded return | "
+                "Monthly-series MaxDD | Mean turnover | Bootstrap CI95 / width |",
+                "|---|---|---:|---:|---:|---:|---|",
+            ]
+        )
+        for name, variant in facts["variants"].items():
+            portfolio = variant["portfolio"]
+
+            def show(value: Any) -> str:
+                return "unavailable" if value is None else f"{float(value):.6f}"
+
+            lines.append(
+                f"| `{name}` ({variant['label']}) | `{variant['ks']}` | "
+                f"{show(variant['headline_mean_capacity_return_pct'])} | "
+                f"{show(portfolio['compounded_return_pct'])} | "
+                f"{show(portfolio['monthly_series_max_drawdown_pct'])} | "
+                f"{show(variant['turnover']['mean_turnover'])} | "
+                f"{show(variant['bootstrap']['lower'])} to "
+                f"{show(variant['bootstrap']['upper'])} / "
+                f"{show(variant['bootstrap']['width'])} "
+                f"({variant['bootstrap']['status']}) |"
+            )
+        lines.extend(["", "### K-specific block controls and spreads", ""])
+        for block in facts["blocks"]:
+            lines.append(
+                f"- `{block['block_key']}`: available `{block['available_tickers']}`, "
+                f"unavailable `{block['unavailable_tickers']}`."
+            )
+            for name, variant in block["variants"].items():
+                lines.append(
+                    f"  - `{name}` K={variant['k']}: capacity="
+                    f"`{variant['capacity_return_pct']}`, all_available="
+                    f"`{variant['all_available_mean_pct']}`, bottom="
+                    f"`{variant['bottom_k']['capacity_return_pct']}`, random_mean="
+                    f"`{variant['random_k']['random_mean_pct']}`, oracle="
+                    f"`{variant['oracle_k']['capacity_return_pct']}`, anti_oracle="
+                    f"`{variant['anti_oracle_k']['capacity_return_pct']}`, percentile="
+                    f"`{variant['random_k']['top_k_random_percentile_fraction']}`; "
+                    f"selected/cash=`{variant['selected_count']}`/`{variant['cash_slots']}`, "
+                    f"requested/realized/selectivity="
+                    f"`{variant['requested_capacity_fraction']}`/"
+                    f"`{variant['realized_selected_fraction']}`/`{variant['selectivity']}`, "
+                    f"spreads=`{variant['spreads']}`."
+                )
+        lines.append("")
+    lines.extend(
+        [
+            "## Interpretation boundary",
+            "",
+            "This is development-only software evidence. Oracle controls are hindsight and "
+            "non-deployable. Calendar-block compounding and drawdown are not bar-level "
+            "portfolio equity. No policy is nominated and no strategy-quality conclusion is "
+            "made.",
+            "",
+            "## Access proof and limitations",
+            "",
+        ]
+    )
+    for label, audit in metadata["load_audit"].items():
+        window_ids = sorted({entry[1] for entry in audit["entries"]})
+        segments = sorted({entry[2] for entry in audit["entries"]})
+        lines.append(
+            f"- `{label}` loaded window IDs `{window_ids}`, segments `{segments}`; "
+            f"outside-scope loads: `{audit['outside_scope_loads']}`."
+        )
+    lines.extend(f"- {item}" for item in metadata["limitations"])
+    lines.append("")
+    return "\n".join(lines).encode("utf-8")
+
+
+def render_allocation_files(result: AllocationResult) -> Mapping[str, bytes]:
+    pair_columns = (
+        "dataset_label", "candidate_rule", "ticker_scorer", "ticker", "window_id",
+        "oos_start", "oos_end", "status", "reason", "candidate_id", "semantic_key",
+        "candidate_rule_score", "ticker_score", "is_net_profit_pct", "is_total_trades",
+        "oos_return_pct",
+    )
+    monthly_columns = (
+        "dataset_label", "candidate_rule", "ticker_scorer", "variant", "k", "window_id",
+        "oos_start", "oos_end", "capacity_return_pct", "conditional_selected_mean_pct",
+        "all_available_mean_pct", "bottom_k_return_pct", "random_mean_pct",
+        "oracle_k_return_pct", "anti_oracle_k_return_pct",
+        "top_k_random_percentile_fraction", "status", "reason",
+    )
+    allocation_columns = (
+        "dataset_label", "candidate_rule", "ticker_scorer", "window_id", "oos_start",
+        "oos_end", "row_kind", "variant", "allocation_kind", "k",
+        "available_tickers", "selected_count", "cash_slots",
+        "requested_capacity_fraction", "realized_selected_fraction", "selectivity",
+        "ticker", "rank", "candidate_id", "semantic_key", "candidate_rule_score",
+        "ticker_score", "is_net_profit_pct", "is_total_trades", "oos_return_pct",
+        "slot_weight", "capacity_contribution_pct", "draw_count", "base_seed",
+        "derived_seed", "seed_payload_sha256", "random_mean_pct", "random_median_pct",
+        "top_k_random_percentile_fraction", "deployable", "diagnostic", "hindsight",
+        "non_deployable", "status", "reason",
+    )
+    return {
+        "run_metadata.json": _json_bytes(result.run_metadata),
+        "summary.json": _json_bytes(result.summary),
+        "pair_decisions.csv": _csv_bytes(result.pair_decisions, pair_columns),
+        "monthly_results.csv": _csv_bytes(result.monthly_results, monthly_columns),
+        "ticker_allocations.csv": _csv_bytes(result.ticker_allocations, allocation_columns),
+        "report.md": _allocation_report(result),
+    }
+
+
 def _inside(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
@@ -378,3 +528,58 @@ def write_analysis(
                 pass
         raise AnalysisError(f"cannot publish analysis output: {exc}") from exc
     return {"status": "published", "output": str(output), "files": list(OUTPUT_FILES)}
+
+
+def write_allocation(
+    result: AllocationResult,
+    output_dir: str | Path,
+    *,
+    dataset_roots: tuple[str | Path, ...],
+) -> Mapping[str, Any]:
+    output = Path(output_dir).resolve()
+    datasets = tuple(Path(root).resolve() for root in dataset_roots)
+    if not datasets:
+        raise AnalysisError("allocation publication requires input dataset roots.")
+    if any(output == dataset or _inside(output, dataset) for dataset in datasets):
+        raise AnalysisError("allocation output must be outside every input dataset root.")
+    files = render_allocation_files(result)
+    if output.exists() and not output.is_dir():
+        raise AnalysisError(f"allocation output is not a directory: {output}.")
+    if output.exists():
+        existing = {path.name for path in output.iterdir()}
+        unknown = sorted(existing - set(ALLOCATION_OUTPUT_FILES))
+        if unknown:
+            raise AnalysisError(f"allocation output contains unexpected files: {unknown}.")
+        if existing:
+            if existing == set(ALLOCATION_OUTPUT_FILES) and all(
+                (output / name).read_bytes() == content for name, content in files.items()
+            ):
+                return {
+                    "status": "verified_noop",
+                    "output": str(output),
+                    "files": list(ALLOCATION_OUTPUT_FILES),
+                }
+            raise AnalysisError(
+                "allocation output already contains nonmatching results; choose a new directory."
+            )
+    output.mkdir(parents=True, exist_ok=True)
+    published: list[Path] = []
+    try:
+        for name in ALLOCATION_OUTPUT_FILES:
+            target = output / name
+            temporary = output / f".{name}.{uuid.uuid4().hex}.tmp"
+            temporary.write_bytes(files[name])
+            os.replace(temporary, target)
+            published.append(target)
+    except OSError as exc:
+        for target in published:
+            try:
+                target.unlink()
+            except OSError:
+                pass
+        raise AnalysisError(f"cannot publish allocation output: {exc}") from exc
+    return {
+        "status": "published",
+        "output": str(output),
+        "files": list(ALLOCATION_OUTPUT_FILES),
+    }

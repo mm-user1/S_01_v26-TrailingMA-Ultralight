@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import Sequence
 
 from .dataset import AnalysisError, open_dataset
+from .allocation import DatasetInput, evaluate_allocation
 from .evaluate import evaluate_scope
-from .output import write_analysis
+from .output import write_allocation, write_analysis
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -24,23 +25,73 @@ def _parser() -> argparse.ArgumentParser:
     analyze.add_argument("--allow-incomplete-dataset", action="store_true")
     analyze.add_argument("--unlock-scope", action="store_true")
     analyze.add_argument("--policy", type=Path)
+    allocate = commands.add_parser(
+        "allocate", help="evaluate fixed-capacity allocation over aligned datasets"
+    )
+    allocate.add_argument("--dataset", action="append", required=True)
+    allocate.add_argument("--scope", default="development")
+    allocate.add_argument("--rule", required=True)
+    allocate.add_argument("--primary-k", type=int, default=6)
+    allocate.add_argument("--sensitivity-k", type=int, default=8)
+    allocate.add_argument("--output", type=Path, required=True)
+    allocate.add_argument("--allow-partial-scope", action="store_true")
+    allocate.add_argument("--allow-incomplete-dataset", action="store_true")
+    allocate.add_argument("--unlock-scope", action="store_true")
+    allocate.add_argument("--policy", type=Path)
     return parser
+
+
+def _dataset_argument(value: str) -> tuple[str, Path]:
+    if "=" not in value:
+        raise AnalysisError("--dataset must use the explicit label=path form.")
+    label, raw_path = value.split("=", 1)
+    if not label or not raw_path:
+        raise AnalysisError("--dataset requires a non-empty label and path.")
+    return label, Path(raw_path)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        dataset = open_dataset(
-            args.dataset, allow_incomplete=args.allow_incomplete_dataset
-        )
-        scope = dataset.resolve_scope(
-            args.scope,
-            allow_partial=args.allow_partial_scope,
-            unlock=args.unlock_scope,
-            policy_path=args.policy,
-        )
-        result = evaluate_scope(dataset, scope)
-        publication = write_analysis(result, args.output, dataset_root=dataset.root)
+        if args.command == "analyze":
+            dataset = open_dataset(
+                args.dataset, allow_incomplete=args.allow_incomplete_dataset
+            )
+            scope = dataset.resolve_scope(
+                args.scope,
+                allow_partial=args.allow_partial_scope,
+                unlock=args.unlock_scope,
+                policy_path=args.policy,
+            )
+            result = evaluate_scope(dataset, scope)
+            publication = write_analysis(result, args.output, dataset_root=dataset.root)
+        else:
+            labelled = tuple(_dataset_argument(value) for value in args.dataset)
+            if len({label for label, _ in labelled}) != len(labelled):
+                raise AnalysisError("dataset labels must be unique.")
+            inputs = []
+            for label, path in labelled:
+                dataset = open_dataset(
+                    path, allow_incomplete=args.allow_incomplete_dataset
+                )
+                scope = dataset.resolve_scope(
+                    args.scope,
+                    allow_partial=args.allow_partial_scope,
+                    unlock=args.unlock_scope,
+                    policy_path=args.policy,
+                )
+                inputs.append(DatasetInput(label, dataset, scope))
+            result = evaluate_allocation(
+                inputs,
+                candidate_rule=args.rule,
+                primary_k=args.primary_k,
+                sensitivity_k=args.sensitivity_k,
+            )
+            publication = write_allocation(
+                result,
+                args.output,
+                dataset_roots=tuple(item.dataset.root for item in inputs),
+            )
     except AnalysisError as exc:
         print(f"Strategy Lab analysis error: {exc}", file=sys.stderr)
         return 2
