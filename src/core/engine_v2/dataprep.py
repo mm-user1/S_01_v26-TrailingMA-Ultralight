@@ -32,6 +32,7 @@ def build_execution_data(
     rolling_high: Any,
     trail_long: Any | None = None,
     trail_short: Any | None = None,
+    chandelier_atr: Any | None = None,
 ) -> ExecutionData:
     """Pack a prepared OHLCV frame plus strategy dataprep arrays for the kernel."""
 
@@ -49,6 +50,9 @@ def build_execution_data(
         rolling_high=np.asarray(rolling_high, dtype=float),
         trail_long=np.asarray(trail_long, dtype=float) if trail_long is not None else empty_float,
         trail_short=np.asarray(trail_short, dtype=float) if trail_short is not None else empty_float,
+        chandelier_atr=(
+            np.asarray(chandelier_atr, dtype=float) if chandelier_atr is not None else None
+        ),
     )
 
 

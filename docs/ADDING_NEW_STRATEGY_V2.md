@@ -38,7 +38,7 @@ Put this in the strategy package:
 - indicator calculations and deterministic signal generation;
 - mapping from config params to signal/dataprep params;
 - aligned arrays needed by the profile, such as ATR, rolling swing highs/lows,
-  and moving-average trail levels;
+  moving-average trail levels, and request-gated Chandelier ATR rows;
 - config metadata, parameter roles, variant selector, and execution profile;
 - optional chart overlays later, if they remain read-only presentation data.
 
@@ -358,7 +358,7 @@ entryOrder=market_next_open
 stop=atr_swing
 sizing=risk_per_trade
 target=rr or none
-trail=none or ma
+trail=none, ma, r_distance, chandelier, or fixed_af_sar
 trailActivation=none or rr
 maxDays=true or false
 boundary=strict_close
@@ -371,7 +371,31 @@ Certified exit topologies:
 ```text
 target=rr, trail=none, trailActivation=none
 target=none, trail=ma, trailActivation=rr
+target=none, trail=r_distance, trailActivation=rr
+target=none, trail=chandelier, trailActivation=rr
+target=none, trail=fixed_af_sar, trailActivation=rr
 ```
+
+The three stateful trails are close-derived and future-effective. The initial
+stop protects the entry-fill bar; activation at the completed bar High/Low
+moves protection to break-even at the actual fill, and a newly accepted method
+stop can execute only on a later bar. `r_distance` consumes `trailRR` and
+`trailDistanceR`. `fixed_af_sar` consumes `trailRR` and `sarSpeed`. Chandelier
+consumes `trailRR`, `chandelierATRLength`, and `chandelierATRMult`; the strategy
+must produce an aligned Pine-compatible ATR/RMA row as
+`ExecutionData.chandelier_atr` for the selected positive integer length.
+`chandelierATRLength` is dataprep/cache identity, while the multiplier is an
+execution scalar. Do not reuse an unrelated initial-stop ATR row when lengths
+differ.
+
+The first finite raw method candidate must be strictly below the completed
+close for a long or strictly above it for a short before tick rounding. Later
+finite candidates use only the protective ratchet. An armed Chandelier trail
+retains fill-price break-even while ATR is unavailable. The fixed-AF SAR is
+trade-local, initializes SAR from the actual fill and EP from the activation
+bar extreme, does not advance on the activation bar, and applies the current
+and previous bar range cap on later updates. These rules intentionally do not
+change the older `ma` mode's same-bar behavior.
 
 The `signal_reversal` topology supports S03-like signal systems on both the
 direct reference runner and the compiled Grid V2 stacked path:

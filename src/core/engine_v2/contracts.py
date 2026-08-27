@@ -115,6 +115,7 @@ class ModeBinding:
     status: str
     consumes_params: tuple[str, ...] = ()
     dataprep: tuple[str, ...] = ()
+    dataprep_params: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

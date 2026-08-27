@@ -30,6 +30,14 @@ from .price_rounding import (
     round_trail_level,
     validate_tick_size,
 )
+from .execution_modes import (
+    TRAIL_MODE_CHANDELIER,
+    TRAIL_MODE_FIXED_AF_SAR,
+    TRAIL_MODE_MA,
+    TRAIL_MODE_NONE,
+    TRAIL_MODE_R_DISTANCE,
+    trail_mode_code,
+)
 from .sizing import risk_position_size
 
 
@@ -48,6 +56,7 @@ class ExecutionData:
     rolling_high: np.ndarray
     trail_long: np.ndarray
     trail_short: np.ndarray
+    chandelier_atr: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         length = len(self.timestamps)
@@ -71,6 +80,13 @@ class ExecutionData:
 
         if len(self.signals.long_entries) != length:
             raise ValueError("signals length must match timestamps length.")
+        if self.chandelier_atr is not None:
+            array = np.asarray(self.chandelier_atr, dtype=float)
+            if array.ndim != 1:
+                raise ValueError("chandelier_atr must be a 1D array when provided.")
+            if len(array) != length:
+                raise ValueError("chandelier_atr length must match timestamps length.")
+            object.__setattr__(self, "chandelier_atr", array)
 
 
 @dataclass(frozen=True)
@@ -91,6 +107,9 @@ class KernelConfig:
     trail_mode: str = "none"
     trail_activation_mode: str = "none"
     trail_activation_rr: float = 1.0
+    trail_distance_r: float = 0.0
+    chandelier_atr_mult: float = 0.0
+    sar_speed: float = 0.0
     max_days_enabled: bool = True
     boundary_mode: str = "strict_close"
     margin_mode: str = "off"
@@ -137,6 +156,12 @@ class _Position:
     initial_risk: float = math.nan
     trail_stop: float = math.nan
     trail_active: bool = False
+    trail_armed: bool = False
+    trail_method_active: bool = False
+    best_extreme: float = math.nan
+    sar_value: float = math.nan
+    sar_ep: float = math.nan
+    sar_activation_index: int = -1
 
 
 @dataclass
@@ -265,6 +290,32 @@ def _validate_price_rounding_config(config: KernelConfig) -> None:
     raise ValueError(f"Unsupported priceRounding mode: {config.price_rounding_mode!r}.")
 
 
+def _validate_trail_config(data: ExecutionData, config: KernelConfig) -> int:
+    code = trail_mode_code(config.trail_mode)
+    if code == TRAIL_MODE_NONE:
+        return code
+    if config.target_mode != "none" or config.trail_activation_mode != "rr":
+        raise ValueError(
+            "Active trails require target_mode='none' and trail_activation_mode='rr'."
+        )
+    if code == TRAIL_MODE_MA:
+        return code
+    if not math.isfinite(config.trail_activation_rr) or config.trail_activation_rr <= 0.0:
+        raise ValueError("trailRR must be finite and positive for the active stateful trail mode.")
+    if code == TRAIL_MODE_R_DISTANCE:
+        if not math.isfinite(config.trail_distance_r) or config.trail_distance_r <= 0.0:
+            raise ValueError("trailDistanceR must be finite and positive for r_distance.")
+    elif code == TRAIL_MODE_CHANDELIER:
+        if not math.isfinite(config.chandelier_atr_mult) or config.chandelier_atr_mult <= 0.0:
+            raise ValueError("chandelierATRMult must be finite and positive for chandelier.")
+        if data.chandelier_atr is None:
+            raise ValueError("chandelier_atr is required for the active Chandelier trail mode.")
+    elif code == TRAIL_MODE_FIXED_AF_SAR:
+        if not math.isfinite(config.sar_speed) or not (0.0 < config.sar_speed <= 1.0):
+            raise ValueError("sarSpeed must be greater than 0 and no greater than 1.")
+    return code
+
+
 def _rounded_stop(direction: int, price: float, config: KernelConfig) -> float:
     if not _rounding_enabled(config):
         return price
@@ -281,6 +332,90 @@ def _rounded_trail(direction: int, price: float, config: KernelConfig) -> float:
     if not _rounding_enabled(config):
         return price
     return round_trail_level(direction, price, config.tick_size)
+
+
+def _update_stateful_trail(
+    position: _Position,
+    data: ExecutionData,
+    config: KernelConfig,
+    trail_code: int,
+    index: int,
+    high: float,
+    low: float,
+    close: float,
+) -> None:
+    """Apply one close-derived state transition for a surviving position."""
+
+    if not position.trail_armed:
+        activation = (
+            position.anchor_price
+            + position.direction * position.initial_risk * config.trail_activation_rr
+        )
+        reached = high >= activation if position.direction > 0 else low <= activation
+        if not reached:
+            return
+        position.trail_armed = True
+        position.trail_active = True
+        position.best_extreme = high if position.direction > 0 else low
+        if position.direction > 0:
+            position.trail_stop = max(position.trail_stop, position.entry_price)
+        else:
+            position.trail_stop = min(position.trail_stop, position.entry_price)
+        if trail_code == TRAIL_MODE_FIXED_AF_SAR:
+            position.sar_value = position.entry_price
+            position.sar_ep = position.best_extreme
+            position.sar_activation_index = index
+
+    if position.direction > 0:
+        position.best_extreme = max(position.best_extreme, high)
+    else:
+        position.best_extreme = min(position.best_extreme, low)
+
+    candidate = math.nan
+    if trail_code == TRAIL_MODE_R_DISTANCE:
+        if position.direction > 0:
+            candidate = position.best_extreme - position.initial_risk * config.trail_distance_r
+        else:
+            candidate = position.best_extreme + position.initial_risk * config.trail_distance_r
+    elif trail_code == TRAIL_MODE_CHANDELIER:
+        atr_value = float(data.chandelier_atr[index])  # type: ignore[index]
+        if math.isfinite(atr_value):
+            if position.direction > 0:
+                candidate = position.best_extreme - atr_value * config.chandelier_atr_mult
+            else:
+                candidate = position.best_extreme + atr_value * config.chandelier_atr_mult
+    else:
+        if index > position.sar_activation_index:
+            if position.direction > 0:
+                position.sar_ep = max(position.sar_ep, high)
+                raw_next = position.sar_value + config.sar_speed * (
+                    position.sar_ep - position.sar_value
+                )
+                range_cap = low if index == 0 else min(low, float(data.low[index - 1]))
+                position.sar_value = max(position.sar_value, min(raw_next, range_cap))
+            else:
+                position.sar_ep = min(position.sar_ep, low)
+                raw_next = position.sar_value + config.sar_speed * (
+                    position.sar_ep - position.sar_value
+                )
+                range_cap = high if index == 0 else max(high, float(data.high[index - 1]))
+                position.sar_value = min(position.sar_value, max(raw_next, range_cap))
+        candidate = position.sar_value
+
+    if not position.trail_method_active:
+        valid = math.isfinite(candidate) and (
+            candidate < close if position.direction > 0 else candidate > close
+        )
+        if not valid:
+            return
+        position.trail_method_active = True
+    if not math.isfinite(candidate):
+        return
+    accepted = _rounded_trail(position.direction, candidate, config)
+    if position.direction > 0:
+        position.trail_stop = max(position.trail_stop, accepted)
+    else:
+        position.trail_stop = min(position.trail_stop, accepted)
 
 
 def _standing_state(
@@ -315,6 +450,7 @@ def run_reference_kernel(data: ExecutionData, config: KernelConfig) -> KernelRes
     """Run the deterministic Phase-1 reference execution loop."""
 
     _validate_price_rounding_config(config)
+    trail_code = _validate_trail_config(data, config)
     length = len(data.timestamps)
     guardrails = _GuardrailAccumulator()
     if length == 0:
@@ -328,7 +464,9 @@ def run_reference_kernel(data: ExecutionData, config: KernelConfig) -> KernelRes
         )
 
     target_enabled = config.target_mode == "rr"
-    trail_enabled = config.trail_mode == "ma"
+    trail_enabled = trail_code != TRAIL_MODE_NONE
+    ma_trail_enabled = trail_code == TRAIL_MODE_MA
+    stateful_trail_enabled = trail_code >= TRAIL_MODE_R_DISTANCE
     strict_boundary = config.boundary_mode == "strict_close"
     boundary_none = config.boundary_mode == "none"
     report_margin = config.margin_mode == "report_only"
@@ -406,7 +544,7 @@ def run_reference_kernel(data: ExecutionData, config: KernelConfig) -> KernelRes
                     notional / balance,
                 )
 
-            if trail_enabled and config.trail_activation_mode == "rr":
+            if ma_trail_enabled and config.trail_activation_mode == "rr":
                 activation = position.anchor_price + position.direction * position.initial_risk * config.trail_activation_rr
                 activation_reached = high >= activation if position.direction > 0 else low <= activation
                 if activation_reached:
@@ -466,7 +604,7 @@ def run_reference_kernel(data: ExecutionData, config: KernelConfig) -> KernelRes
                     break
                 current = endpoint
 
-        if position.direction != 0 and trail_enabled and not entry_filled_this_bar:
+        if position.direction != 0 and ma_trail_enabled and not entry_filled_this_bar:
             activation = position.anchor_price + position.direction * position.initial_risk * config.trail_activation_rr
             activation_reached = high >= activation if position.direction > 0 else low <= activation
             if position.trail_active or activation_reached:
@@ -478,6 +616,20 @@ def run_reference_kernel(data: ExecutionData, config: KernelConfig) -> KernelRes
                         position.trail_stop = max(position.initial_stop, position.trail_stop, current_band)
                     else:
                         position.trail_stop = min(position.initial_stop, position.trail_stop, current_band)
+
+        if position.direction != 0 and stateful_trail_enabled:
+            # New stateful trails learn only from the completed surviving bar;
+            # their accepted stop is executable starting with the next bar.
+            _update_stateful_trail(
+                position,
+                data,
+                config,
+                trail_code,
+                i,
+                high,
+                low,
+                close,
+            )
 
         if position.direction != 0 and position.entry_time is not None and config.max_days_enabled:
             days_in_trade = (timestamp - position.entry_time).total_seconds() / 86400.0

@@ -24,6 +24,11 @@ import pandas as pd
 
 from core.engine_v2.contracts import ExecutionProfile, GuardrailSummary, VariantSpec
 from core.engine_v2.diagnostics import V2Diagnostic, warning_messages
+from core.engine_v2.execution_modes import (
+    TRAIL_MODE_CHANDELIER,
+    TRAIL_MODE_FIXED_AF_SAR,
+    TRAIL_MODE_R_DISTANCE,
+)
 from core.engine_v2.kernel import ExecutionData
 from core.engine_v2.compiled_kernel import (
     COMPILED_BATCH_KIND,
@@ -116,6 +121,10 @@ _KERNEL_CONFIG_PARAM_NAMES = (
     "riskPerTrade",
     "contractSize",
     "trailRR",
+    "trailDistanceR",
+    "chandelierATRLength",
+    "chandelierATRMult",
+    "sarSpeed",
     "tickSize",
     "start",
     "end",
@@ -620,6 +629,9 @@ class GridV2CacheEstimate:
     month_id_nbytes: int = 0
     day_id_nbytes: int = 0
     mtm_sidecar_nbytes: int = 0
+    chandelier_combo_count: int = 0
+    chandelier_atr_nbytes: int = 0
+    chandelier_mapping_nbytes: int = 0
 
 
 @dataclass
@@ -865,6 +877,7 @@ class _CandidateCacheKeys:
     candidate_id: int
     signal_key: Any
     dataprep_key: Any
+    trail_mode: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -1898,6 +1911,7 @@ def _candidate_cache_keys(
                 candidate_id=index + 1,
                 signal_key=signal_cache[signal_groups.codes[position]],
                 dataprep_key=dataprep_cache[dataprep_groups.codes[position]],
+                trail_mode=str(plan.candidate_table.modes_for_index(index).get("trail", "none")),
             )
         )
     return tuple(records)
@@ -1931,7 +1945,21 @@ def _estimate_grid_v2_cache_from_keys(
         + (np.dtype(np.int32).itemsize if compute_sharpe_daily else 0)
     )
     estimated_signal_bytes = physical_signal_stack_rows * bytes_per_signal_combo
-    estimated_dataprep_bytes = physical_dataprep_stack_rows * bytes_per_dataprep_combo
+    chandelier_keys = {
+        item.dataprep_key for item in cache_keys if item.trail_mode == "chandelier"
+    }
+    chandelier_combo_count = len(chandelier_keys)
+    chandelier_atr_nbytes = chandelier_combo_count * n_bars * np.dtype(np.float64).itemsize
+    chandelier_mapping_nbytes = (
+        physical_dataprep_stack_rows * np.dtype(np.int32).itemsize
+        if chandelier_combo_count
+        else 0
+    )
+    estimated_dataprep_bytes = (
+        physical_dataprep_stack_rows * bytes_per_dataprep_combo
+        + chandelier_atr_nbytes
+        + chandelier_mapping_nbytes
+    )
     estimated_output_bytes = output_candidate_count * bytes_per_output_candidate
     month_id_nbytes = n_bars * np.dtype(np.int32).itemsize if compute_sharpe else 0
     day_id_nbytes = n_bars * np.dtype(np.int32).itemsize if compute_sharpe_daily else 0
@@ -1972,6 +2000,9 @@ def _estimate_grid_v2_cache_from_keys(
         month_id_nbytes=month_id_nbytes,
         day_id_nbytes=day_id_nbytes,
         mtm_sidecar_nbytes=mtm_sidecar_nbytes,
+        chandelier_combo_count=chandelier_combo_count,
+        chandelier_atr_nbytes=chandelier_atr_nbytes,
+        chandelier_mapping_nbytes=chandelier_mapping_nbytes,
     )
 
 
@@ -3694,7 +3725,7 @@ def _cache_param_names_for_grid_mode(
             continue
         names.update(
             name
-            for name in binding.consumes_params
+            for name in (binding.dataprep_params or binding.consumes_params)
             if name in active and _grid_mode_has_param(table, grid_mode_name, name)
         )
     if not names:
@@ -3725,7 +3756,9 @@ def _cache_param_names(
         binding = mode_binding_for(mode_field, mode_value)
         if binding is None or not binding.dataprep:
             continue
-        names.update(name for name in binding.consumes_params if name in candidate.params)
+        names.update(
+            name for name in (binding.dataprep_params or binding.consumes_params) if name in candidate.params
+        )
     if not names:
         names.update(candidate.active_param_names)
     return tuple(name for name in plan.profile.parameter_names if name in names)
@@ -3763,7 +3796,11 @@ def _cache_param_names_for_index(
         binding = mode_binding_for(mode_field, mode_value)
         if binding is None or not binding.dataprep:
             continue
-        names.update(name for name in binding.consumes_params if table.has_param_for_index(candidate_index, name))
+        names.update(
+            name
+            for name in (binding.dataprep_params or binding.consumes_params)
+            if table.has_param_for_index(candidate_index, name)
+        )
     if not names:
         names.update(active)
     return tuple(name for name in plan.profile.parameter_names if name in names)
@@ -3983,6 +4020,11 @@ def _pack_table_config_arrays(
     _fill_float_config_array(arrays["risk_per_trade_pct"], table, indices, "riskPerTrade", 2.0)
     _fill_float_config_array(arrays["contract_size"], table, indices, "contractSize", 0.01)
     _fill_float_config_array(arrays["trail_activation_rr"], table, indices, "trailRR", 1.0)
+    _fill_float_config_array(arrays["trail_distance_r"], table, indices, "trailDistanceR", 0.0)
+    _fill_float_config_array(
+        arrays["chandelier_atr_mult"], table, indices, "chandelierATRMult", 0.0
+    )
+    _fill_float_config_array(arrays["sar_speed"], table, indices, "sarSpeed", 0.0)
     _fill_timestamp_config_array(
         arrays["start_ns"],
         table,
@@ -4112,7 +4154,7 @@ def _fill_mode_config_arrays(
     for variant_name, positions, _row_indices in _iter_variant_index_groups(table, indices):
         (
             target_enabled,
-            trail_enabled,
+            packed_trail_mode_code,
             max_days_enabled,
             strict_boundary,
             boundary_none,
@@ -4120,12 +4162,25 @@ def _fill_mode_config_arrays(
             rounding_code,
         ) = _compiled_mode_state(table.profile.variants[variant_name].modes)
         arrays["target_enabled"][positions] = target_enabled
-        arrays["trail_enabled"][positions] = trail_enabled
+        arrays["trail_mode_code"][positions] = packed_trail_mode_code
         arrays["max_days_enabled"][positions] = max_days_enabled
         arrays["strict_boundary"][positions] = strict_boundary
         arrays["boundary_none"][positions] = boundary_none
         arrays["report_margin"][positions] = report_margin
         arrays["rounding_code"][positions] = rounding_code
+
+    stateful = arrays["trail_mode_code"] >= TRAIL_MODE_R_DISTANCE
+    if np.any(stateful & (~np.isfinite(arrays["trail_activation_rr"]) | (arrays["trail_activation_rr"] <= 0.0))):
+        raise ValueError("trailRR must be finite and positive for the active stateful trail mode.")
+    r_distance = arrays["trail_mode_code"] == TRAIL_MODE_R_DISTANCE
+    if np.any(r_distance & (~np.isfinite(arrays["trail_distance_r"]) | (arrays["trail_distance_r"] <= 0.0))):
+        raise ValueError("trailDistanceR must be finite and positive for r_distance.")
+    chandelier = arrays["trail_mode_code"] == TRAIL_MODE_CHANDELIER
+    if np.any(chandelier & (~np.isfinite(arrays["chandelier_atr_mult"]) | (arrays["chandelier_atr_mult"] <= 0.0))):
+        raise ValueError("chandelierATRMult must be finite and positive for chandelier.")
+    sar = arrays["trail_mode_code"] == TRAIL_MODE_FIXED_AF_SAR
+    if np.any(sar & (~np.isfinite(arrays["sar_speed"]) | (arrays["sar_speed"] <= 0.0) | (arrays["sar_speed"] > 1.0))):
+        raise ValueError("sarSpeed must be greater than 0 and no greater than 1.")
 
 
 def _fill_tick_size_config_array(

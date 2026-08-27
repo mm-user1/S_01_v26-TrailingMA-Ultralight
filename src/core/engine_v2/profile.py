@@ -57,6 +57,16 @@ MODE_PARAMETER_BINDINGS: tuple[ModeBinding, ...] = (
     ModeBinding("target", "rr", "phase1", ("stopRR",)),
     ModeBinding("target", "none", "phase1"),
     ModeBinding("trail", "ma", "phase1", ("trailRR", "trailMAType", "trailMALength", "trailMAOffsetEx"), ("ma",)),
+    ModeBinding("trail", "r_distance", "phase17", ("trailRR", "trailDistanceR")),
+    ModeBinding(
+        "trail",
+        "chandelier",
+        "phase17",
+        ("trailRR", "chandelierATRLength", "chandelierATRMult"),
+        ("chandelier_atr",),
+        ("chandelierATRLength",),
+    ),
+    ModeBinding("trail", "fixed_af_sar", "phase17", ("trailRR", "sarSpeed")),
     ModeBinding("trail", "none", "phase1"),
     ModeBinding("trailActivation", "rr", "phase1"),
     ModeBinding("trailActivation", "none", "phase1"),
@@ -441,6 +451,76 @@ def _validate_variants(
     return families
 
 
+def _positive_integer(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number) and number > 0.0 and number.is_integer()
+
+
+def _validate_chandelier_length_declaration(
+    *,
+    strategy_id: str,
+    variants: Mapping[str, VariantSpec],
+    params: Mapping[str, Any],
+) -> None:
+    if not any(variant.modes.get("trail") == "chandelier" for variant in variants.values()):
+        return
+    name = "chandelierATRLength"
+    spec = params.get(name)
+    if not isinstance(spec, Mapping):
+        raise _error(
+            strategy_id,
+            f"{strategy_id}: Chandelier trail requires a declared positive-integer '{name}' parameter.",
+            path=f"parameters.{name}",
+            code="V2_INVALID_PROFILE",
+        )
+    param_type = str(spec.get("type") or "").strip().lower()
+    if param_type not in {"int", "integer"} or not _positive_integer(spec.get("default")):
+        raise _error(
+            strategy_id,
+            f"{strategy_id}: '{name}' must be an integer parameter with a positive integer default.",
+            path=f"parameters.{name}",
+            code="V2_INVALID_PROFILE",
+        )
+    optimize = spec.get("optimize", {})
+    if optimize is not None and not isinstance(optimize, Mapping):
+        return  # The general runtime declaration/profile validators own this shape.
+    optimize = optimize if isinstance(optimize, Mapping) else {}
+    explicit = next(
+        (
+            values
+            for values in (
+                spec.get("gridValues"),
+                optimize.get("gridValues"),
+                optimize.get("values"),
+            )
+            if values is not None
+        ),
+        None,
+    )
+    if explicit is not None:
+        valid = isinstance(explicit, Sequence) and not isinstance(explicit, (str, bytes)) and bool(explicit)
+        valid = valid and all(_positive_integer(value) for value in explicit)
+    elif optimize.get("enabled", False):
+        bounds = tuple(optimize.get(key, spec.get(key)) for key in ("min", "max", "step"))
+        valid = all(_positive_integer(value) for value in bounds)
+        if valid:
+            valid = float(bounds[1]) >= float(bounds[0])
+    else:
+        valid = True
+    if not valid:
+        raise _error(
+            strategy_id,
+            f"{strategy_id}: '{name}' must declare a non-empty positive-integer Grid domain.",
+            path=f"parameters.{name}.optimize",
+            code="V2_INVALID_PROFILE",
+        )
+
+
 def _variant_independent_params(
     *,
     strategy_id: str,
@@ -573,6 +653,11 @@ def parse_execution_profile(config: Mapping[str, Any]) -> ExecutionProfile:
     variants = _parse_variants(execution, base_modes, strategy_id)
     selector = _parse_selector(execution, variants, params, roles, strategy_id)
     families = _validate_variants(strategy_id=strategy_id, variants=variants, params=params)
+    _validate_chandelier_length_declaration(
+        strategy_id=strategy_id,
+        variants=variants,
+        params=params,
+    )
     independent, diagnostics = _variant_independent_params(
         strategy_id=strategy_id,
         params=params,

@@ -19,7 +19,16 @@ import pandas as pd
 from core.metrics import build_utc_day_ids
 from .kernel import ExecutionData
 from .price_rounding import PRICE_ROUNDING_NONE, PRICE_ROUNDING_TICK_OUTWARD, validate_tick_size
-from .execution_modes import resolve_position_mode_state
+from .execution_modes import (
+    TRAIL_MODE_CHANDELIER,
+    TRAIL_MODE_FIXED_AF_SAR,
+    TRAIL_MODE_MA,
+    TRAIL_MODE_NONE,
+    TRAIL_MODE_R_DISTANCE,
+    resolve_position_mode_state,
+    stateful_trail_params,
+    trail_mode_code,
+)
 from .profile import active_mode_values
 
 
@@ -100,6 +109,8 @@ class StackedExecutionData:
     trail_long: np.ndarray
     trail_short: np.ndarray
     data_index: np.ndarray
+    chandelier_atr: np.ndarray
+    chandelier_data_index: np.ndarray
 
     @property
     def row_count(self) -> int:
@@ -133,6 +144,8 @@ class StackedExecutionData:
             + self.rolling_high.nbytes
             + self.trail_long.nbytes
             + self.trail_short.nbytes
+            + self.chandelier_atr.nbytes
+            + self.chandelier_data_index.nbytes
         )
 
     @property
@@ -193,6 +206,8 @@ def evaluate_compiled_batch(
         )
 
     packed = _pack_config_arrays(profile, params_batch, trade_start_idx)
+    _validate_packed_stateful_trails(packed)
+    chandelier_atr = _grouped_chandelier_values(data, packed)
     outputs = np.empty((len(params_batch), OUTPUT_COLUMN_COUNT), dtype=np.float64)
     mtm_sidecar = (
         np.full(len(params_batch), np.nan, dtype=np.float64)
@@ -220,6 +235,7 @@ def evaluate_compiled_batch(
             np.asarray(data.rolling_high, dtype=np.float64),
             np.asarray(data.trail_long, dtype=np.float64),
             np.asarray(data.trail_short, dtype=np.float64),
+            chandelier_atr,
             int(trade_start_idx),
             packed["initial_capital"],
             packed["commission_pct"],
@@ -230,13 +246,16 @@ def evaluate_compiled_batch(
             packed["risk_per_trade_pct"],
             packed["contract_size"],
             packed["trail_activation_rr"],
+            packed["trail_distance_r"],
+            packed["chandelier_atr_mult"],
+            packed["sar_speed"],
             packed["tick_size"],
             packed["start_ns"],
             packed["end_ns"],
             packed["enable_long"],
             packed["enable_short"],
             packed["target_enabled"],
-            packed["trail_enabled"],
+            packed["trail_mode_code"],
             packed["max_days_enabled"],
             packed["use_date_filter"],
             packed["strict_boundary"],
@@ -288,6 +307,8 @@ def build_stacked_execution_data(
     rolling_high_rows: list[np.ndarray] = []
     trail_long_rows: list[np.ndarray] = []
     trail_short_rows: list[np.ndarray] = []
+    chandelier_rows: list[np.ndarray] = []
+    chandelier_row_index: list[int] = []
 
     for row_number, data in enumerate(rows):
         if data.timestamps is not first.timestamps:
@@ -316,6 +337,13 @@ def build_stacked_execution_data(
         rolling_high_rows.append(_contiguous_1d(data.rolling_high, "rolling_high", np.float64))
         trail_long_rows.append(_contiguous_1d(data.trail_long, "trail_long", np.float64))
         trail_short_rows.append(_contiguous_1d(data.trail_short, "trail_short", np.float64))
+        if data.chandelier_atr is None:
+            chandelier_row_index.append(-1)
+        else:
+            chandelier_row_index.append(len(chandelier_rows))
+            chandelier_rows.append(
+                _contiguous_1d(data.chandelier_atr, "chandelier_atr", np.float64)
+            )
 
     index_array = np.asarray(data_index, dtype=np.int64)
     if index_array.ndim != 1:
@@ -324,6 +352,7 @@ def build_stacked_execution_data(
         if int(index_array.min()) < 0 or int(index_array.max()) >= len(rows):
             raise ValueError("Stacked compiled execution data_index contains an out-of-range row index.")
 
+    has_chandelier = bool(chandelier_rows)
     return StackedExecutionData(
         open=open_values,
         high=high_values,
@@ -340,6 +369,16 @@ def build_stacked_execution_data(
         trail_long=np.ascontiguousarray(np.stack(trail_long_rows, axis=0), dtype=np.float64),
         trail_short=np.ascontiguousarray(np.stack(trail_short_rows, axis=0), dtype=np.float64),
         data_index=np.ascontiguousarray(index_array, dtype=np.int64),
+        chandelier_atr=(
+            np.ascontiguousarray(np.stack(chandelier_rows, axis=0), dtype=np.float64)
+            if has_chandelier
+            else np.empty((0, 0), dtype=np.float64)
+        ),
+        chandelier_data_index=(
+            np.ascontiguousarray(chandelier_row_index, dtype=np.int32)
+            if has_chandelier
+            else np.empty(0, dtype=np.int32)
+        ),
     )
 
 
@@ -396,6 +435,9 @@ def evaluate_compiled_stacked_batch(
         if params_batch is not None and len(params_batch) != candidate_count:
             raise ValueError("Stacked compiled params_batch length must match packed_config_arrays length.")
 
+    _validate_packed_stateful_trails(packed)
+    _validate_stacked_chandelier(stacked_data, packed)
+
     if candidate_count == 0:
         return CompiledBatchOutput(
             outputs=np.empty((0, OUTPUT_COLUMN_COUNT), dtype=np.float64),
@@ -432,6 +474,8 @@ def evaluate_compiled_stacked_batch(
             stacked_data.rolling_high,
             stacked_data.trail_long,
             stacked_data.trail_short,
+            stacked_data.chandelier_atr,
+            stacked_data.chandelier_data_index,
             stacked_data.data_index,
             int(trade_start_idx),
             packed["initial_capital"],
@@ -443,13 +487,16 @@ def evaluate_compiled_stacked_batch(
             packed["risk_per_trade_pct"],
             packed["contract_size"],
             packed["trail_activation_rr"],
+            packed["trail_distance_r"],
+            packed["chandelier_atr_mult"],
+            packed["sar_speed"],
             packed["tick_size"],
             packed["start_ns"],
             packed["end_ns"],
             packed["enable_long"],
             packed["enable_short"],
             packed["target_enabled"],
-            packed["trail_enabled"],
+            packed["trail_mode_code"],
             packed["max_days_enabled"],
             packed["use_date_filter"],
             packed["strict_boundary"],
@@ -478,6 +525,58 @@ def _contiguous_1d(values: Any, name: str, dtype: Any) -> np.ndarray:
     if array.ndim != 1:
         raise ValueError(f"{name} must be a 1D array for stacked compiled execution.")
     return np.ascontiguousarray(array, dtype=dtype)
+
+
+def _grouped_chandelier_values(
+    data: ExecutionData,
+    packed: Mapping[str, np.ndarray],
+) -> np.ndarray:
+    active = np.any(packed["trail_mode_code"] == TRAIL_MODE_CHANDELIER)
+    if active and data.chandelier_atr is None:
+        raise ValueError("chandelier_atr is required for active compiled Chandelier candidates.")
+    if not active:
+        return np.empty(0, dtype=np.float64)
+    return _contiguous_1d(data.chandelier_atr, "chandelier_atr", np.float64)
+
+
+def _validate_packed_stateful_trails(packed: Mapping[str, np.ndarray]) -> None:
+    codes = packed["trail_mode_code"]
+    if np.any((codes < TRAIL_MODE_NONE) | (codes > TRAIL_MODE_FIXED_AF_SAR)):
+        raise ValueError("Packed compiled trail mode code is unsupported.")
+    stateful = codes >= TRAIL_MODE_R_DISTANCE
+    if np.any(stateful & packed["target_enabled"]):
+        raise ValueError("Active stateful trails require target_mode='none'.")
+    activation = packed["trail_activation_rr"]
+    if np.any(stateful & (~np.isfinite(activation) | (activation <= 0.0))):
+        raise ValueError("trailRR must be finite and positive for the active stateful trail mode.")
+    r_distance = codes == TRAIL_MODE_R_DISTANCE
+    distance = packed["trail_distance_r"]
+    if np.any(r_distance & (~np.isfinite(distance) | (distance <= 0.0))):
+        raise ValueError("trailDistanceR must be finite and positive for r_distance.")
+    chandelier = codes == TRAIL_MODE_CHANDELIER
+    multiplier = packed["chandelier_atr_mult"]
+    if np.any(chandelier & (~np.isfinite(multiplier) | (multiplier <= 0.0))):
+        raise ValueError("chandelierATRMult must be finite and positive for chandelier.")
+    sar = codes == TRAIL_MODE_FIXED_AF_SAR
+    speed = packed["sar_speed"]
+    if np.any(sar & (~np.isfinite(speed) | (speed <= 0.0) | (speed > 1.0))):
+        raise ValueError("sarSpeed must be greater than 0 and no greater than 1.")
+
+
+def _validate_stacked_chandelier(
+    data: StackedExecutionData,
+    packed: Mapping[str, np.ndarray],
+) -> None:
+    active_positions = np.flatnonzero(
+        packed["trail_mode_code"] == TRAIL_MODE_CHANDELIER
+    )
+    if active_positions.size == 0:
+        return
+    if data.chandelier_data_index.size != data.row_count or data.chandelier_atr.shape[0] == 0:
+        raise ValueError("chandelier_atr is required for active stacked Chandelier candidates.")
+    data_rows = data.data_index[active_positions]
+    if np.any(data.chandelier_data_index[data_rows] < 0):
+        raise ValueError("chandelier_atr is missing for an active stacked Chandelier candidate.")
 
 
 def build_calendar_month_ids(values: Sequence[Any]) -> np.ndarray:
@@ -569,13 +668,16 @@ _CONFIG_ARRAY_DTYPES: Mapping[str, Any] = {
     "risk_per_trade_pct": np.float64,
     "contract_size": np.float64,
     "trail_activation_rr": np.float64,
+    "trail_distance_r": np.float64,
+    "chandelier_atr_mult": np.float64,
+    "sar_speed": np.float64,
     "tick_size": np.float64,
     "start_ns": np.int64,
     "end_ns": np.int64,
     "enable_long": np.bool_,
     "enable_short": np.bool_,
     "target_enabled": np.bool_,
-    "trail_enabled": np.bool_,
+    "trail_mode_code": np.int64,
     "max_days_enabled": np.bool_,
     "use_date_filter": np.bool_,
     "strict_boundary": np.bool_,
@@ -621,7 +723,7 @@ def _pack_config_arrays(
 ) -> dict[str, np.ndarray]:
     count = len(params_batch)
     arrays = _empty_config_arrays(count)
-    mode_cache: dict[tuple[tuple[str, str], ...], tuple[bool, bool, bool, bool, bool, bool, int]] = {}
+    mode_cache: dict[tuple[tuple[str, str], ...], tuple[bool, int, bool, bool, bool, bool, int]] = {}
     start_ns_cache: dict[Any, int] = {}
     end_ns_cache: dict[Any, int] = {}
     for index, params in enumerate(params_batch):
@@ -633,13 +735,14 @@ def _pack_config_arrays(
             mode_cache[mode_key] = mode_state
         (
             target_enabled,
-            trail_enabled,
+            packed_trail_mode_code,
             max_days_enabled,
             strict_boundary,
             boundary_none,
             report_margin,
             rounding_code,
         ) = mode_state
+        trail_params = stateful_trail_params(modes.get("trail", "none"), params)
 
         arrays["initial_capital"][index] = float(params.get("initialCapital", 100.0))
         arrays["commission_pct"][index] = float(params.get("commissionPct", 0.0))
@@ -649,7 +752,10 @@ def _pack_config_arrays(
         arrays["max_days"][index] = float(params.get("stopMaxDays", math.inf))
         arrays["risk_per_trade_pct"][index] = float(params.get("riskPerTrade", 2.0))
         arrays["contract_size"][index] = float(params.get("contractSize", 0.01))
-        arrays["trail_activation_rr"][index] = float(params.get("trailRR", 1.0))
+        arrays["trail_activation_rr"][index] = trail_params.trail_activation_rr
+        arrays["trail_distance_r"][index] = trail_params.trail_distance_r
+        arrays["chandelier_atr_mult"][index] = trail_params.chandelier_atr_mult
+        arrays["sar_speed"][index] = trail_params.sar_speed
         if rounding_code == ROUNDING_TICK_OUTWARD_CODE:
             if "tickSize" not in params:
                 raise ValueError("tickSize is required when priceRounding='tick_outward'.")
@@ -669,7 +775,7 @@ def _pack_config_arrays(
         arrays["enable_long"][index] = _coerce_bool(params.get("enableLong"), True)
         arrays["enable_short"][index] = _coerce_bool(params.get("enableShort"), True)
         arrays["target_enabled"][index] = target_enabled
-        arrays["trail_enabled"][index] = trail_enabled
+        arrays["trail_mode_code"][index] = packed_trail_mode_code
         arrays["max_days_enabled"][index] = max_days_enabled
         arrays["use_date_filter"][index] = _coerce_bool(params.get("dateFilter"), True)
         arrays["strict_boundary"][index] = strict_boundary
@@ -697,7 +803,7 @@ def pack_compiled_config_arrays_from_rows(
     if count < 0:
         raise ValueError("row_count must be non-negative for compiled config packing.")
     arrays = _empty_config_arrays(count)
-    mode_cache: dict[tuple[tuple[str, str], ...], tuple[bool, bool, bool, bool, bool, bool, int]] = {}
+    mode_cache: dict[tuple[tuple[str, str], ...], tuple[bool, int, bool, bool, bool, bool, int]] = {}
     start_ns_cache: dict[Any, int] = {}
     end_ns_cache: dict[Any, int] = {}
     for index in range(count):
@@ -709,13 +815,24 @@ def pack_compiled_config_arrays_from_rows(
             mode_cache[mode_key] = mode_state
         (
             target_enabled,
-            trail_enabled,
+            packed_trail_mode_code,
             max_days_enabled,
             strict_boundary,
             boundary_none,
             report_margin,
             rounding_code,
         ) = mode_state
+        raw_params = {
+            "trailRR": get_value(index, "trailRR", 1.0),
+        }
+        if packed_trail_mode_code == TRAIL_MODE_R_DISTANCE:
+            raw_params["trailDistanceR"] = get_value(index, "trailDistanceR", None)
+        elif packed_trail_mode_code == TRAIL_MODE_CHANDELIER:
+            raw_params["chandelierATRLength"] = get_value(index, "chandelierATRLength", None)
+            raw_params["chandelierATRMult"] = get_value(index, "chandelierATRMult", None)
+        elif packed_trail_mode_code == TRAIL_MODE_FIXED_AF_SAR:
+            raw_params["sarSpeed"] = get_value(index, "sarSpeed", None)
+        trail_params = stateful_trail_params(modes.get("trail", "none"), raw_params)
 
         arrays["initial_capital"][index] = float(get_value(index, "initialCapital", 100.0))
         arrays["commission_pct"][index] = float(get_value(index, "commissionPct", 0.0))
@@ -725,7 +842,10 @@ def pack_compiled_config_arrays_from_rows(
         arrays["max_days"][index] = float(get_value(index, "stopMaxDays", math.inf))
         arrays["risk_per_trade_pct"][index] = float(get_value(index, "riskPerTrade", 2.0))
         arrays["contract_size"][index] = float(get_value(index, "contractSize", 0.01))
-        arrays["trail_activation_rr"][index] = float(get_value(index, "trailRR", 1.0))
+        arrays["trail_activation_rr"][index] = trail_params.trail_activation_rr
+        arrays["trail_distance_r"][index] = trail_params.trail_distance_r
+        arrays["chandelier_atr_mult"][index] = trail_params.chandelier_atr_mult
+        arrays["sar_speed"][index] = trail_params.sar_speed
         if rounding_code == ROUNDING_TICK_OUTWARD_CODE:
             tick_size = get_value(index, "tickSize", None)
             if tick_size is None:
@@ -746,7 +866,7 @@ def pack_compiled_config_arrays_from_rows(
         arrays["enable_long"][index] = _coerce_bool(get_value(index, "enableLong", None), True)
         arrays["enable_short"][index] = _coerce_bool(get_value(index, "enableShort", None), True)
         arrays["target_enabled"][index] = target_enabled
-        arrays["trail_enabled"][index] = trail_enabled
+        arrays["trail_mode_code"][index] = packed_trail_mode_code
         arrays["max_days_enabled"][index] = max_days_enabled
         arrays["use_date_filter"][index] = _coerce_bool(get_value(index, "dateFilter", None), True)
         arrays["strict_boundary"][index] = strict_boundary
@@ -758,12 +878,12 @@ def pack_compiled_config_arrays_from_rows(
 
 def _compiled_mode_state(
     modes: Mapping[str, str],
-) -> tuple[bool, bool, bool, bool, bool, bool, int]:
+) -> tuple[bool, int, bool, bool, bool, bool, int]:
     state = resolve_position_mode_state(modes)
 
     return (
         state.target_mode == "rr",
-        state.trail_mode == "ma",
+        trail_mode_code(state.trail_mode),
         state.max_days_enabled,
         state.boundary_mode == "strict_close",
         state.boundary_mode == "none",
@@ -975,6 +1095,7 @@ def _compiled_loop_one(
     rolling_high: np.ndarray,
     trail_long: np.ndarray,
     trail_short: np.ndarray,
+    chandelier_atr: np.ndarray,
     trade_start_idx: int,
     initial_capital_values: np.ndarray,
     commission_pct_values: np.ndarray,
@@ -985,13 +1106,16 @@ def _compiled_loop_one(
     risk_per_trade_pct_values: np.ndarray,
     contract_size_values: np.ndarray,
     trail_activation_rr_values: np.ndarray,
+    trail_distance_r_values: np.ndarray,
+    chandelier_atr_mult_values: np.ndarray,
+    sar_speed_values: np.ndarray,
     tick_size_values: np.ndarray,
     start_ns_values: np.ndarray,
     end_ns_values: np.ndarray,
     enable_long_values: np.ndarray,
     enable_short_values: np.ndarray,
     target_enabled_values: np.ndarray,
-    trail_enabled_values: np.ndarray,
+    trail_mode_code_values: np.ndarray,
     max_days_enabled_values: np.ndarray,
     use_date_filter_values: np.ndarray,
     strict_boundary_values: np.ndarray,
@@ -1027,7 +1151,19 @@ def _compiled_loop_one(
     enable_long = enable_long_values[candidate_index]
     enable_short = enable_short_values[candidate_index]
     target_enabled = target_enabled_values[candidate_index]
-    trail_enabled = trail_enabled_values[candidate_index]
+    trail_code = trail_mode_code_values[candidate_index]
+    trail_enabled = trail_code != TRAIL_MODE_NONE
+    ma_trail_enabled = trail_code == TRAIL_MODE_MA
+    stateful_trail_enabled = trail_code >= TRAIL_MODE_R_DISTANCE
+    trail_distance_r = 0.0
+    chandelier_atr_mult = 0.0
+    sar_speed = 0.0
+    if trail_code == TRAIL_MODE_R_DISTANCE:
+        trail_distance_r = trail_distance_r_values[candidate_index]
+    elif trail_code == TRAIL_MODE_CHANDELIER:
+        chandelier_atr_mult = chandelier_atr_mult_values[candidate_index]
+    elif trail_code == TRAIL_MODE_FIXED_AF_SAR:
+        sar_speed = sar_speed_values[candidate_index]
     max_days_enabled = max_days_enabled_values[candidate_index]
     use_date_filter = use_date_filter_values[candidate_index]
     strict_boundary = strict_boundary_values[candidate_index]
@@ -1053,6 +1189,12 @@ def _compiled_loop_one(
     initial_risk = math.nan
     trail_stop = math.nan
     trail_active = False
+    trail_armed = False
+    trail_method_active = False
+    best_extreme = math.nan
+    sar_value = math.nan
+    sar_ep = math.nan
+    sar_activation_index = -1
 
     pending_entry = False
     pending_direction = 0
@@ -1146,6 +1288,12 @@ def _compiled_loop_one(
             initial_risk = math.nan
             trail_stop = math.nan
             trail_active = False
+            trail_armed = False
+            trail_method_active = False
+            best_extreme = math.nan
+            sar_value = math.nan
+            sar_ep = math.nan
+            sar_activation_index = -1
             pending_market_close = False
 
         if pending_entry and position == 0:
@@ -1161,6 +1309,12 @@ def _compiled_loop_one(
             target_price = pending_target
             trail_stop = initial_stop
             trail_active = False
+            trail_armed = False
+            trail_method_active = False
+            best_extreme = math.nan
+            sar_value = math.nan
+            sar_ep = math.nan
+            sar_activation_index = -1
             pending_entry = False
             entry_filled_this_bar = True
             had_position_this_bar = True
@@ -1173,7 +1327,7 @@ def _compiled_loop_one(
                 if leverage > max_required_leverage:
                     max_required_leverage = leverage
 
-            if trail_enabled:
+            if ma_trail_enabled:
                 activation = anchor_price + position * initial_risk * trail_activation_rr
                 activation_reached = high >= activation if position > 0 else low <= activation
                 if activation_reached:
@@ -1233,6 +1387,12 @@ def _compiled_loop_one(
             initial_risk = math.nan
             trail_stop = math.nan
             trail_active = False
+            trail_armed = False
+            trail_method_active = False
+            best_extreme = math.nan
+            sar_value = math.nan
+            sar_ep = math.nan
+            sar_activation_index = -1
             pending_market_close = False
 
         if position != 0 and math.isnan(exit_price):
@@ -1294,11 +1454,17 @@ def _compiled_loop_one(
                     initial_risk = math.nan
                     trail_stop = math.nan
                     trail_active = False
+                    trail_armed = False
+                    trail_method_active = False
+                    best_extreme = math.nan
+                    sar_value = math.nan
+                    sar_ep = math.nan
+                    sar_activation_index = -1
                     pending_market_close = False
                     break
                 current = endpoint
 
-        if position != 0 and trail_enabled and not entry_filled_this_bar:
+        if position != 0 and ma_trail_enabled and not entry_filled_this_bar:
             activation = anchor_price + position * initial_risk * trail_activation_rr
             activation_reached = high >= activation if position > 0 else low <= activation
             if trail_active or activation_reached:
@@ -1310,6 +1476,69 @@ def _compiled_loop_one(
                         trail_stop = max(initial_stop, trail_stop, band)
                     else:
                         trail_stop = min(initial_stop, trail_stop, band)
+
+        if position != 0 and stateful_trail_enabled:
+            if not trail_armed:
+                activation = anchor_price + position * initial_risk * trail_activation_rr
+                activation_reached = high >= activation if position > 0 else low <= activation
+                if activation_reached:
+                    trail_armed = True
+                    trail_active = True
+                    best_extreme = high if position > 0 else low
+                    if position > 0:
+                        trail_stop = max(trail_stop, entry_price)
+                    else:
+                        trail_stop = min(trail_stop, entry_price)
+                    if trail_code == TRAIL_MODE_FIXED_AF_SAR:
+                        sar_value = entry_price
+                        sar_ep = best_extreme
+                        sar_activation_index = i
+
+            if trail_armed:
+                if position > 0:
+                    best_extreme = max(best_extreme, high)
+                else:
+                    best_extreme = min(best_extreme, low)
+
+                candidate = math.nan
+                if trail_code == TRAIL_MODE_R_DISTANCE:
+                    if position > 0:
+                        candidate = best_extreme - initial_risk * trail_distance_r
+                    else:
+                        candidate = best_extreme + initial_risk * trail_distance_r
+                elif trail_code == TRAIL_MODE_CHANDELIER:
+                    chandelier_value = chandelier_atr[i]
+                    if math.isfinite(chandelier_value):
+                        if position > 0:
+                            candidate = best_extreme - chandelier_value * chandelier_atr_mult
+                        else:
+                            candidate = best_extreme + chandelier_value * chandelier_atr_mult
+                else:
+                    if i > sar_activation_index:
+                        if position > 0:
+                            sar_ep = max(sar_ep, high)
+                            raw_next = sar_value + sar_speed * (sar_ep - sar_value)
+                            range_cap = low if i == 0 else min(low, low_values[i - 1])
+                            sar_value = max(sar_value, min(raw_next, range_cap))
+                        else:
+                            sar_ep = min(sar_ep, low)
+                            raw_next = sar_value + sar_speed * (sar_ep - sar_value)
+                            range_cap = high if i == 0 else max(high, high_values[i - 1])
+                            sar_value = min(sar_value, max(raw_next, range_cap))
+                    candidate = sar_value
+
+                if not trail_method_active:
+                    candidate_valid = math.isfinite(candidate) and (
+                        candidate < close if position > 0 else candidate > close
+                    )
+                    if candidate_valid:
+                        trail_method_active = True
+                if trail_method_active and math.isfinite(candidate):
+                    candidate = _maybe_round_trail(position, candidate, rounding_code, tick_size)
+                    if position > 0:
+                        trail_stop = max(trail_stop, candidate)
+                    else:
+                        trail_stop = min(trail_stop, candidate)
 
         if position != 0 and entry_index >= 0 and max_days_enabled:
             days_in_trade = (timestamp_ns[i] - timestamp_ns[entry_index]) / day_ns
@@ -1353,6 +1582,12 @@ def _compiled_loop_one(
                 initial_risk = math.nan
                 trail_stop = math.nan
                 trail_active = False
+                trail_armed = False
+                trail_method_active = False
+                best_extreme = math.nan
+                sar_value = math.nan
+                sar_ep = math.nan
+                sar_activation_index = -1
 
         in_date_range = i >= trade_start_idx
         if use_date_filter:
@@ -1604,6 +1839,7 @@ def _batch_loop_impl(
     rolling_high: np.ndarray,
     trail_long: np.ndarray,
     trail_short: np.ndarray,
+    chandelier_atr: np.ndarray,
     trade_start_idx: int,
     initial_capital_values: np.ndarray,
     commission_pct_values: np.ndarray,
@@ -1614,13 +1850,16 @@ def _batch_loop_impl(
     risk_per_trade_pct_values: np.ndarray,
     contract_size_values: np.ndarray,
     trail_activation_rr_values: np.ndarray,
+    trail_distance_r_values: np.ndarray,
+    chandelier_atr_mult_values: np.ndarray,
+    sar_speed_values: np.ndarray,
     tick_size_values: np.ndarray,
     start_ns_values: np.ndarray,
     end_ns_values: np.ndarray,
     enable_long_values: np.ndarray,
     enable_short_values: np.ndarray,
     target_enabled_values: np.ndarray,
-    trail_enabled_values: np.ndarray,
+    trail_mode_code_values: np.ndarray,
     max_days_enabled_values: np.ndarray,
     use_date_filter_values: np.ndarray,
     strict_boundary_values: np.ndarray,
@@ -1651,6 +1890,7 @@ def _batch_loop_impl(
             rolling_high,
             trail_long,
             trail_short,
+            chandelier_atr,
             trade_start_idx,
             initial_capital_values,
             commission_pct_values,
@@ -1661,13 +1901,16 @@ def _batch_loop_impl(
             risk_per_trade_pct_values,
             contract_size_values,
             trail_activation_rr_values,
+            trail_distance_r_values,
+            chandelier_atr_mult_values,
+            sar_speed_values,
             tick_size_values,
             start_ns_values,
             end_ns_values,
             enable_long_values,
             enable_short_values,
             target_enabled_values,
-            trail_enabled_values,
+            trail_mode_code_values,
             max_days_enabled_values,
             use_date_filter_values,
             strict_boundary_values,
@@ -1698,6 +1941,8 @@ def _stacked_batch_loop_impl(
     rolling_high: np.ndarray,
     trail_long: np.ndarray,
     trail_short: np.ndarray,
+    chandelier_atr: np.ndarray,
+    chandelier_data_index: np.ndarray,
     data_index: np.ndarray,
     trade_start_idx: int,
     initial_capital_values: np.ndarray,
@@ -1709,13 +1954,16 @@ def _stacked_batch_loop_impl(
     risk_per_trade_pct_values: np.ndarray,
     contract_size_values: np.ndarray,
     trail_activation_rr_values: np.ndarray,
+    trail_distance_r_values: np.ndarray,
+    chandelier_atr_mult_values: np.ndarray,
+    sar_speed_values: np.ndarray,
     tick_size_values: np.ndarray,
     start_ns_values: np.ndarray,
     end_ns_values: np.ndarray,
     enable_long_values: np.ndarray,
     enable_short_values: np.ndarray,
     target_enabled_values: np.ndarray,
-    trail_enabled_values: np.ndarray,
+    trail_mode_code_values: np.ndarray,
     max_days_enabled_values: np.ndarray,
     use_date_filter_values: np.ndarray,
     strict_boundary_values: np.ndarray,
@@ -1731,6 +1979,12 @@ def _stacked_batch_loop_impl(
 ) -> None:
     for index in numba.prange(outputs.shape[0]):
         row = data_index[index]
+        chandelier_row = -1
+        if chandelier_data_index.shape[0] != 0:
+            chandelier_row = chandelier_data_index[row]
+        candidate_chandelier_atr = close_values[:0]
+        if chandelier_row >= 0:
+            candidate_chandelier_atr = chandelier_atr[chandelier_row]
         _compiled_loop_one(
             index,
             open_values,
@@ -1747,6 +2001,7 @@ def _stacked_batch_loop_impl(
             rolling_high[row],
             trail_long[row],
             trail_short[row],
+            candidate_chandelier_atr,
             trade_start_idx,
             initial_capital_values,
             commission_pct_values,
@@ -1757,13 +2012,16 @@ def _stacked_batch_loop_impl(
             risk_per_trade_pct_values,
             contract_size_values,
             trail_activation_rr_values,
+            trail_distance_r_values,
+            chandelier_atr_mult_values,
+            sar_speed_values,
             tick_size_values,
             start_ns_values,
             end_ns_values,
             enable_long_values,
             enable_short_values,
             target_enabled_values,
-            trail_enabled_values,
+            trail_mode_code_values,
             max_days_enabled_values,
             use_date_filter_values,
             strict_boundary_values,

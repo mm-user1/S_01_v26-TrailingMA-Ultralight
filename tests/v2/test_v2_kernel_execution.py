@@ -19,6 +19,7 @@ def _data(
     rolling_high=None,
     trail_long=None,
     trail_short=None,
+    chandelier_atr=None,
 ):
     length = len(open_)
     return ExecutionData(
@@ -36,6 +37,9 @@ def _data(
         rolling_high=np.array(rolling_high if rolling_high is not None else high, dtype=float),
         trail_long=np.array(trail_long if trail_long is not None else [np.nan] * length, dtype=float),
         trail_short=np.array(trail_short if trail_short is not None else [np.nan] * length, dtype=float),
+        chandelier_atr=(
+            None if chandelier_atr is None else np.array(chandelier_atr, dtype=float)
+        ),
     )
 
 
@@ -239,6 +243,236 @@ def test_post_path_trail_ratchet_applies_to_future_bar_only():
     assert len(result.trades) == 1
     assert result.trades[0].exit_time == data.timestamps[3]
     assert result.trades[0].exit_price == 101.0
+
+
+def _stateful_config(mode, **overrides):
+    values = dict(
+        initial_capital=100.0,
+        risk_per_trade_pct=100.0,
+        contract_size=1.0,
+        stop_x=0.0,
+        max_stop_pct=20.0,
+        target_mode="none",
+        trail_mode=mode,
+        trail_activation_mode="rr",
+        trail_activation_rr=1.0,
+        max_days_enabled=False,
+        boundary_mode="none",
+    )
+    values.update(overrides)
+    return KernelConfig(**values)
+
+
+def test_r_distance_activation_is_exact_and_future_effective_with_fill_price_breakeven():
+    data = _data(
+        open_=[100.0, 103.0, 102.0],
+        high=[100.0, 105.0, 103.0],
+        low=[95.0, 96.0, 101.0],
+        close=[100.0, 101.0, 102.0],
+        long=[True, False, False],
+        rolling_low=[95.0, 96.0, 101.0],
+    )
+
+    result = run_reference_kernel(
+        data,
+        _stateful_config("r_distance", trail_distance_r=2.0),
+    )
+
+    assert result.trades[0].entry_price == 103.0
+    assert result.trades[0].exit_time == data.timestamps[2]
+    assert result.trades[0].exit_price == 102.0
+
+
+def test_r_distance_first_candidate_requires_strict_side_but_later_candidates_only_ratchet():
+    equality = _data(
+        open_=[100.0, 100.0],
+        high=[100.0, 105.0],
+        low=[95.0, 99.0],
+        close=[100.0, 101.0],
+        long=[True, False],
+        rolling_low=[95.0, 99.0],
+    )
+    equality_result = run_reference_kernel(
+        equality,
+        _stateful_config("r_distance", trail_distance_r=0.8),
+    )
+    assert equality_result.standing_state.trail_active is True
+    assert equality_result.standing_state.trail_stop == 100.0
+
+    later = _data(
+        open_=[100.0, 100.0, 104.0],
+        high=[100.0, 106.0, 110.0],
+        low=[95.0, 99.0, 102.0],
+        close=[100.0, 104.0, 104.0],
+        long=[True, False, False],
+        rolling_low=[95.0, 99.0, 102.0],
+    )
+    later_result = run_reference_kernel(
+        later,
+        _stateful_config("r_distance", trail_distance_r=1.0),
+    )
+    assert later_result.standing_state.trail_stop == 105.0
+
+
+def test_chandelier_waits_for_first_finite_atr_then_becomes_method_active():
+    data = _data(
+        open_=[100.0, 100.0, 104.0],
+        high=[100.0, 106.0, 110.0],
+        low=[95.0, 99.0, 102.0],
+        close=[100.0, 104.0, 108.0],
+        long=[True, False, False],
+        rolling_low=[95.0, 99.0, 102.0],
+        chandelier_atr=[np.nan, np.nan, 2.0],
+    )
+
+    result = run_reference_kernel(
+        data,
+        _stateful_config("chandelier", chandelier_atr_mult=2.0),
+    )
+
+    assert result.standing_state.trail_stop == 106.0
+
+
+def test_fixed_af_sar_uses_trade_local_recurrence_and_two_bar_range_cap():
+    data = _data(
+        open_=[100.0, 100.0, 104.0, 108.0],
+        high=[100.0, 105.0, 110.0, 112.0],
+        low=[95.0, 99.0, 103.0, 106.0],
+        close=[100.0, 104.0, 108.0, 110.0],
+        long=[True, False, False, False],
+        rolling_low=[95.0, 99.0, 103.0, 106.0],
+    )
+
+    result = run_reference_kernel(
+        data,
+        _stateful_config("fixed_af_sar", sar_speed=0.2),
+    )
+
+    assert result.standing_state.trail_stop == pytest.approx(102.4)
+
+
+def test_r_distance_short_uses_symmetric_activation_and_ratchet():
+    data = _data(
+        open_=[100.0, 100.0, 96.0],
+        high=[105.0, 101.0, 98.0],
+        low=[100.0, 94.0, 90.0],
+        close=[100.0, 96.0, 92.0],
+        short=[True, False, False],
+        rolling_high=[105.0, 101.0, 98.0],
+    )
+
+    result = run_reference_kernel(
+        data,
+        _stateful_config("r_distance", trail_distance_r=1.0),
+    )
+
+    assert result.standing_state.trail_stop == 95.0
+
+
+@pytest.mark.parametrize(
+    ("mode", "extra", "chandelier", "expected"),
+    [
+        ("chandelier", {"chandelier_atr_mult": 2.0}, [np.nan, np.nan, 2.0], 94.0),
+        ("fixed_af_sar", {"sar_speed": 0.2}, None, 97.6),
+    ],
+)
+def test_chandelier_and_fixed_af_sar_short_formulas(mode, extra, chandelier, expected):
+    if mode == "chandelier":
+        open_ = [100.0, 100.0, 96.0]
+        high = [105.0, 101.0, 98.0]
+        low = [100.0, 94.0, 90.0]
+        close = [100.0, 96.0, 92.0]
+    else:
+        open_ = [100.0, 100.0, 96.0, 92.0]
+        high = [105.0, 101.0, 97.0, 94.0]
+        low = [100.0, 95.0, 90.0, 88.0]
+        close = [100.0, 96.0, 92.0, 90.0]
+    data = _data(
+        open_=open_,
+        high=high,
+        low=low,
+        close=close,
+        short=[True] + [False] * (len(open_) - 1),
+        rolling_high=high,
+        chandelier_atr=chandelier,
+    )
+
+    result = run_reference_kernel(data, _stateful_config(mode, **extra))
+
+    assert result.standing_state.trail_stop == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("mode", "overrides", "message"),
+    [
+        ("r_distance", {"trail_activation_rr": 0.0, "trail_distance_r": 1.0}, "trailRR"),
+        ("r_distance", {"trail_distance_r": np.nan}, "trailDistanceR"),
+        ("chandelier", {"chandelier_atr_mult": 0.0}, "chandelierATRMult"),
+        ("fixed_af_sar", {"sar_speed": 1.01}, "sarSpeed"),
+    ],
+)
+def test_active_stateful_scalar_validation(mode, overrides, message):
+    data = _data(
+        open_=[100.0],
+        high=[100.0],
+        low=[95.0],
+        close=[100.0],
+        chandelier_atr=[1.0] if mode == "chandelier" else None,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        run_reference_kernel(data, _stateful_config(mode, **overrides))
+
+
+def test_active_chandelier_rejects_missing_data():
+    data = _data(open_=[100.0], high=[100.0], low=[95.0], close=[100.0])
+
+    with pytest.raises(ValueError, match="chandelier_atr"):
+        run_reference_kernel(data, _stateful_config("chandelier", chandelier_atr_mult=2.0))
+
+
+def test_first_stateful_candidate_side_check_precedes_tick_rounding():
+    data = _data(
+        open_=[100.0, 99.0],
+        high=[100.0, 105.04],
+        low=[95.0, 98.0],
+        close=[100.0, 100.04],
+        long=[True, False],
+        rolling_low=[95.0, 98.0],
+    )
+
+    result = run_reference_kernel(
+        data,
+        _stateful_config(
+            "r_distance",
+            trail_distance_r=1.0,
+            price_rounding_mode="tick_outward",
+            tick_size=0.1,
+        ),
+    )
+
+    assert result.standing_state.trail_stop == 99.0
+
+
+def test_stateful_trail_state_resets_after_close_before_next_trade():
+    data = _data(
+        open_=[100.0, 100.0, 99.0, 100.0, 100.0, 100.0],
+        high=[100.0, 106.0, 100.0, 100.0, 102.0, 102.0],
+        low=[95.0, 99.0, 98.0, 95.0, 99.0, 99.0],
+        close=[100.0, 104.0, 99.0, 100.0, 101.0, 101.0],
+        long=[True, False, False, True, False, False],
+        rolling_low=[95.0, 99.0, 98.0, 95.0, 99.0, 99.0],
+    )
+
+    result = run_reference_kernel(
+        data,
+        _stateful_config("r_distance", trail_distance_r=1.0),
+    )
+
+    assert len(result.trades) == 1
+    assert result.standing_state.position_direction == 1
+    assert result.standing_state.trail_active is False
+    assert result.standing_state.trail_stop == 95.0
 
 
 def test_max_days_and_strict_boundary_behaviors():

@@ -15,7 +15,11 @@ from core.metrics import AdvancedMetrics, BasicMetrics
 from .contracts import GuardrailSummary, StandingState
 from .kernel import ExecutionData, KernelConfig, KernelResult, run_reference_kernel
 from .kernel_signal import SignalKernelConfig, run_signal_reversal_kernel
-from .execution_modes import resolve_position_mode_state, resolve_signal_reversal_mode_state
+from .execution_modes import (
+    resolve_position_mode_state,
+    resolve_signal_reversal_mode_state,
+    stateful_trail_params,
+)
 from .price_rounding import PRICE_ROUNDING_NONE, PRICE_ROUNDING_TICK_OUTWARD, validate_tick_size
 from .profile import active_mode_values
 
@@ -108,6 +112,7 @@ def build_kernel_config(
         mode_state.price_rounding_mode,
         params,
     )
+    trail_params = stateful_trail_params(trail_mode, params)
     return KernelConfig(
         initial_capital=float(params.get("initialCapital", 100.0)),
         commission_pct=float(params.get("commissionPct", 0.0)),
@@ -122,7 +127,10 @@ def build_kernel_config(
         target_mode=target_mode,
         trail_mode=trail_mode,
         trail_activation_mode=trail_activation_mode,
-        trail_activation_rr=float(params.get("trailRR", 1.0)),
+        trail_activation_rr=trail_params.trail_activation_rr,
+        trail_distance_r=trail_params.trail_distance_r,
+        chandelier_atr_mult=trail_params.chandelier_atr_mult,
+        sar_speed=trail_params.sar_speed,
         max_days_enabled=mode_state.max_days_enabled,
         boundary_mode=boundary_mode,
         margin_mode=margin_mode,

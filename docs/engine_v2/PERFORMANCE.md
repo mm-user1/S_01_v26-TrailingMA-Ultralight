@@ -8,6 +8,52 @@ Benchmark numbers are machine-dependent. Always record the machine, CPU, Python
 version, Numba version, thread environment, command, worker count, candidate
 count, and the full Grid V2 timings dict before comparing runs.
 
+## TZ17-1 Stateful-Trail Engine Measurement
+
+Measured 2026-08-27 on Windows 10 build 19042 with Python 3.13.7, NumPy
+2.3.3, Numba 0.65.1, 16 available Numba threads, and `n_workers=1`. Each case
+used 4,096 deterministic synthetic bars and 512 candidates. A first call was
+excluded for JIT warmup, followed by nine complete
+`evaluate_compiled_batch(...)` measurements. The baseline was executed from an
+archive of commit `452a2f58`; the after-run used the working tree and the exact
+same S06 B2 profile, arrays, parameters, timing boundary, interpreter, and
+worker policy.
+
+| Existing mode | Before median | After median | Before/after output SHA-256 |
+| --- | ---: | ---: | --- |
+| `none` | 0.023373s | 0.026391s | `9443c8ce5d6847b7232fc9750b01e11a1899ab8483a1705af32bbe569942558a` |
+| `ma` | 0.020990s | 0.023812s | `9fd8d9230f53ccec19b3fdd9a8dc65054b7e6400d2d062a15e0d112642c7105e` |
+
+The exact hashes and `(512, 26)` outputs match before and after. The warm
+medians are 12.9% (`none`) and 13.4% (`ma`) slower in this small synthetic
+microbenchmark, so the greater-than-5% regression was investigated rather than
+hidden. Configuration packing accounts for about 0.65 ms of the delta
+(approximately 3.49 ms before and 4.14 ms after for 512 rows); the remainder is
+the cost of carrying the additive mode code and trade-local primitive state in
+the shared compiled loop. A helper-call isolation experiment was rejected
+because it made both legacy paths slower. No opaque duplicated legacy kernel
+was introduced solely to optimize this microbenchmark. Full S06 parity,
+identity pins, and the complete test suite remain the acceptance authorities.
+
+The expanded deterministic harness used the same bar/candidate/worker counts
+and reported these warm medians: `r_distance` 0.018784s, `chandelier`
+0.019078s, `fixed_af_sar` 0.018865s, and a mixed five-mode stacked batch
+0.016658s. Raw nine-run ranges were respectively 0.018585-0.019059s,
+0.018944-0.019332s, 0.018696-0.018952s, and 0.016546-0.016868s. These absolute
+figures use the dedicated test profile and should not be compared directly to
+the S06 before/after table.
+
+Optional Chandelier transport is request-gated. With 4,096 bars, a mixed
+two-dataprep-row stack retaining one Chandelier row added exactly 32,776 bytes:
+32,768 bytes for the float64 ATR row and 8 bytes for the two-entry int32 row
+mapping. A no-Chandelier row retained no optional full-size array. Grid cache
+estimation counts unique active Chandelier dataprep keys, the float rows, and
+mapping metadata; focused tests assert those estimates are not below the
+stacked retained arrays and that non-Chandelier estimates are unchanged.
+
+This is an engine-foundation measurement only. No new strategy, Strategy Lab
+dataset, or production performance claim is introduced by TZ17-1.
+
 ## Deterministic Budgeted Planning
 
 For `grid_v2_planning_policy=sampled` with requested `K < N`, planning builds

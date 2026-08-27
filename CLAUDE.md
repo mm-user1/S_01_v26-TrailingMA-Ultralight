@@ -475,6 +475,14 @@ backend advertises capability via `get_backend_metadata()` (normalized by
     normal warning panel must filter structured `warning` diagnostics, and
     `info` must remain secondary/non-nagging. UI rendering must not treat the
     string-only `validation_warnings` projection as its authority.
+  - Position V2 supports public trail modes `none`, `ma`, `r_distance`,
+    `chandelier`, and `fixed_af_sar`. The three stateful modes require
+    `target=none` plus RR activation, update from completed closes, retain the
+    initial stop on the fill bar, move to actual-fill break-even when armed,
+    and make newly accepted stops future-effective. Chandelier ATR is optional,
+    request-gated dataprep keyed only by `chandelierATRLength`; its row and
+    compact mapping are included in Grid memory facts. Existing `none`/`ma`
+    timing and the 26-column compiled output ABI remain frozen.
 
 - **Legacy V1 strategy-owned generation profiles**
   - S03 (`sampled_by_mode`): splits the search into `cc_only` / `tbands_only` /

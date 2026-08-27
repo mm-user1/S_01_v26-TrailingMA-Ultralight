@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any
 
 
 class ExecutionModeValidationError(ValueError):
@@ -27,6 +30,30 @@ class PositionModeState:
 class SignalReversalModeState:
     stop_mode: str
     boundary_mode: str
+
+
+@dataclass(frozen=True, slots=True)
+class StatefulTrailParams:
+    trail_activation_rr: float
+    trail_distance_r: float = 0.0
+    chandelier_atr_mult: float = 0.0
+    sar_speed: float = 0.0
+
+
+TRAIL_MODE_CODES = MappingProxyType(
+    {
+        "none": 0,
+        "ma": 1,
+        "r_distance": 2,
+        "chandelier": 3,
+        "fixed_af_sar": 4,
+    }
+)
+TRAIL_MODE_NONE = 0
+TRAIL_MODE_MA = 1
+TRAIL_MODE_R_DISTANCE = 2
+TRAIL_MODE_CHANDELIER = 3
+TRAIL_MODE_FIXED_AF_SAR = 4
 
 
 _POSITION_FIELDS = frozenset(
@@ -64,7 +91,7 @@ _POSITION_MODE_VALUES = {
     "entryOrder": frozenset({"market_next_open"}),
     "stop": frozenset({"atr_swing"}),
     "target": frozenset({"rr", "none"}),
-    "trail": frozenset({"ma", "none"}),
+    "trail": frozenset(TRAIL_MODE_CODES),
     "trailActivation": frozenset({"none", "rr"}),
     "sizing": frozenset({"risk_per_trade"}),
     "maxDays": frozenset({"true", "false"}),
@@ -110,6 +137,77 @@ def execution_family_supports_mode_value(
     return str(mode_value) in family_values.get(str(mode_field), ())
 
 
+def trail_mode_code(trail_mode: Any) -> int:
+    name = str(trail_mode)
+    try:
+        return TRAIL_MODE_CODES[name]
+    except KeyError as exc:
+        raise ExecutionModeValidationError(
+            f"Unsupported position/bracket execution mode trail={name!r}; "
+            f"expected one of {list(TRAIL_MODE_CODES)}.",
+            field="trail",
+        ) from exc
+
+
+def _required_active_float(
+    params: Mapping[str, Any],
+    name: str,
+    *,
+    upper_bound: float | None = None,
+) -> float:
+    if name not in params:
+        raise ValueError(f"{name} is required for the active trail mode.")
+    try:
+        value = float(params[name])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite positive number for the active trail mode.") from exc
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"{name} must be a finite positive number for the active trail mode.")
+    if upper_bound is not None and value > upper_bound:
+        raise ValueError(f"{name} must be greater than 0 and no greater than {upper_bound:g}.")
+    return value
+
+
+def stateful_trail_params(
+    trail_mode: str,
+    params: Mapping[str, Any],
+) -> StatefulTrailParams:
+    """Validate active stateful-trail scalars and keep inactive inputs inert."""
+
+    code = trail_mode_code(trail_mode)
+    if code < TRAIL_MODE_R_DISTANCE:
+        # Preserve the established none/MA packing behavior, including MA's
+        # historical default and validation surface.
+        return StatefulTrailParams(trail_activation_rr=float(params.get("trailRR", 1.0)))
+
+    trail_rr = _required_active_float(params, "trailRR")
+    if code == TRAIL_MODE_R_DISTANCE:
+        return StatefulTrailParams(
+            trail_activation_rr=trail_rr,
+            trail_distance_r=_required_active_float(params, "trailDistanceR"),
+        )
+    if code == TRAIL_MODE_CHANDELIER:
+        if "chandelierATRLength" not in params:
+            raise ValueError("chandelierATRLength is required for the active Chandelier trail mode.")
+        raw_length = params["chandelierATRLength"]
+        if isinstance(raw_length, bool):
+            raise ValueError("chandelierATRLength must be a positive integer.")
+        try:
+            numeric_length = float(raw_length)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("chandelierATRLength must be a positive integer.") from exc
+        if not math.isfinite(numeric_length) or numeric_length <= 0.0 or not numeric_length.is_integer():
+            raise ValueError("chandelierATRLength must be a positive integer.")
+        return StatefulTrailParams(
+            trail_activation_rr=trail_rr,
+            chandelier_atr_mult=_required_active_float(params, "chandelierATRMult"),
+        )
+    return StatefulTrailParams(
+        trail_activation_rr=trail_rr,
+        sar_speed=_required_active_float(params, "sarSpeed", upper_bound=1.0),
+    )
+
+
 def _require(modes: Mapping[str, str], field: str, expected: str, family: str) -> None:
     actual = modes.get(field)
     if actual != expected:
@@ -150,11 +248,7 @@ def resolve_position_mode_state(modes: Mapping[str, str]) -> PositionModeState:
             f"Unsupported position/bracket execution mode target={target_mode!r}; expected 'rr' or 'none'.",
             field="target",
         )
-    if trail_mode not in _POSITION_MODE_VALUES["trail"]:
-        raise ExecutionModeValidationError(
-            f"Unsupported position/bracket execution mode trail={trail_mode!r}; expected 'ma' or 'none'.",
-            field="trail",
-        )
+    trail_mode_code(trail_mode)
     trail_activation_mode = modes.get("trailActivation", "none")
     if trail_activation_mode not in _POSITION_MODE_VALUES["trailActivation"]:
         raise ExecutionModeValidationError(
@@ -163,11 +257,15 @@ def resolve_position_mode_state(modes: Mapping[str, str]) -> PositionModeState:
             field="trailActivation",
         )
     valid_target = target_mode == "rr" and trail_mode == "none" and trail_activation_mode == "none"
-    valid_trail = target_mode == "none" and trail_mode == "ma" and trail_activation_mode == "rr"
+    valid_trail = (
+        target_mode == "none"
+        and trail_mode in {"ma", "r_distance", "chandelier", "fixed_af_sar"}
+        and trail_activation_mode == "rr"
+    )
     if not (valid_target or valid_trail):
         raise ExecutionModeValidationError(
             "Position/bracket supports target=rr with trail=none/trailActivation=none "
-            "or target=none with trail=ma/trailActivation=rr.",
+            "or target=none with a supported trail and trailActivation=rr.",
             field="trailActivation",
         )
 
@@ -256,8 +354,17 @@ __all__ = [
     "ExecutionModeValidationError",
     "PositionModeState",
     "SignalReversalModeState",
+    "StatefulTrailParams",
+    "TRAIL_MODE_CHANDELIER",
+    "TRAIL_MODE_CODES",
+    "TRAIL_MODE_FIXED_AF_SAR",
+    "TRAIL_MODE_MA",
+    "TRAIL_MODE_NONE",
+    "TRAIL_MODE_R_DISTANCE",
     "execution_family_supports_mode_value",
     "resolve_position_mode_state",
     "resolve_signal_reversal_mode_state",
+    "stateful_trail_params",
+    "trail_mode_code",
     "validate_execution_modes",
 ]
