@@ -1,0 +1,272 @@
+{
+    "schema_version":  1,
+    "strategy_id":  "s06_r_trend_v06_4_a2_b2",
+    "strategy_name":  "S06 R-Trend v06-4-A2 B2",
+    "purpose":  "Merlin Backtester V2 TradingView parity baselines for three new generic stateful trail modes.",
+    "market_data":  {
+                        "symbol":  "SUIUSDT.P",
+                        "exchange":  "OKX",
+                        "instrument":  "perpetual_swap_contract",
+                        "quote_currency":  "USDT",
+                        "timeframe":  "30m",
+                        "path":  "data/raw/OKX_SUIUSDT.P, 30 2025.01.01-2026.02.01.csv",
+                        "sha256":  "d664bbae2903828f84b19e7af548fdc744b970a17f56846ad77882a9ca786aae",
+                        "timezone":  "UTC"
+                    },
+    "instrument":  {
+                       "tick_size":  0.0001
+                   },
+    "canonical_period":  {
+                             "start_utc":  "2025-08-01T00:00:00Z",
+                             "end_utc":  "2025-12-01T00:00:00Z",
+                             "interval_semantics":  "[start_utc, end_utc)",
+                             "tradingview_timezone":  "UTC+8",
+                             "tradingview_start":  "2025-08-01 08:00",
+                             "tradingview_end":  "2025-12-01 08:00"
+                         },
+    "pine_sources":  {
+                         "authority":  {
+                                           "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/pine/S_06-R-Trend_v06-4-A2_Fixed-AF-SAR.pine",
+                                           "sha256":  "2c832d4d0c6361a07ef4e3e7cc47960c50cbcd60524dbb100755369d17abbd6e"
+                                       },
+                         "certification":  {
+                                               "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/pine/S_06-R-Trend_v06-4-A2_Fixed-AF-SAR_baseline-no-magnifier.pine",
+                                               "sha256":  "392098f6f52329c36ae846098e0d009613c268580c8e80f2a0e00f4e9dfa4d02"
+                                           },
+                         "certification_diff":  "Only use_bar_magnifier=true was changed to use_bar_magnifier=false.",
+                         "force_end_date_close":  true,
+                         "process_orders_on_close":  false
+                     },
+    "tradingview_execution_profile":  {
+                                          "initial_capital":  100,
+                                          "currency":  "USDT",
+                                          "default_order_size":  100,
+                                          "default_order_size_type":  "cash",
+                                          "pyramiding":  0,
+                                          "bar_detailization":  "default_4_ticks_per_bar",
+                                          "fill_orders_on_standard_ohlc":  true,
+                                          "script_execution":  {
+                                                                   "on_bar_close":  true,
+                                                                   "on_order_fill":  false,
+                                                                   "on_realtime_bar_tick":  false
+                                                               },
+                                          "commission":  {
+                                                             "value":  0.05,
+                                                             "type":  "percent"
+                                                         },
+                                          "long_leverage":  "Infinity",
+                                          "short_leverage":  "Infinity",
+                                          "slippage_ticks":  0,
+                                          "limit_order_execution":  "requested_price",
+                                          "order_execution_delay":  "one_tick"
+                                      },
+    "references":  [
+                       {
+                           "reference_id":  "reference_a_reversal_r_trail",
+                           "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_a_reversal_r_trail",
+                           "entry_mode":  "Reversal @ Triangle",
+                           "trail_mode":  "R Trail",
+                           "total_trades":  52,
+                           "positive_method_controlled_exits":  8,
+                           "final_boundary_exercised":  false,
+                           "role":  "external_tradingview_parity_target"
+                       },
+                       {
+                           "reference_id":  "reference_b_trend_r_trail",
+                           "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_b_trend_r_trail",
+                           "entry_mode":  "Trend @ Square",
+                           "trail_mode":  "R Trail",
+                           "total_trades":  42,
+                           "positive_method_controlled_exits":  3,
+                           "final_boundary_exercised":  false,
+                           "role":  "external_tradingview_parity_target"
+                       },
+                       {
+                           "reference_id":  "reference_c_reversal_chandelier",
+                           "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_c_reversal_chandelier",
+                           "entry_mode":  "Reversal @ Triangle",
+                           "trail_mode":  "Chandelier Exit",
+                           "total_trades":  68,
+                           "positive_method_controlled_exits":  35,
+                           "final_boundary_exercised":  true,
+                           "role":  "external_tradingview_parity_target"
+                       },
+                       {
+                           "reference_id":  "reference_d_trend_chandelier",
+                           "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_d_trend_chandelier",
+                           "entry_mode":  "Trend @ Square",
+                           "trail_mode":  "Chandelier Exit",
+                           "total_trades":  47,
+                           "positive_method_controlled_exits":  25,
+                           "final_boundary_exercised":  false,
+                           "role":  "external_tradingview_parity_target"
+                       },
+                       {
+                           "reference_id":  "reference_e_reversal_fixed_af_sar",
+                           "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_e_reversal_fixed_af_sar",
+                           "entry_mode":  "Reversal @ Triangle",
+                           "trail_mode":  "Fixed-AF SAR",
+                           "total_trades":  51,
+                           "positive_method_controlled_exits":  18,
+                           "final_boundary_exercised":  true,
+                           "role":  "external_tradingview_parity_target"
+                       },
+                       {
+                           "reference_id":  "reference_f_trend_fixed_af_sar",
+                           "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_f_trend_fixed_af_sar",
+                           "entry_mode":  "Trend @ Square",
+                           "trail_mode":  "Fixed-AF SAR",
+                           "total_trades":  34,
+                           "positive_method_controlled_exits":  3,
+                           "final_boundary_exercised":  false,
+                           "role":  "external_tradingview_parity_target"
+                       }
+                   ],
+    "baseline_interpretation":  {
+                                    "all_trade_counts_match_metrics_screenshots":  true,
+                                    "all_references_cover_positive_method_controlled_long_and_short_exits":  true,
+                                    "references_with_end_boundary_close":  [
+                                                                               "reference_c_reversal_chandelier",
+                                                                               "reference_e_reversal_fixed_af_sar"
+                                                                           ],
+                                    "deliberate_future_merlin_difference":  "Pine uses a one-tick initial candidate validity buffer; the reviewed Merlin plan uses a strict protective-side comparison without the extra tick."
+                                },
+    "asset_hashes":  [
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_a_reversal_r_trail/tradingview_trades.csv",
+                             "sha256":  "57bd202a878b2d0694f40b7ffbd385371e9bf24e8aa97388fe24973750fadd99"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_a_reversal_r_trail/trades_normalized_utc.csv",
+                             "sha256":  "55d95cdd798a245400cc672a7a95ac9530adca0b777e1e507930a43fa1d654ab"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_a_reversal_r_trail/tradingview_inputs.PNG",
+                             "sha256":  "1a322e2ffbac45703f89bba423386b7735bcc9b8c957358ef4218915963715ff"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_a_reversal_r_trail/tradingview_properties.PNG",
+                             "sha256":  "05aea3163a10485acfd732f268b886c2017927177b1e0aaa4387b740e5bbcf70"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_a_reversal_r_trail/tradingview_metrics.PNG",
+                             "sha256":  "39338859ceba1289d0ed5252df1e4d072101a5f97283a40e2935ad40b7a72777"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_b_trend_r_trail/tradingview_trades.csv",
+                             "sha256":  "fd4b2f1e097104a13cfec9e1fb737fe23c4347036e5ed580147970748126780b"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_b_trend_r_trail/trades_normalized_utc.csv",
+                             "sha256":  "d840a88e43fa3fdbbe5c63cdb8a0210d8495884fa16a3d0505e257dbfdac9cdd"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_b_trend_r_trail/tradingview_inputs.PNG",
+                             "sha256":  "50a6bcc6830aa051197682ab60f54ec9bbf364a8db518a0203257aa3b6991fef"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_b_trend_r_trail/tradingview_properties.PNG",
+                             "sha256":  "05aea3163a10485acfd732f268b886c2017927177b1e0aaa4387b740e5bbcf70"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_b_trend_r_trail/tradingview_metrics.PNG",
+                             "sha256":  "ac469e49bcd2703867e93abe0cf6552302fbd39935120505a6bf2f48b0698707"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_c_reversal_chandelier/tradingview_trades.csv",
+                             "sha256":  "792f78c974b8d2b49b50d5976bc9be66bca9f92e74ed176b2e39cff5841dbc7a"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_c_reversal_chandelier/trades_normalized_utc.csv",
+                             "sha256":  "1ef07f2e4e4f8048528a3e2be308c6aadf2d52d07111bb90825fb622ffae2b52"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_c_reversal_chandelier/tradingview_inputs_01.PNG",
+                             "sha256":  "11438233f3a318ce0da00dee63a91e31dad4f9d5a052954d4dd12219383fe41e"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_c_reversal_chandelier/tradingview_inputs_02.PNG",
+                             "sha256":  "d5985990a2dba68b19f7b209de57484dbf71f43b43c09258d1306674eef706b7"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_c_reversal_chandelier/tradingview_properties.PNG",
+                             "sha256":  "05aea3163a10485acfd732f268b886c2017927177b1e0aaa4387b740e5bbcf70"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_c_reversal_chandelier/tradingview_metrics.PNG",
+                             "sha256":  "540e59c180db2a2fdd564c153020a4fd4ef4390654976a307642f3b8eb8d54bb"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_d_trend_chandelier/tradingview_trades.csv",
+                             "sha256":  "95e0284d9005f5551939faf4ee197f1317cc96921801ba7ca271c7ddd5f27b3a"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_d_trend_chandelier/trades_normalized_utc.csv",
+                             "sha256":  "e63043f25a72be59080b4408abb907a1437cf7b2ae7aabe088244db18b458f9c"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_d_trend_chandelier/tradingview_inputs_01.PNG",
+                             "sha256":  "a401d14ce392494ce7205bd8037b89cea3a7eaa0db1e5f502461dd5490da46be"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_d_trend_chandelier/tradingview_inputs_02.PNG",
+                             "sha256":  "c5553fbacd79e585ba83cb6642b860315c3496d9fad003b2b96225d1a6d4464a"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_d_trend_chandelier/tradingview_properties.PNG",
+                             "sha256":  "05aea3163a10485acfd732f268b886c2017927177b1e0aaa4387b740e5bbcf70"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_d_trend_chandelier/tradingview_metrics.PNG",
+                             "sha256":  "50ccd6b04da4f898c4d6d28186bd41dda69251396ba20bad268752cbe69cb6ca"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_e_reversal_fixed_af_sar/tradingview_trades.csv",
+                             "sha256":  "223e40ae28f798636a0c0005bee22952ae9be9c5915c0d314268e892d8f6f0e0"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_e_reversal_fixed_af_sar/trades_normalized_utc.csv",
+                             "sha256":  "e5fc7aec35052c613cf2a0701f6a93f66f3a11ab2c54fe43884231567b76ff25"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_e_reversal_fixed_af_sar/tradingview_inputs_01.PNG",
+                             "sha256":  "11438233f3a318ce0da00dee63a91e31dad4f9d5a052954d4dd12219383fe41e"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_e_reversal_fixed_af_sar/tradingview_inputs_02.PNG",
+                             "sha256":  "92f90c4d7142cb16bf5616df0deec6b66ff3cd29ca26b453256906a592fa5f40"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_e_reversal_fixed_af_sar/tradingview_properties.PNG",
+                             "sha256":  "05aea3163a10485acfd732f268b886c2017927177b1e0aaa4387b740e5bbcf70"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_e_reversal_fixed_af_sar/tradingview_metrics.PNG",
+                             "sha256":  "654374cea42621e0391607497dd964183d71db00efc9ca899096f0b25214d62d"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_f_trend_fixed_af_sar/tradingview_trades.csv",
+                             "sha256":  "fe6c78b08cb1873137cc7f18a92c7a7b3938c38447073e08078df4bc309b67cb"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_f_trend_fixed_af_sar/trades_normalized_utc.csv",
+                             "sha256":  "f40bb927181b2383ab2e956edd87b4f8540ab035f638b0142f08111afc2fee83"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_f_trend_fixed_af_sar/tradingview_inputs_01.PNG",
+                             "sha256":  "a401d14ce392494ce7205bd8037b89cea3a7eaa0db1e5f502461dd5490da46be"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_f_trend_fixed_af_sar/tradingview_inputs_02.PNG",
+                             "sha256":  "8d9da0670389f844ace6b9f81a46cd005d03876fd108150fc46cc307b2885847"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_f_trend_fixed_af_sar/tradingview_properties.PNG",
+                             "sha256":  "05aea3163a10485acfd732f268b886c2017927177b1e0aaa4387b740e5bbcf70"
+                         },
+                         {
+                             "path":  "data/baseline_v2/s06_r_trend_v06_4_a2/reference_f_trend_fixed_af_sar/tradingview_metrics.PNG",
+                             "sha256":  "e0f8d288d2d038b6e6ba4676a3ac4ea31b3b044a18f366dc6c05b9cf72c12408"
+                         }
+                     ]
+}

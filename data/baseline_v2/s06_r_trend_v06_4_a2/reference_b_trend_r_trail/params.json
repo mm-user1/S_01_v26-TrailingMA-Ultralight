@@ -1,0 +1,80 @@
+{
+    "schema_version":  1,
+    "reference_id":  "reference_b_trend_r_trail",
+    "description":  "S06 R-Trend v06-4-A2 Trend @ Square + R Trail TradingView reference.",
+    "source_files":  {
+                         "raw_tradingview_trades":  {
+                                                        "path":  "tradingview_trades.csv",
+                                                        "sha256":  "fd4b2f1e097104a13cfec9e1fb737fe23c4347036e5ed580147970748126780b",
+                                                        "timezone":  "UTC+8"
+                                                    },
+                         "normalized_trades":  {
+                                                   "path":  "trades_normalized_utc.csv",
+                                                   "sha256":  "d840a88e43fa3fdbbe5c63cdb8a0210d8495884fa16a3d0505e257dbfdac9cdd",
+                                                   "timezone":  "UTC"
+                                               },
+                         "inputs_screenshots":  [
+                                                    "tradingview_inputs.PNG"
+                                                ],
+                         "properties_screenshot":  "tradingview_properties.PNG",
+                         "metrics_screenshot":  "tradingview_metrics.PNG"
+                     },
+    "time_filter":  {
+                        "dateFilter":  true,
+                        "backtester":  true,
+                        "start_utc":  "2025-08-01T00:00:00Z",
+                        "end_utc":  "2025-12-01T00:00:00Z",
+                        "interval_semantics":  "[start_utc, end_utc)",
+                        "tradingview_timezone":  "UTC+8",
+                        "tradingview_start":  "2025-08-01 08:00",
+                        "tradingview_end":  "2025-12-01 08:00"
+                    },
+    "strategy_inputs":  {
+                            "enableLong":  true,
+                            "enableShort":  true,
+                            "fastLength":  21,
+                            "fastSmooth":  7,
+                            "slowLength":  112,
+                            "slowSmooth":  3,
+                            "thresholdOS":  20,
+                            "thresholdOB":  20,
+                            "stopRR":  2,
+                            "riskPerTrade":  2,
+                            "contractSize":  0.01,
+                            "entryMode":  "Trend @ Square",
+                            "stopX":  2.5,
+                            "stopLP":  2,
+                            "stopMaxPct":  8,
+                            "stopMaxDays":  4,
+                            "trailMode":  "R Trail",
+                            "trailRR":  1,
+                            "trailDistanceR":  2.5,
+                            "chandelierATRLength":  28
+                        },
+    "input_roles":  {
+                        "stopRR":  "inactive_in_all_trail_modes",
+                        "active_trail_mode":  "R Trail",
+                        "inactive_mode_inputs_not_captured":  [
+                                                                  "chandelierATRMult",
+                                                                  "sarSpeed"
+                                                              ]
+                    },
+    "execution_semantics":  {
+                                "normal_market_orders":  "next_tick_open",
+                                "calculation_schedule":  "bar_close_only_no_order_fill_or_realtime_tick_recalculation",
+                                "final_boundary":  "exclusive_end_with_immediate_close_on_boundary_bar",
+                                "initial_candidate_validity":  "pine_one_tick_protective_side_buffer",
+                                "later_candidate_updates":  "finite_candidate_with_protective_ratchet_no_repeated_price_side_check",
+                                "selected_trail_exit_label":  "Long Exit or Short Exit"
+                            },
+    "mechanism_evidence":  {
+                               "method_or_initial_stop_exit_count":  31,
+                               "positive_method_controlled_exit_count":  3,
+                               "positive_long_method_controlled_exit_count":  2,
+                               "positive_short_method_controlled_exit_count":  1,
+                               "breakeven_commission_only_like_exit_count":  10,
+                               "max_days_exit_count":  11,
+                               "end_boundary_exit_count":  0,
+                               "interpretation":  "A positive Long Exit or Short Exit is method-controlled evidence because profit targets are disabled and the initial protective stop cannot produce a profitable stop exit."
+                           }
+}

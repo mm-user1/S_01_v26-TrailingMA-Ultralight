@@ -1,0 +1,806 @@
+// S_06 R-Trend v06-4-A2 — Trade-Anchored Fixed-AF SAR
+// Built from v02 trading logic.
+// Added:
+//   - Compact realized Performance Table with compounded monthly/yearly returns.
+//   - Absolute nonlinear monthly color scale and UTC month/year grouping.
+//   - Empty comments input on the top input row.
+//   - Date Filter permanently blocks entries at the End Date boundary and
+//     force-closes any open position exactly on that boundary.
+//   - No separate End Close checkbox: Date Filter owns this behavior.
+// %R Trend Exhaustion entries on a unified, symmetric risk engine.
+//
+// Signal layer (UNCHANGED from v01): dual Williams %R confluence.
+//   Reversal @ Triangle - long on OS zone exit, short on OB zone exit
+//   Trend @ Square      - long on OB zone entry, short on OS zone entry
+//
+// Risk engine:
+//   - One shared parameter set for long and short (formulas stay mirrored).
+//   - Bracket mode: initial ATR stop + fixed RR target + max-days.
+//   - Trail modes: initial ATR stop, no fixed target. After Trail RR the stop
+//     moves to breakeven, then the selected trail method takes control when valid.
+//   - Available trail methods: R Trail, Chandelier Exit, trade-anchored Fixed-AF SAR.
+//   - Stop RR is used ONLY in bracket mode.
+//
+// Validate every trail configuration on held-out / out-of-sample data.
+//@version=5
+strategy(title="S_06 R-Trend v06-4-A2 Fixed-AF SAR",
+	 overlay=true,
+	 initial_capital=100,
+	 currency="USDT",
+     pyramiding=0,
+	 calc_on_order_fills=true,
+	 calc_on_every_tick=false,
+	 use_bar_magnifier=true,
+	 fill_orders_on_standard_ohlc=true,
+	 process_orders_on_close=false,
+	 default_qty_type=strategy.cash,
+	 default_qty_value=100,
+	 commission_type=strategy.commission.percent,
+	 commission_value=0.05)
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███ INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Date Filter & display settings
+useDateFilter   = input.bool(true, "Date Filter", inline="Use Date Filter")
+drawTester      = input.bool(title="Backtester", defval=true, inline="Use Date Filter") // Drawing mini table with stats
+bool mptable_on = input.bool(title="Table", defval=true, display=display.none, inline="Use Date Filter")
+comments        = input.string(title="", defval="", inline="Use Date Filter")
+
+startDate       = input.time(timestamp('2025-02-01'), title="Start Date")
+endDate         = input.time(timestamp('2026-02-01'), title="End Date")
+
+// ──────────────────────────────────────────────────────────────────────────────
+// %R Trend Exhaustion signal settings (UNCHANGED from v01)
+// ──────────────────────────────────────────────────────────────────────────────
+var g_rte  = "%R Trend Exhaustion"
+modeReversal      = "Reversal @ Triangle"
+modeTrend         = "Trend @ Square"
+entryMode         = input.string(modeReversal, title="Entry Mode", options=["Reversal @ Triangle", "Trend @ Square"], group=g_rte)
+
+enableLong        = input.bool(true, title="Enable Long", inline="Enable Sides", group=g_rte)
+enableShort       = input.bool(true, title="Enable Short", inline="Enable Sides", group=g_rte)
+
+fastLength        = input.int(title="Fast Length", defval=21, minval=2, step=1, inline="Fast", group=g_rte)
+fastSmoothing     = input.int(title="Smooth", defval=7, minval=1, step=1, inline="Fast", group=g_rte)
+slowLength        = input.int(title="Slow Length", defval=112, minval=2, step=1, inline="Slow", group=g_rte, tooltip="112 is the indicator author's key finding for crypto. Keep fixed during optimization.")
+slowSmoothing     = input.int(title="Smooth", defval=3, minval=1, step=1, inline="Slow", group=g_rte)
+
+thresholdOS       = input.int(title="Threshold OS", defval=20, minval=1, maxval=50, step=10, inline="Threshold", group=g_rte, tooltip="Oversold zone size: both %R lines <= -100+threshold.")
+thresholdOB       = input.int(title="OB", defval=20, minval=1, maxval=50, step=10, inline="Threshold", group=g_rte, tooltip="Overbought zone size: both %R lines >= -threshold.")
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Risk parameters (UNIFIED long/short)
+// ──────────────────────────────────────────────────────────────────────────────
+var g_risk = "Risk (shared long/short)"
+stopX             = input.float(2.0, "Stop X", minval=1.0, maxval=3.0, step=0.5, group=g_risk, tooltip="ATR multiplier for the initial stop. Grid: 1.0,1.5,2.0,2.5,3.0")
+stopRR            = input.float(3.0, "Stop RR — bracket mode only", minval=1.5, maxval=3.0, step=0.5, group=g_risk, tooltip="Fixed risk:reward target. USED ONLY when Trail Mode = Off (Bracket). Has no effect in trailing modes. Grid: 1.5,2.0,2.5,3.0")
+stopLP            = input.int(2, "Stop LP", minval=2, maxval=4, step=2, group=g_risk, tooltip="Lookback for the stop anchor (lowest low / highest high). Grid: 2,4")
+stopMaxPct        = input.float(4.0, "Stop Max %", minval=2.0, maxval=8.0, step=2.0, group=g_risk, tooltip="Skip entries whose stop distance exceeds this %% of price. Grid: 2,4,6,8")
+stopMaxDays       = input.int(4, "Stop Max Days", minval=2, maxval=6, step=2, group=g_risk, tooltip="Force-close a trade after this many days. Grid: 2,4,6")
+
+riskPerTrade      = input.float(title="Risk Per Trade", defval=2, step=0.5, group=g_risk)
+contractSize      = input.float(title="Contract Size", defval=0.01, options=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000], group=g_risk)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Trailing stop (selectable method, UNIFIED long/short)
+// ──────────────────────────────────────────────────────────────────────────────
+var g_trail = "Trailing"
+trailModeBracket    = "Off (Bracket)"
+trailModeR          = "R Trail"
+trailModeChandelier = "Chandelier Exit"
+trailModeSAR        = "Fixed-AF SAR"
+
+trailMode = input.string(
+     trailModeR,
+     "Trail Mode",
+     options=[trailModeBracket, trailModeR, trailModeChandelier, trailModeSAR],
+     group=g_trail,
+     tooltip="Off (Bracket) uses the fixed Stop RR target. All other modes use no fixed target and activate after Trail RR.")
+
+trailRR = input.float(
+     1.0,
+     "Trail Activation RR",
+     minval=1.0,
+     maxval=3.0,
+     step=0.5,
+     group=g_trail,
+     tooltip="At this unrealized profit, the stop moves to breakeven. The selected trailing method takes control when its level is on the valid side of price.")
+
+trailDistanceR = input.float(
+     1.0,
+     "R Trail Distance",
+     minval=0.5,
+     maxval=3.0,
+     step=0.5,
+     group=g_trail,
+     tooltip="R Trail only: distance from the best price since activation, measured in units of the trade's initial risk.")
+
+chandelierATRLength = input.int(
+     14,
+     "Chandelier ATR Length",
+     minval=14,
+     maxval=28,
+     step=14,
+     group=g_trail)
+
+chandelierATRMult = input.float(
+     3.0,
+     "Chandelier ATR Mult",
+     minval=2.0,
+     maxval=6.0,
+     step=1.0,
+     group=g_trail,
+     tooltip="Chandelier only: best price since activation minus/plus ATR × multiplier.")
+
+sarSpeed = input.float(
+     0.010,
+     "SAR Speed",
+     minval=0.005,
+     maxval=0.020,
+     step=0.005,
+     group=g_trail,
+     tooltip="Fixed-AF SAR only: constant fraction of the remaining distance from the SAR to the post-activation extreme that the SAR closes each bar. Lower = slower/wider, higher = faster/tighter.")
+
+trailEnabled = trailMode != trailModeBracket
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███ CONSTANTS & FUNCTIONS (Trading Logic)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Williams %R: 0 (at highest high) to -100 (at lowest low) over the lookback
+_pr(_length) =>
+    float _max = ta.highest(_length)
+    float _min = ta.lowest(_length)
+    100 * (close - _max) / (_max - _min)
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███ INDICATORS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Initial-stop ATR and Chandelier ATR.
+// Fixed-AF SAR is calculated per trade only after Trail Activation RR.
+atr             = ta.atr(14)
+chandelierATR   = ta.atr(chandelierATRLength)
+
+// Dual %R, EMA smoothed (EMA length 1 = no smoothing)
+s_percentR      = ta.ema(_pr(fastLength), fastSmoothing)
+l_percentR      = ta.ema(_pr(slowLength), slowSmoothing)
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███ SIGNAL LOGIC (UNCHANGED from v01)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Zone states: both %R lines must be in the zone simultaneously (confluence)
+overbought      = s_percentR >= -thresholdOB and l_percentR >= -thresholdOB
+oversold        = s_percentR <= -100 + thresholdOS and l_percentR <= -100 + thresholdOS
+
+// One-bar event signals
+obTrendStart    = overbought and not overbought[1]   // square: entered OB zone
+osTrendStart    = oversold and not oversold[1]       // square: entered OS zone
+obReversal      = not overbought and overbought[1]   // triangle: exited OB zone
+osReversal      = not oversold and oversold[1]        // triangle: exited OS zone
+
+// Mode selects which signal enters which side
+longSignal      = entryMode == modeReversal ? osReversal : obTrendStart
+shortSignal     = entryMode == modeReversal ? obReversal : osTrendStart
+
+// Date Filter uses an inclusive Start Date and an exclusive End Date.
+// timeInRange remains available to the existing statistics code.
+timeInRange = not useDateFilter or (time >= startDate and time < endDate)
+
+// Entries are blocked on the bar whose closing timestamp reaches End Date.
+// This prevents an order from filling after the selected test window.
+entryTimeInRange = not useDateFilter or (time >= startDate and not na(time_close) and time_close < endDate)
+
+// The unique bar whose closing timestamp reaches/crosses End Date.
+endDateBar = useDateFilter and not na(time_close) and time_close >= endDate and (na(time_close[1]) or time_close[1] < endDate)
+
+// Check long/short conditions (no alternation constraint - same-side re-entry allowed)
+longConditions  = enableLong and longSignal and entryTimeInRange and strategy.position_size == 0 and strategy.position_size[1] == 0 and barstate.isconfirmed
+shortConditions = enableShort and shortSignal and entryTimeInRange and strategy.position_size == 0 and strategy.position_size[1] == 0 and barstate.isconfirmed
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███ EXECUTION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Initial stop / risk / target (mirrored formulas, shared inputs)
+longStop          = ta.lowest(low, stopLP) - stopX * atr
+longRisk          = close - longStop
+longStopPct       = 100.0 * longRisk / close
+longAllowed       = longStopPct <= stopMaxPct
+
+shortStop         = ta.highest(high, stopLP) + stopX * atr
+shortRisk         = shortStop - close
+shortStopPct      = 100.0 * shortRisk / close
+shortAllowed      = shortStopPct <= stopMaxPct
+
+// Per-trade state
+var float t_entry      = na
+var float t_stop       = na   // initial stop
+var float t_target     = na   // fixed RR target (bracket mode only)
+var float t_risk       = na   // initial risk distance
+var float t_trail      = na   // current trail stop (ratchets favorably)
+var float positionSize = 0.0
+var bool  trailArmed   = false  // activation RR reached; breakeven is active
+var bool  trailMethodActive = false
+var float bestHighSinceActivation = na
+var float bestLowSinceActivation  = na
+var float selectedTrailGuide      = na
+
+// Trade-anchored Fixed-AF SAR state.
+// It is initialized at breakeven exactly when Trail Activation RR is reached.
+// The acceleration factor is constant (SAR Speed), so there is no incremental
+// acceleration and no inherited pre-entry/pre-activation SAR history.
+var float tradeSar              = na
+var float tradeSarEP            = na
+var int   tradeSarActivationBar = na
+
+var int   entryTime    = na
+
+// Entries (only when flat, and only if the stop-distance filter passes)
+if longConditions and longAllowed
+    t_entry := close
+    t_stop := longStop
+    t_risk := longRisk
+    t_target := t_entry + stopRR * t_risk
+    t_trail := longStop          // ratchet baseline = initial stop (never looser)
+    trailArmed := false
+    trailMethodActive := false
+    bestHighSinceActivation := na
+    bestLowSinceActivation := na
+    selectedTrailGuide := na
+    tradeSar := na
+    tradeSarEP := na
+    tradeSarActivationBar := na
+    positionSize := math.floor(((strategy.equity * (riskPerTrade/100)) / t_risk) / contractSize) * contractSize
+    strategy.entry(id="Long", direction=strategy.long, qty=positionSize)
+
+if shortConditions and shortAllowed
+    t_entry := close
+    t_stop := shortStop
+    t_risk := shortRisk
+    t_target := t_entry - stopRR * t_risk
+    t_trail := shortStop         // ratchet baseline = initial stop (never looser)
+    trailArmed := false
+    trailMethodActive := false
+    bestHighSinceActivation := na
+    bestLowSinceActivation := na
+    selectedTrailGuide := na
+    tradeSar := na
+    tradeSarEP := na
+    tradeSarActivationBar := na
+    positionSize := math.floor(((strategy.equity * (riskPerTrade/100)) / t_risk) / contractSize) * contractSize
+    strategy.entry(id="Short", direction=strategy.short, qty=positionSize)
+
+// Track entry time on the bar a position opens (for max-days)
+if strategy.position_size != 0 and strategy.position_size[1] == 0
+    entryTime := time
+
+// Trail management:
+// 1) At Trail Activation RR, move the stop to breakeven.
+// 2) R Trail and Chandelier use their existing post-activation calculations.
+// 3) Fixed-AF SAR starts a NEW per-trade state at activation:
+//      SAR = breakeven, EP = activation-bar extreme, AF = constant SAR Speed.
+//    On later bars EP updates with new post-activation extremes, while SAR closes
+//    a constant fraction (SAR Speed) of the remaining SAR-to-EP distance.
+//    The SAR is constrained by the current/previous bar range in the same spirit
+//    as Wilder's two-bar safeguard, but there is no AF increment or maximum.
+// 4) Once a method has a valid stop-side level, ratchet only favorably.
+selectedTrailGuide := na
+
+if trailEnabled and strategy.position_size > 0
+    if not trailArmed and high >= t_entry + t_risk * trailRR
+        trailArmed := true
+        t_trail := math.max(t_trail, strategy.position_avg_price)
+        bestHighSinceActivation := high
+
+        if trailMode == trailModeSAR
+            tradeSar := strategy.position_avg_price
+            tradeSarEP := high
+            tradeSarActivationBar := bar_index
+
+    if trailArmed
+        bestHighSinceActivation := math.max(nz(bestHighSinceActivation, high), high)
+
+        // Advance the trade-anchored Fixed-AF SAR only from the bar AFTER activation.
+        // The activation bar itself uses breakeven as the initial SAR.
+        if trailMode == trailModeSAR and not na(tradeSar) and not na(tradeSarActivationBar) and bar_index > tradeSarActivationBar
+            tradeSarEP := math.max(tradeSarEP, high)
+
+            float nextLongSar = tradeSar + sarSpeed * (tradeSarEP - tradeSar)
+            float longSarRangeCap = na(low[1]) ? low : math.min(low, low[1])
+            nextLongSar := math.min(nextLongSar, longSarRangeCap)
+
+            // Exit-only SAR: never loosen the stop and never perform SAR reversal.
+            tradeSar := math.max(tradeSar, nextLongSar)
+
+        float longCandidate = switch trailMode
+            trailModeR          => bestHighSinceActivation - t_risk * trailDistanceR
+            trailModeChandelier => bestHighSinceActivation - chandelierATR * chandelierATRMult
+            trailModeSAR        => tradeSar
+            => na
+
+        selectedTrailGuide := longCandidate
+        bool longCandidateValid = not na(longCandidate) and longCandidate < close - syminfo.mintick
+
+        if not trailMethodActive and longCandidateValid
+            trailMethodActive := true
+
+        if trailMethodActive and not na(longCandidate)
+            t_trail := math.max(t_trail, longCandidate)
+
+if trailEnabled and strategy.position_size < 0
+    if not trailArmed and low <= t_entry - t_risk * trailRR
+        trailArmed := true
+        t_trail := math.min(t_trail, strategy.position_avg_price)
+        bestLowSinceActivation := low
+
+        if trailMode == trailModeSAR
+            tradeSar := strategy.position_avg_price
+            tradeSarEP := low
+            tradeSarActivationBar := bar_index
+
+    if trailArmed
+        bestLowSinceActivation := math.min(nz(bestLowSinceActivation, low), low)
+
+        // Advance the trade-anchored Fixed-AF SAR only from the bar AFTER activation.
+        // The activation bar itself uses breakeven as the initial SAR.
+        if trailMode == trailModeSAR and not na(tradeSar) and not na(tradeSarActivationBar) and bar_index > tradeSarActivationBar
+            tradeSarEP := math.min(tradeSarEP, low)
+
+            float nextShortSar = tradeSar + sarSpeed * (tradeSarEP - tradeSar)
+            float shortSarRangeCap = na(high[1]) ? high : math.max(high, high[1])
+            nextShortSar := math.max(nextShortSar, shortSarRangeCap)
+
+            // Exit-only SAR: never loosen the stop and never perform SAR reversal.
+            tradeSar := math.min(tradeSar, nextShortSar)
+
+        float shortCandidate = switch trailMode
+            trailModeR          => bestLowSinceActivation + t_risk * trailDistanceR
+            trailModeChandelier => bestLowSinceActivation + chandelierATR * chandelierATRMult
+            trailModeSAR        => tradeSar
+            => na
+
+        selectedTrailGuide := shortCandidate
+        bool shortCandidateValid = not na(shortCandidate) and shortCandidate > close + syminfo.mintick
+
+        if not trailMethodActive and shortCandidateValid
+            trailMethodActive := true
+
+        if trailMethodActive and not na(shortCandidate)
+            t_trail := math.min(t_trail, shortCandidate)
+
+// Exits
+if strategy.position_size > 0
+    if trailEnabled
+        strategy.exit(id="Long Exit", from_entry="Long", stop=trailArmed ? t_trail : t_stop)
+    else
+        strategy.exit(id="Long Exit", from_entry="Long", stop=t_stop, limit=t_target)
+
+if strategy.position_size < 0
+    if trailEnabled
+        strategy.exit(id="Short Exit", from_entry="Short", stop=trailArmed ? t_trail : t_stop)
+    else
+        strategy.exit(id="Short Exit", from_entry="Short", stop=t_stop, limit=t_target)
+
+// Max-days force close (shared)
+daysInTrade = na(entryTime) ? 0.0 : (time - entryTime) / 86400000.0
+if strategy.position_size > 0 and daysInTrade >= stopMaxDays
+    strategy.close("Long")
+if strategy.position_size < 0 and daysInTrade >= stopMaxDays
+    strategy.close("Short")
+
+// With Date Filter enabled, always close an existing position exactly on
+// the End Date boundary. With calc_on_every_tick=false, the strategy calculates
+// on the confirmed closing tick of the realtime bar.
+if endDateBar and strategy.position_size != 0
+    strategy.close_all("End Close", immediately=true)
+
+// Reset per-trade state when flat
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    t_entry := na
+    t_stop := na
+    t_target := na
+    t_risk := na
+    t_trail := na
+    trailArmed := false
+    trailMethodActive := false
+    bestHighSinceActivation := na
+    bestLowSinceActivation := na
+    selectedTrailGuide := na
+    tradeSar := na
+    tradeSarEP := na
+    tradeSarActivationBar := na
+    entryTime := na
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███ STATISTICS, COUNTERS & VISUALIZATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Trade-close detection and last-trade outcome (mode-agnostic, via realized P&L)
+tradeClosed       = strategy.position_size == 0 and strategy.position_size[1] != 0
+lastTradeProfit   = strategy.closedtrades > 0 ? strategy.closedtrades.profit(strategy.closedtrades - 1) : na
+tradeWin          = tradeClosed and not na(lastTradeProfit) and lastTradeProfit >= 0
+tradeLoss         = tradeClosed and not na(lastTradeProfit) and lastTradeProfit < 0
+
+entryBarLong      = strategy.position_size > 0 and strategy.position_size[1] == 0
+entryBarShort     = strategy.position_size < 0 and strategy.position_size[1] == 0
+
+// Consecutive losers (proxy for consecutive stop-outs)
+var int consecutiveStops    = 0
+var int maxConsecutiveStops = 0
+if tradeLoss
+    consecutiveStops += 1
+    maxConsecutiveStops := math.max(maxConsecutiveStops, consecutiveStops)
+if tradeWin
+    consecutiveStops := 0
+
+// Largest stop distance % among taken entries
+var float maxStopLossPctSet = 0.0
+if longConditions and longAllowed
+    maxStopLossPctSet := math.max(maxStopLossPctSet, longStopPct)
+if shortConditions and shortAllowed
+    maxStopLossPctSet := math.max(maxStopLossPctSet, shortStopPct)
+
+// Longest time held in any trade (days)
+var float maxDaysInTrade = 0.0
+if strategy.position_size != 0
+    maxDaysInTrade := math.max(maxDaysInTrade, daysInTrade)
+
+// Drawing and plotting
+plotshape(longSignal and barstate.isconfirmed, style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 30), size=size.tiny, title="%RTE Long Signal")
+plotshape(shortSignal and barstate.isconfirmed, style=shape.triangledown, location=location.abovebar, color=color.new(color.maroon, 30), size=size.tiny, title="%RTE Short Signal")
+
+// Active stop: trail stop once activated, otherwise the initial stop
+activeStop        = strategy.position_size != 0 ? (trailArmed ? t_trail : t_stop) : na
+// Active target: only in bracket mode (trail mode has no fixed target)
+activeTarget      = (strategy.position_size != 0 and not trailEnabled) ? t_target : na
+
+plot(strategy.position_size != 0 ? t_entry : na, title="Entry Price", color=color.blue, style=plot.style_linebr)
+plot(activeStop, title="Active Stop", color=color.red, style=plot.style_linebr)
+plot(activeTarget, title="Target (bracket)", color=color.green, style=plot.style_linebr)
+plot(trailEnabled and strategy.position_size != 0 and trailArmed ? selectedTrailGuide : na, title="Selected Trail Guide", color=color.new(color.gray, 40), style=plot.style_linebr)
+
+plotshape(entryBarLong or entryBarShort, style=shape.circle, location=location.top, color=color.gray, size=size.tiny, title="Entry")
+plotshape(tradeWin, style=shape.circle, location=location.top, color=color.green, size=size.tiny, title="Win")
+plotshape(tradeLoss, style=shape.circle, location=location.top, color=color.red, size=size.tiny, title="Loss")
+
+
+// Sharpe Ratio Calculations v4 - from Python script S_03_Light+Grid_v03 Sharpe+Filter Netprofit.py
+var float   _sr_monthStartEq = na
+var array<float> _sr_mR      = array.new_float()
+var bool    _sr_prevInRange  = false
+var bool    _sr_dirty        = false
+
+_sr_entered = not _sr_prevInRange and timeInRange
+_sr_left    = _sr_prevInRange and not timeInRange
+_sr_prevInRange := timeInRange
+
+if _sr_entered
+    _sr_monthStartEq := strategy.initial_capital
+    array.clear(_sr_mR)
+    _sr_dirty := true
+
+if timeInRange and bar_index > 0 and month(time) != month(time[1])
+    float _sr_lastEqPrevMonth = strategy.equity[1]  // equity at last bar of previous month
+    if _sr_monthStartEq > 0
+        array.push(_sr_mR, ((_sr_lastEqPrevMonth / _sr_monthStartEq) - 1.0) * 100.0)
+        _sr_dirty := true
+    _sr_monthStartEq := _sr_lastEqPrevMonth
+
+f_pop_stdev(arr) =>
+    int _n = array.size(arr)
+    if _n == 0
+        na
+    else
+        float _mean = array.avg(arr)
+        float _s = 0.0
+        for i = 0 to _n - 1
+            float _d = array.get(arr, i) - _mean
+            _s += _d * _d
+        math.sqrt(_s / _n)
+
+var float _sharpe = na
+if _sr_dirty
+    int _sr_n = array.size(_sr_mR)
+    if _sr_n >= 2
+        float _avg  = array.avg(_sr_mR)
+        float _sd   = f_pop_stdev(_sr_mR)                 // population stdev (ddof=0)
+        float _rfrm = (0.02 * 100.0) / 12.0              // 2% annual -> monthly percent
+        if not na(_sd) and _sd != 0
+            _sharpe := (_avg - _rfrm) / _sd
+        else
+            _sharpe := na
+    else
+        _sharpe := na
+    _sr_dirty := false
+
+
+
+// Prepare stats mini table
+var table testTable = table.new(position.bottom_left, 2, 5, border_width=1, border_color=color.black, frame_color=color.black, frame_width=1)
+f_fillCell(_table, _column, _row, _title, _value, _bgcolor, _txtcolor) =>
+    _cellText = _title + "\n" + _value
+    table.cell(_table, _column, _row, _cellText, bgcolor=_bgcolor, text_color=_txtcolor)
+
+
+// Draw stats table
+var bgcolor = #f3f3f3
+if drawTester
+    f_fillCell(testTable, 0, 0, "WR:", str.tostring(math.floor(strategy.wintrades / strategy.closedtrades * 100)) + "%", bgcolor, (math.floor(strategy.wintrades / strategy.closedtrades * 100)) > 45 ? #6caf5d : color.black)
+    f_fillCell(testTable, 1, 0, "PnL:", str.tostring(math.floor(strategy.netprofit_percent)) + "%", bgcolor, (math.floor(strategy.netprofit_percent)) <= 0 ? #a73302 : color.black)
+    f_fillCell(testTable, 0, 1, "DD:", str.tostring(math.ceil(strategy.max_drawdown_percent)) + "%", bgcolor, (math.ceil(strategy.max_drawdown_percent)) > 20 ? #a73302 : color.black)
+    f_fillCell(testTable, 1, 1, "Trades:", str.tostring(strategy.closedtrades), bgcolor, color.black)
+    f_fillCell(testTable, 1, 2, "SL:", str.tostring(consecutiveStops), bgcolor, consecutiveStops >= 3 ? #a73302 : color.black)
+    f_fillCell(testTable, 0, 2, "Max SL:", str.tostring(maxConsecutiveStops), bgcolor, maxConsecutiveStops > 5 ? #a73302 : color.black)
+    f_fillCell(testTable, 0, 3, "Max SL:", str.tostring(math.ceil(maxStopLossPctSet)) + "%", bgcolor, maxStopLossPctSet >= 10 ? #a73302 : color.black)
+    f_fillCell(testTable, 0, 4, "Max D:", str.tostring(math.ceil(maxDaysInTrade)), bgcolor, color.black)
+    f_fillCell(testTable, 1, 4, "Sharpe:", na(_sharpe) ? "" : str.tostring(math.floor(_sharpe * 100) / 100.0), bgcolor, color.black)
+
+
+/////////// START OF PERFORMANCE TABLE CODE. ///////////
+
+// The table is intentionally based on realized equity only:
+// initial capital + the net P&L of closed trades.
+// Open P&L is not included.
+// Calendar grouping is fixed to UTC and is independent of the chart display timezone.
+const string PERFORMANCE_TZ      = "Etc/UTC"
+int   mptable_precision          = 2
+color mptable_titleColor         = #e7e7e7
+color mptable_titleTextColor     = #000000
+color mptable_ProfitColor        = color.rgb(142, 182, 120, 25)
+color mptable_LossColor          = color.rgb(201, 150, 134, 25)
+color mptable_BreakEvenColor     = color.rgb(225, 225, 225, 0)
+string mptable_tableTextSize     = size.large
+
+// Fixed absolute monthly color scale. It does not rank months against one another.
+// +/-1% is neutral. Color intensity reaches its maximum at +/-20%.
+float mptable_neutralZonePct     = 1.0
+float mptable_fullColorPct       = 20.0
+float mptable_gradientPower      = 1.5
+float mptable_lightTextThreshold = 0.55
+color mptable_PaleProfitColor    = color.rgb(218, 235, 211, 0)
+color mptable_StrongProfitColor  = color.rgb(55, 145, 65, 0)
+color mptable_PaleLossColor      = color.rgb(239, 218, 212, 0)
+color mptable_StrongLossColor    = color.rgb(185, 55, 45, 0)
+color mptable_DarkCellTextColor  = color.rgb(55, 55, 55, 0)
+
+// Increase precision for small non-zero values so they are not displayed as zero.
+getRoundingPrecision(float num) =>
+    if (num > 0 and num < 0.05) or (num < 0 and num > -0.05)
+        3
+    else
+        mptable_precision
+
+periodReturnPct(float endEquity, float startEquity) =>
+    startEquity != 0 ? ((endEquity / startEquity) - 1.0) * 100.0 : na
+
+periodDrawdownPct(float equity, float peakEquity) =>
+    peakEquity != 0 ? ((equity / peakEquity) - 1.0) * 100.0 : 0.0
+
+formatReturn(float value, bool showPlus, bool showPercentSign) =>
+    if na(value)
+        ""
+    else
+        string prefix = showPlus and value > 0 ? "+" : ""
+        string suffix = showPercentSign ? "%" : ""
+        prefix + str.tostring(math.round(value, getRoundingPrecision(value))) + suffix
+
+monthlyColorStrength(float monthlyProfit) =>
+    if na(monthlyProfit) or math.abs(monthlyProfit) <= mptable_neutralZonePct
+        0.0
+    else
+        float normalized = (math.abs(monthlyProfit) - mptable_neutralZonePct) / (mptable_fullColorPct - mptable_neutralZonePct)
+        float clamped = math.max(0.0, math.min(normalized, 1.0))
+        math.pow(clamped, mptable_gradientPower)
+
+monthlyCellColor(float monthlyProfit) =>
+    float strength = monthlyColorStrength(monthlyProfit)
+    if na(monthlyProfit) or math.abs(monthlyProfit) <= mptable_neutralZonePct
+        mptable_BreakEvenColor
+    else if monthlyProfit > 0
+        color.from_gradient(strength, 0.0, 1.0, mptable_PaleProfitColor, mptable_StrongProfitColor)
+    else
+        color.from_gradient(strength, 0.0, 1.0, mptable_PaleLossColor, mptable_StrongLossColor)
+
+monthlyCellTextColor(float monthlyProfit) =>
+    float strength = monthlyColorStrength(monthlyProfit)
+    strength >= mptable_lightTextThreshold ? color.white : mptable_DarkCellTextColor
+
+type StrategyReturn
+    float profit
+    float drawdown
+    float peak
+    int timestamp
+
+var array<StrategyReturn> monthlyReturns = array.new<StrategyReturn>(0)
+var array<StrategyReturn> yearlyReturns  = array.new<StrategyReturn>(0)
+var table performance_table = na
+
+// Remember the first loaded chart timestamp so the table does not fabricate
+// empty months before the available chart history.
+var int firstChartTime = na
+if barstate.isfirst
+    firstChartTime := time
+
+// Rebuild the complete table only on the last confirmed historical bar.
+// This keeps all table calculations out of the normal per-bar strategy path.
+if barstate.islastconfirmedhistory
+    if not na(performance_table)
+        table.delete(performance_table)
+        performance_table := na
+
+    array.clear(monthlyReturns)
+    array.clear(yearlyReturns)
+
+    if mptable_on
+        int closedTradeCount = strategy.closedtrades
+        int chartEndBoundary = na(time_close) ? time : time_close
+
+        // Date Filter uses [Start Date, End Date). A trade force-closed exactly
+        // at End Date is included in the period that has just ended.
+        int rangeStartTs = na
+        int rangeEndBoundary = na
+        int rangeTradeEndInclusive = na
+        int displayEndTs = na
+
+        if useDateFilter
+            rangeStartTs := math.max(startDate, firstChartTime)
+            rangeEndBoundary := math.min(endDate, chartEndBoundary)
+            rangeTradeEndInclusive := rangeEndBoundary
+            displayEndTs := rangeEndBoundary - 1
+
+            // If End Date falls between chart-bar closes, the forced exit can
+            // have an exit timestamp slightly after End Date. Include that one
+            // date-bound close in the final displayed month.
+            if closedTradeCount > 0 and endDate <= chartEndBoundary
+                for closeSearchIndex = 0 to closedTradeCount - 1
+                    int searchedExitTime = strategy.closedtrades.exit_time(closeSearchIndex)
+                    if searchedExitTime >= endDate and strategy.closedtrades.exit_comment(closeSearchIndex) == "End Close"
+                        rangeTradeEndInclusive := math.max(rangeTradeEndInclusive, searchedExitTime)
+        else if closedTradeCount > 0
+            rangeStartTs := strategy.closedtrades.entry_time(0)
+            rangeEndBoundary := strategy.closedtrades.exit_time(closedTradeCount - 1)
+            rangeTradeEndInclusive := rangeEndBoundary
+            displayEndTs := rangeEndBoundary
+
+        bool validRange = not na(rangeStartTs) and not na(rangeEndBoundary) and rangeEndBoundary > rangeStartTs
+
+        if validRange
+            // Reconstruct realized equity before the selected range.
+            float runningEquity = strategy.initial_capital
+            int tradeIndex = 0
+
+            while tradeIndex < closedTradeCount and strategy.closedtrades.exit_time(tradeIndex) < rangeStartTs
+                runningEquity += strategy.closedtrades.profit(tradeIndex)
+                tradeIndex += 1
+
+            int currentYear = year(rangeStartTs, PERFORMANCE_TZ)
+            int currentMonth = month(rangeStartTs, PERFORMANCE_TZ)
+            int currentMonthStart = timestamp(PERFORMANCE_TZ, currentYear, currentMonth, 1, 0, 0)
+
+            bool yearActive = false
+            int yearTimestamp = na
+            float yearStartEquity = na
+            float yearPeakEquity = na
+            float yearMaxDrawdown = 0.0
+
+            bool finishedMonths = false
+            while not finishedMonths
+                int nextYear = currentMonth == 12 ? currentYear + 1 : currentYear
+                int nextMonth = currentMonth == 12 ? 1 : currentMonth + 1
+                int nextMonthStart = timestamp(PERFORMANCE_TZ, nextYear, nextMonth, 1, 0, 0)
+                bool lastMonth = nextMonthStart > displayEndTs
+
+                float monthStartEquity = runningEquity
+                float monthPeakEquity = runningEquity
+                float monthMaxDrawdown = 0.0
+
+                if not yearActive
+                    yearActive := true
+                    yearTimestamp := currentMonthStart
+                    yearStartEquity := runningEquity
+                    yearPeakEquity := runningEquity
+                    yearMaxDrawdown := 0.0
+
+                // Apply all trades whose exit belongs to the current period.
+                // For the final Date Filter month, an End Close fill exactly at
+                // End Date is included even though End Date is the range boundary.
+                bool monthTradesDone = false
+                while tradeIndex < closedTradeCount and not monthTradesDone
+                    int tradeExitTime = strategy.closedtrades.exit_time(tradeIndex)
+                    bool tradeInsideMonth = lastMonth ? tradeExitTime <= rangeTradeEndInclusive : tradeExitTime < nextMonthStart
+
+                    if not tradeInsideMonth
+                        monthTradesDone := true
+                    else
+                        // tradeIndex is already positioned at the first trade on/after rangeStartTs.
+                        runningEquity += strategy.closedtrades.profit(tradeIndex)
+
+                        monthPeakEquity := math.max(monthPeakEquity, runningEquity)
+                        float monthCurrentDD = periodDrawdownPct(runningEquity, monthPeakEquity)
+                        monthMaxDrawdown := math.min(monthMaxDrawdown, monthCurrentDD)
+
+                        yearPeakEquity := math.max(yearPeakEquity, runningEquity)
+                        float yearCurrentDD = periodDrawdownPct(runningEquity, yearPeakEquity)
+                        yearMaxDrawdown := math.min(yearMaxDrawdown, yearCurrentDD)
+
+                        tradeIndex += 1
+
+                float monthProfit = periodReturnPct(runningEquity, monthStartEquity)
+                float monthMfe = periodReturnPct(monthPeakEquity, monthStartEquity)
+                array.push(monthlyReturns, StrategyReturn.new(monthProfit, monthMaxDrawdown, monthMfe, currentMonthStart))
+
+                bool yearEndsHere = currentMonth == 12 or lastMonth
+                if yearEndsHere
+                    float yearProfit = periodReturnPct(runningEquity, yearStartEquity)
+                    float yearMfe = periodReturnPct(yearPeakEquity, yearStartEquity)
+                    array.push(yearlyReturns, StrategyReturn.new(yearProfit, yearMaxDrawdown, yearMfe, yearTimestamp))
+                    yearActive := false
+
+                if lastMonth
+                    finishedMonths := true
+                else
+                    currentYear := nextYear
+                    currentMonth := nextMonth
+                    currentMonthStart := nextMonthStart
+
+        if array.size(yearlyReturns) > 0
+            performance_table := table.new(position.bottom_right, columns=14, rows=array.size(yearlyReturns) + 1, border_width=1)
+
+            // Column headers.
+            table.cell(performance_table, 0, 0, "Year",  bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 1, 0, "Jan",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 2, 0, "Feb",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 3, 0, "Mar",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 4, 0, "Apr",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 5, 0, "May",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 6, 0, "Jun",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 7, 0, "Jul",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 8, 0, "Aug",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 9, 0, "Sep",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 10, 0, "Oct",  bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 11, 0, "Nov",  bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 12, 0, "Dec",  bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 13, 0, "TOTAL", bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+
+            // Year rows and TOTAL values.
+            for yearIndex = 0 to array.size(yearlyReturns) - 1
+                StrategyReturn yearlyReturn = array.get(yearlyReturns, yearIndex)
+                int tableRow = yearIndex + 1
+                table.cell(performance_table, 0, tableRow, str.tostring(year(yearlyReturn.timestamp, PERFORMANCE_TZ)), bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+
+                color yearlyColor = yearlyReturn.profit > 0 ? mptable_ProfitColor : yearlyReturn.profit < 0 ? mptable_LossColor : mptable_BreakEvenColor
+                string yearlyTip = "Realized MaxDD: " + formatReturn(yearlyReturn.drawdown, false, true) +
+                     "\nRealized MFE: " + formatReturn(yearlyReturn.peak, false, true)
+
+                table.cell(performance_table, 13, tableRow, formatReturn(yearlyReturn.profit, true, true), bgcolor=yearlyColor, text_color=color.white, text_size=mptable_tableTextSize, tooltip=yearlyTip)
+
+            // Monthly cells.
+            for monthIndex = 0 to array.size(monthlyReturns) - 1
+                StrategyReturn monthlyReturn = array.get(monthlyReturns, monthIndex)
+                int monthYear = year(monthlyReturn.timestamp, PERFORMANCE_TZ)
+                int monthColumn = month(monthlyReturn.timestamp, PERFORMANCE_TZ)
+
+                for yearIndex = 0 to array.size(yearlyReturns) - 1
+                    StrategyReturn yearlyReturn = array.get(yearlyReturns, yearIndex)
+                    if year(yearlyReturn.timestamp, PERFORMANCE_TZ) == monthYear
+                        int tableRow = yearIndex + 1
+                        color monthlyColor = monthlyCellColor(monthlyReturn.profit)
+                        color monthlyTextColor = monthlyCellTextColor(monthlyReturn.profit)
+
+                        string monthlyTip = "Realized MaxDD: " + formatReturn(monthlyReturn.drawdown, false, true) +
+                             "\nRealized MFE: " + formatReturn(monthlyReturn.peak, false, true)
+
+                        table.cell(performance_table, monthColumn, tableRow, formatReturn(monthlyReturn.profit, false, false), bgcolor=monthlyColor, text_color=monthlyTextColor, text_size=mptable_tableTextSize, tooltip=monthlyTip)
+                        break
+
+/////////// END OF PERFORMANCE TABLE CODE. ///////////

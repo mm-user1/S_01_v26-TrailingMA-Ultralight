@@ -1,0 +1,32 @@
+{
+    "schema_version":  1,
+    "reference_id":  "reference_a_reversal_r_trail",
+    "source":  "TradingView Strategy Tester metrics screenshot and raw trades export.",
+    "timezone_note":  "TradingView UI/export timestamps use UTC+8. Normalized machine-readable trades use UTC.",
+    "metrics":  {
+                    "net_profit_usdt":  21.94,
+                    "net_profit_pct":  21.94,
+                    "max_drawdown_usdt":  41.56,
+                    "max_drawdown_pct":  25.42,
+                    "profitable_trades":  9,
+                    "total_trades":  52,
+                    "win_rate_pct":  17.31,
+                    "profit_factor":  1.331
+                },
+    "raw_export":  {
+                       "rows":  104,
+                       "closed_trades":  52,
+                       "last_trade_number":  52,
+                       "last_exit_signal":  "Long Exit",
+                       "last_exit_time_tradingview":  "2025-11-30 02:00",
+                       "last_exit_time_utc":  "2025-11-29T18:00:00Z",
+                       "last_exit_price_usdt":  1.4847,
+                       "last_cumulative_pnl_usdt":  21.94
+                   },
+    "consistency":  {
+                        "screenshot_trade_count_matches_csv":  true,
+                        "screenshot_profitable_trade_count_matches_csv":  true,
+                        "screenshot_net_profit_matches_last_cumulative_pnl":  true,
+                        "note":  "Sums of individually rounded Net PnL rows may differ slightly from TradingView cumulative PnL; the screenshot and final cumulative field are authoritative."
+                    }
+}

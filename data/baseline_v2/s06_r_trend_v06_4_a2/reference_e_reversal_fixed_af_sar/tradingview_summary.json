@@ -1,0 +1,37 @@
+{
+    "schema_version":  1,
+    "reference_id":  "reference_e_reversal_fixed_af_sar",
+    "source":  "TradingView Strategy Tester metrics screenshot and raw trades export.",
+    "timezone_note":  "TradingView UI/export timestamps use UTC+8. Normalized machine-readable trades use UTC.",
+    "metrics":  {
+                    "net_profit_usdt":  17.34,
+                    "net_profit_pct":  17.34,
+                    "max_drawdown_usdt":  14.53,
+                    "max_drawdown_pct":  11.9,
+                    "profitable_trades":  27,
+                    "total_trades":  51,
+                    "win_rate_pct":  52.94,
+                    "profit_factor":  1.357
+                },
+    "raw_export":  {
+                       "rows":  102,
+                       "closed_trades":  51,
+                       "last_trade_number":  51,
+                       "last_exit_signal":  "End Close",
+                       "last_exit_time_tradingview":  "2025-12-01 07:30",
+                       "last_exit_time_utc":  "2025-11-30T23:30:00Z",
+                       "last_exit_price_usdt":  1.4958,
+                       "last_cumulative_pnl_usdt":  17.34,
+                       "boundary_close":  {
+                                              "boundary_bar_open_utc":  "2025-11-30T23:30:00Z",
+                                              "semantic_boundary_utc":  "2025-12-01T00:00:00Z",
+                                              "note":  "TradingView labels the immediate End Close with the 30-minute boundary bar opening timestamp."
+                                          }
+                   },
+    "consistency":  {
+                        "screenshot_trade_count_matches_csv":  true,
+                        "screenshot_profitable_trade_count_matches_csv":  true,
+                        "screenshot_net_profit_matches_last_cumulative_pnl":  true,
+                        "note":  "Sums of individually rounded Net PnL rows may differ slightly from TradingView cumulative PnL; the screenshot and final cumulative field are authoritative."
+                    }
+}
