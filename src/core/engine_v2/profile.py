@@ -488,7 +488,12 @@ def _validate_chandelier_length_declaration(
         )
     optimize = spec.get("optimize", {})
     if optimize is not None and not isinstance(optimize, Mapping):
-        return  # The general runtime declaration/profile validators own this shape.
+        raise _error(
+            strategy_id,
+            f"{strategy_id}: '{name}.optimize' must be a mapping when present.",
+            path=f"parameters.{name}.optimize",
+            code="V2_INVALID_PROFILE",
+        )
     optimize = optimize if isinstance(optimize, Mapping) else {}
     explicit = next(
         (
