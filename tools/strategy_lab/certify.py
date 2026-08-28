@@ -122,11 +122,12 @@ def finite_mtm_group_facts(
     group: np.ndarray,
     *,
     group_label: str,
+    candidate_count: int = EXPECTED_CANDIDATE_COUNT,
 ) -> dict[str, int]:
     """Require at least one populated MTM value in a generated schema-v2 group."""
 
     expected_shape = (
-        EXPECTED_CANDIDATE_COUNT,
+        candidate_count,
         len(SEGMENT_AXIS),
         len(METRIC_AXIS),
     )
@@ -1037,6 +1038,7 @@ def _smoke_gate(
     *,
     candidate_count: int,
     window_count: int,
+    compare_legacy_bracket: bool,
 ) -> dict[str, Any]:
     outputs = (work_dir / "smoke_one", work_dir / "smoke_two")
     _assert(all(not output.exists() for output in outputs), "smoke output paths must be fresh.")
@@ -1075,7 +1077,11 @@ def _smoke_gate(
             )
             relative = str(record["path"])
             group = np.load(output / relative, allow_pickle=False)
-            facts = finite_mtm_group_facts(group, group_label=relative)
+            facts = finite_mtm_group_facts(
+                group,
+                group_label=relative,
+                candidate_count=candidate_count,
+            )
             finite_mtm.append({"output": str(output), "path": relative, **facts})
     deterministic_equal = bool(
         _deterministic_manifest(manifests[0])
@@ -1093,21 +1099,26 @@ def _smoke_gate(
     after = _snapshot_tree(outputs[0])
     immutable_no_op = bool(result.no_op and before == after)
     _assert(immutable_no_op, "real smoke rerun was not an immutable no-op.")
-    window_one_relative = (
-        f"groups/{REPRESENTATIVE_TICKER}/window_01.npy"
-    )
-    schema_v2_path = outputs[0] / window_one_relative
-    schema_v1_path = PROTECTED_CANONICAL_OUTPUTS[0] / window_one_relative
-    _assert(
-        schema_v1_path.is_file(),
-        f"immutable schema-v1 comparison group is missing: {schema_v1_path}.",
-    )
-    legacy_columns = legacy_column_preservation_facts(
-        np.load(schema_v2_path, allow_pickle=False),
-        np.load(schema_v1_path, allow_pickle=False),
-        schema_v2_label=str(schema_v2_path),
-        schema_v1_label=str(schema_v1_path),
-    )
+    legacy_columns: dict[str, Any]
+    if compare_legacy_bracket:
+        window_one_relative = f"groups/{REPRESENTATIVE_TICKER}/window_01.npy"
+        schema_v2_path = outputs[0] / window_one_relative
+        schema_v1_path = PROTECTED_CANONICAL_OUTPUTS[0] / window_one_relative
+        _assert(
+            schema_v1_path.is_file(),
+            f"immutable schema-v1 comparison group is missing: {schema_v1_path}.",
+        )
+        legacy_columns = legacy_column_preservation_facts(
+            np.load(schema_v2_path, allow_pickle=False),
+            np.load(schema_v1_path, allow_pickle=False),
+            schema_v2_label=str(schema_v2_path),
+            schema_v1_label=str(schema_v1_path),
+        )
+    else:
+        legacy_columns = {
+            "status": "not_applicable",
+            "reason": "loaded plan is not the 480-candidate RR bracket profile",
+        }
     return {
         "outputs": [str(path) for path in outputs],
         "group_sha256": [
@@ -1283,6 +1294,11 @@ def certify_real_pack(
         repo,
         candidate_count=candidate_count,
         window_count=expected_window_count,
+        compare_legacy_bracket=bool(
+            candidate_count == EXPECTED_CANDIDATE_COUNT
+            and spec.generation["execution"]["target"] == "rr"
+            and spec.generation["execution"]["trail"] == "none"
+        ),
     )
 
     evidence = {

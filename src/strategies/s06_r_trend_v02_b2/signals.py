@@ -284,13 +284,40 @@ def signal_events(
     )
 
 
-def build_indicator_arrays(df: pd.DataFrame, params: S06B2Params) -> dict[str, np.ndarray]:
+def pine_atr(df: pd.DataFrame, length: int) -> np.ndarray:
+    """Return Pine-compatible ``ta.atr`` values for one fixed length."""
+
     high = df["High"]
     low = df["Low"]
     close = df["Close"]
     high_values = np.asarray(high.to_numpy(copy=False), dtype=np.float64)
     low_values = np.asarray(low.to_numpy(copy=False), dtype=np.float64)
     close_values = np.asarray(close.to_numpy(copy=False), dtype=np.float64)
+
+    previous_close = np.roll(close_values, 1)
+    if len(previous_close):
+        previous_close[0] = np.nan
+    true_range = np.maximum.reduce(
+        [
+            np.abs(high_values - low_values),
+            np.abs(high_values - previous_close),
+            np.abs(low_values - previous_close),
+        ]
+    )
+    if len(true_range):
+        true_range[0] = abs(high_values[0] - low_values[0])
+    return pine_rma(true_range, length)
+
+
+def build_signal_and_initial_stop_arrays(
+    df: pd.DataFrame,
+    params: S06B2Params,
+) -> dict[str, np.ndarray]:
+    """Build the S06 signal and ATR/swing-stop arrays shared by V2 adapters."""
+
+    high = df["High"]
+    low = df["Low"]
+    close = df["Close"]
 
     fast_percent_r = pine_ema(
         williams_r(high, low, close, params.fastLength).to_numpy(copy=False),
@@ -308,35 +335,28 @@ def build_indicator_arrays(df: pd.DataFrame, params: S06B2Params) -> dict[str, n
         params.entryMode,
     )
 
-    previous_close = np.roll(close_values, 1)
-    if len(previous_close):
-        previous_close[0] = np.nan
-    true_range = np.maximum.reduce(
-        [
-            np.abs(high_values - low_values),
-            np.abs(high_values - previous_close),
-            np.abs(low_values - previous_close),
-        ]
-    )
-    if len(true_range):
-        true_range[0] = abs(high_values[0] - low_values[0])
-    atr_values = pine_rma(true_range, 14)
+    atr_values = pine_atr(df, 14)
     lowest = low.rolling(params.stopLP, min_periods=params.stopLP).min().to_numpy(copy=False)
     highest = high.rolling(params.stopLP, min_periods=params.stopLP).max().to_numpy(copy=False)
+
+    return {
+        "atr": atr_values,
+        "rolling_low": lowest,
+        "rolling_high": highest,
+        "long_signal": signals.long_signal,
+        "short_signal": signals.short_signal,
+    }
+
+
+def build_indicator_arrays(df: pd.DataFrame, params: S06B2Params) -> dict[str, np.ndarray]:
+    arrays = build_signal_and_initial_stop_arrays(df, params)
+    close = df["Close"]
 
     ma_values = trail_ma(close, params.trailMAType, params.trailMALength).to_numpy(copy=False)
     offset_pct = 1.0 + params.trailMAOffsetEx
     trail_long = ma_values * (1.0 - offset_pct / 100.0)
     trail_short = ma_values * (1.0 + offset_pct / 100.0)
-    return {
-        "atr": atr_values,
-        "rolling_low": lowest,
-        "rolling_high": highest,
-        "trail_long": trail_long,
-        "trail_short": trail_short,
-        "long_signal": signals.long_signal,
-        "short_signal": signals.short_signal,
-    }
+    return {**arrays, "trail_long": trail_long, "trail_short": trail_short}
 
 
 def build_s06_b2_execution_data(df: pd.DataFrame, params: S06B2Params) -> ExecutionData:
@@ -362,8 +382,10 @@ __all__ = [
     "S06B2Params",
     "SignalEvents",
     "build_indicator_arrays",
+    "build_signal_and_initial_stop_arrays",
     "build_s06_b2_execution_data",
     "normalize_parameter_aliases",
+    "pine_atr",
     "pine_ema",
     "pine_rma",
     "signal_events",

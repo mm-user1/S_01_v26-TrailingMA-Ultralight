@@ -877,3 +877,13 @@ preserves it. Final WFA reporting always requests the metric for real IS and
 real undelayed dense OOS series; delayed/no-trade OOS facts are suppressed.
 Nullable storage preserves historical absence without backfill. DSR, stitched
 portfolio metrics, exports, and active-day constraints remain unchanged.
+
+## Multi-mode stateful trail adapters
+
+`s06_r_trend_v06_4_a2_b2` is the reference adapter for a strategy whose one
+selector maps to Bracket, R-distance, Chandelier, and fixed-AF SAR variants.
+Declare each mode in `execution.variants` and use the profile's active-parameter
+facts; do not use `depends_on` or validate inactive mode fields. Indicator work
+must also be request-gated: common S06 signals and initial stops are shared,
+Chandelier ATR is prepared only for Chandelier rows, and MA arrays are absent.
+Cache identity includes only fields actually consumed by signal/dataprep.

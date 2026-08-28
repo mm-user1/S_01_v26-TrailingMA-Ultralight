@@ -1,0 +1,118 @@
+"""Thin S06 v06-4-A2 Backtester V2 strategy adapter."""
+
+from __future__ import annotations
+
+import json
+from copy import deepcopy
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Dict, Mapping
+
+import numpy as np
+import pandas as pd
+
+from core.backtest_engine import StrategyResult
+from core.engine_v2.contracts import ExecutionProfile
+from core.engine_v2.kernel import ExecutionData
+from core.engine_v2.profile import parse_execution_profile
+from core.engine_v2.runner import run_v2_strategy
+from strategies.base import BaseStrategy
+
+from .signals import (
+    S06V064A2Params,
+    build_s06_v064a2_execution_data,
+    normalize_parameter_aliases,
+)
+
+
+SIGNAL_CACHE_PARAM_NAMES = (
+    "entryMode",
+    "enableLong",
+    "enableShort",
+    "fastLength",
+    "fastSmooth",
+    "slowLength",
+    "slowSmooth",
+    "thresholdOS",
+    "thresholdOB",
+)
+DATAPREP_CACHE_PARAM_NAMES = (
+    *SIGNAL_CACHE_PARAM_NAMES,
+    "stopLP",
+    "chandelierATRLength",
+)
+
+
+@lru_cache(maxsize=1)
+def _load_config_cached() -> dict[str, Any]:
+    with (Path(__file__).with_name("config.json")).open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def load_config() -> dict[str, Any]:
+    return deepcopy(_load_config_cached())
+
+
+def default_params_from_config(config: Dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = config if config is not None else _load_config_cached()
+    return {
+        str(name): spec["default"]
+        for name, spec in payload.get("parameters", {}).items()
+        if isinstance(spec, dict) and "default" in spec
+    }
+
+
+@lru_cache(maxsize=1)
+def load_profile() -> ExecutionProfile:
+    return parse_execution_profile(_load_config_cached())
+
+
+def normalized_params(params: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    merged = default_params_from_config()
+    merged.update(normalize_parameter_aliases(params))
+    return merged
+
+
+def build_v2_execution_data(df: pd.DataFrame, params: Mapping[str, Any]) -> ExecutionData:
+    parsed = S06V064A2Params.from_dict(normalized_params(params))
+    if parsed.dateFilter and parsed.end is not None and not df.empty:
+        eligible = np.flatnonzero(df.index <= parsed.end)
+        df = df.iloc[0:0].copy() if eligible.size == 0 else df.iloc[: int(eligible[-1]) + 1]
+    return build_s06_v064a2_execution_data(df, parsed)
+
+
+class S06RTrendV064A2B2(BaseStrategy):
+    STRATEGY_ID = "s06_r_trend_v06_4_a2_b2"
+    STRATEGY_NAME = "S06 R-Trend v06-4-A2 B2"
+    STRATEGY_VERSION = "v06-4-a2-b2"
+
+    @staticmethod
+    def run(
+        df: pd.DataFrame,
+        params: Dict[str, Any],
+        trade_start_idx: int = 0,
+    ) -> StrategyResult:
+        merged = normalized_params(params)
+        parsed = S06V064A2Params.from_dict(merged)
+        if parsed.dateFilter and parsed.end is not None and not df.empty:
+            eligible = np.flatnonzero(df.index <= parsed.end)
+            df = df.iloc[0:0].copy() if eligible.size == 0 else df.iloc[: int(eligible[-1]) + 1]
+        data = build_s06_v064a2_execution_data(df, parsed)
+        return run_v2_strategy(
+            data=data,
+            profile=load_profile(),
+            params=merged,
+            trade_start_idx=trade_start_idx,
+        ).strategy_result
+
+
+__all__ = [
+    "DATAPREP_CACHE_PARAM_NAMES",
+    "S06RTrendV064A2B2",
+    "SIGNAL_CACHE_PARAM_NAMES",
+    "build_v2_execution_data",
+    "default_params_from_config",
+    "load_config",
+    "load_profile",
+    "normalized_params",
+]

@@ -1,0 +1,385 @@
+{
+    "generation":  {
+                       "data_root":  {
+                                         "absolute_path_tracked":  false,
+                                         "environment_variable":  "MERLIN_STRATEGY_LAB_DATA_ROOT",
+                                         "precedence":  [
+                                                            "explicit",
+                                                            "environment"
+                                                        ],
+                                         "search_fallback":  false
+                                     },
+                       "economics":  {
+                                         "base_params":  {
+                                                             "commissionPct":  0.05,
+                                                             "contractSize":  0.0001,
+                                                             "enableLong":  true,
+                                                             "enableShort":  true,
+                                                             "entryMode":  "Trend @ Square",
+                                                             "fastLength":  21,
+                                                             "fastSmooth":  7,
+                                                             "initialCapital":  1000.0,
+                                                             "riskPerTrade":  2.0,
+                                                             "slowLength":  112,
+                                                             "slowSmooth":  3,
+                                                             "thresholdOB":  20,
+                                                             "thresholdOS":  20,
+                                                             "trailMode":  "Chandelier Exit"
+                                                         },
+                                         "funding_modelled":  false,
+                                         "slippage_modelled":  false,
+                                         "tick_size_provenance":  {
+                                                                      "operative":  false,
+                                                                      "reason":  "priceRounding=none",
+                                                                      "tickSize":  0.0001
+                                                                  }
+                                     },
+                       "execution":  {
+                                         "boundary":  "strict_close",
+                                         "entryOrder":  "market_next_open",
+                                         "margin":  "report_only",
+                                         "maxDays":  "true",
+                                         "priceRounding":  "none",
+                                         "sizing":  "risk_per_trade",
+                                         "stop":  "atr_swing",
+                                         "target":  "none",
+                                         "trail":  "chandelier",
+                                         "trailActivation":  "rr"
+                                     },
+                       "inventory":  {
+                                         "expected_ticker_count":  118,
+                                         "inventory_path":  "tools/strategy_lab/runspecs/tickers_current.json",
+                                         "inventory_sha256":  "0284a5040039d2f27211a538a4985ab6bb0702d57769bcae81e51f48e26d1d7d",
+                                         "ticker_list_digest":  "1cb80d62d30ddf5103b0b3fedb77cf193402991ecc6bc535923c3cfa73165fb5"
+                                     },
+                       "market_data":  {
+                                           "expected_exchange_counts":  {
+                                                                            "BYBIT":  8,
+                                                                            "OKX":  110
+                                                                        },
+                                           "expected_header":  [
+                                                                   "time",
+                                                                   "open",
+                                                                   "high",
+                                                                   "low",
+                                                                   "close",
+                                                                   "Volume"
+                                                               ],
+                                           "filename_end":  "2026-08-01",
+                                           "filename_interval":  "inclusive_utc_days",
+                                           "filename_start":  "2025-08-01",
+                                           "timeframe_minutes":  30
+                                       },
+                       "planning":  {
+                                        "axis_values":  {
+                                                            "stopX":  [
+                                                                          1,
+                                                                          1.5,
+                                                                          2,
+                                                                          2.5,
+                                                                          3
+                                                                      ],
+                                                            "stopLP":  [
+                                                                           2,
+                                                                           4
+                                                                       ],
+                                                            "stopMaxPct":  [
+                                                                               2,
+                                                                               4,
+                                                                               6,
+                                                                               8
+                                                                           ],
+                                                            "stopMaxDays":  [
+                                                                                2,
+                                                                                4,
+                                                                                6
+                                                                            ],
+                                                            "trailRR":  [
+                                                                            1,
+                                                                            1.5,
+                                                                            2,
+                                                                            2.5,
+                                                                            3
+                                                                        ],
+                                                            "chandelierATRLength":  [
+                                                                                        14,
+                                                                                        28
+                                                                                    ],
+                                                            "chandelierATRMult":  [
+                                                                                      2,
+                                                                                      3,
+                                                                                      4,
+                                                                                      5,
+                                                                                      6
+                                                                                  ]
+                                                        },
+                                        "enabled_axes":  [
+                                                             "stopX",
+                                                             "stopLP",
+                                                             "stopMaxPct",
+                                                             "stopMaxDays",
+                                                             "trailRR",
+                                                             "chandelierATRLength",
+                                                             "chandelierATRMult"
+                                                         ],
+                                        "enabled_variants":  [
+                                                                 "chandelier"
+                                                             ],
+                                        "expected_candidate_count":  6000,
+                                        "expected_effective_planning_policy":  "full",
+                                        "expected_plan_fingerprint":  "e2ea87062a8d88e6b35cbf8a68e68a0c703aad3f9ac11fb0f108e649dac1ca09",
+                                        "expected_semantic_key_digest":  "43644d75e73b2f9d7419e9bb73adf8a1ab3588d781781d3947e618bad1208dc1",
+                                        "grid_v2_prefer_compiled":  true,
+                                        "planning_policy":  "full"
+                                    },
+                       "resources":  {
+                                         "grid_v2_max_cache_mb":  512,
+                                         "numba_threads":  1,
+                                         "outer_workers":  1
+                                     },
+                       "strategy":  {
+                                        "allocator_version":  "ordered_block_allocator_v1",
+                                        "engine":  "v2",
+                                        "grid_v2_engine_version":  "grid_v2_phase2_5",
+                                        "plan_identity_schema_version":  "grid_v2_plan_identity_v3",
+                                        "planning_policy_version":  "grid_v2_planning_v1",
+                                        "runtime_contract_version":  "v2_runtime_contract_v1",
+                                        "semantic_identity_schema_version":  "grid_v2_semantic_identity_v2",
+                                        "strategy_id":  "s06_r_trend_v06_4_a2_b2",
+                                        "strategy_version":  "v06-4-a2-b2"
+                                    },
+                       "windows":  {
+                                       "calendar_anchor_day":  1,
+                                       "expected_window_count":  8,
+                                       "is_period_months":  2,
+                                       "oos_period_months":  1,
+                                       "period_unit":  "months",
+                                       "requested_end":  "2026-08-01",
+                                       "requested_start":  "2025-10-01",
+                                       "timeframe_minutes":  30,
+                                       "warmup_bars":  1000
+                                   }
+                   },
+    "preregistration":  {
+                            "analysis_scopes":  [
+                                                    {
+                                                        "name":  "development",
+                                                        "requires_unlock":  false,
+                                                        "ticker_cell":  "dev",
+                                                        "window_numbers":  [
+                                                                               1,
+                                                                               2,
+                                                                               3,
+                                                                               4,
+                                                                               5,
+                                                                               6
+                                                                           ]
+                                                    },
+                                                    {
+                                                        "name":  "holdout_cross_sectional",
+                                                        "requires_unlock":  true,
+                                                        "ticker_cell":  "holdout",
+                                                        "window_numbers":  [
+                                                                               1,
+                                                                               2,
+                                                                               3,
+                                                                               4,
+                                                                               5,
+                                                                               6
+                                                                           ]
+                                                    },
+                                                    {
+                                                        "name":  "temporal_dev",
+                                                        "requires_unlock":  true,
+                                                        "ticker_cell":  "dev",
+                                                        "window_numbers":  [
+                                                                               7,
+                                                                               8
+                                                                           ]
+                                                    },
+                                                    {
+                                                        "name":  "temporal_combined",
+                                                        "requires_unlock":  true,
+                                                        "ticker_cell":  "holdout",
+                                                        "window_numbers":  [
+                                                                               7,
+                                                                               8
+                                                                           ]
+                                                    }
+                                                ],
+                            "evidence_criteria":  {
+                                                      "broad_population_edge":  {
+                                                                                    "median_candidate_oos_net_profit_pct":  {
+                                                                                                                                "operator":  "\u003e",
+                                                                                                                                "value":  0
+                                                                                                                            },
+                                                                                    "positive_monthly_population_medians":  {
+                                                                                                                                "of":  6,
+                                                                                                                                "operator":  "\u003e=",
+                                                                                                                                "value":  4
+                                                                                                                            },
+                                                                                    "profitable_observation_share":  {
+                                                                                                                         "operator":  "\u003e",
+                                                                                                                         "value":  0.5
+                                                                                                                     }
+                                                                                },
+                                                      "nomination":  {
+                                                                         "fixed_minimum_lift_percentage_points":  null,
+                                                                         "maximum_rules":  3,
+                                                                         "multiple_nomination_warning_required":  true,
+                                                                         "requires":  [
+                                                                                          "selected_strategy_viability",
+                                                                                          "selection_lift"
+                                                                                      ]
+                                                                     },
+                                                      "outlier_procedure":  {
+                                                                                "contribution":  "ticker_mean_top1_paired_lift_over_six_windows",
+                                                                                "criterion_scope":  "recomputed_headline_only_monthly_signs_descriptive",
+                                                                                "order":  [
+                                                                                              "mean_contribution_desc",
+                                                                                              "canonical_symbol_asc"
+                                                                                          ],
+                                                                                "quota":  "ceil(0.10*total_ticker_count_in_cell)",
+                                                                                "recompute":  "monthly_means_then_equal_weight_six_month_headline",
+                                                                                "removal_candidates":  "strictly_positive_contributors_only",
+                                                                                "remove_count":  "min(quota,positive_contributor_count)"
+                                                                            },
+                                                      "primary_confirmation":  {
+                                                                                   "cell":  "holdout_cross_sectional",
+                                                                                   "description":  "Cross-sectional confirmation on new tickers over the same six calendar months as development; it is not independent temporal confirmation."
+                                                                               },
+                                                      "selected_strategy_viability":  {
+                                                                                          "median_selected_oos_net_profit_pct":  {
+                                                                                                                                     "operator":  "\u003e",
+                                                                                                                                     "value":  0
+                                                                                                                                 },
+                                                                                          "positive_monthly_selected_means":  {
+                                                                                                                                  "of":  6,
+                                                                                                                                  "operator":  "\u003e=",
+                                                                                                                                  "value":  4
+                                                                                                                              },
+                                                                                          "profitable_selected_observation_share":  {
+                                                                                                                                        "operator":  "\u003e",
+                                                                                                                                        "value":  0.5
+                                                                                                                                    },
+                                                                                          "six_month_headline_mean_oos_net_profit_pct":  {
+                                                                                                                                             "operator":  "\u003e",
+                                                                                                                                             "value":  0
+                                                                                                                                         }
+                                                                                      },
+                                                      "selection_lift":  {
+                                                                             "comparison":  "rule_selected_minus_primary_profit_oos_net_profit_pct",
+                                                                             "positive_monthly_top1_paired_means":  {
+                                                                                                                        "of":  6,
+                                                                                                                        "operator":  "\u003e=",
+                                                                                                                        "value":  4
+                                                                                                                    },
+                                                                             "robust_top1_headline_mean":  {
+                                                                                                               "operator":  "\u003e",
+                                                                                                               "value":  0
+                                                                                                           },
+                                                                             "six_month_equal_weight_monthly_mean":  {
+                                                                                                                         "operator":  "\u003e",
+                                                                                                                         "value":  0
+                                                                                                                     },
+                                                                             "top5_equal_weight_monthly_mean":  {
+                                                                                                                    "operator":  "\u003e=",
+                                                                                                                    "value":  0
+                                                                                                                }
+                                                                         },
+                                                      "temporal_windows_7_8":  {
+                                                                                   "bootstrap_interval":  false,
+                                                                                   "descriptive_only":  true,
+                                                                                   "mandatory_final_mvp_check":  true,
+                                                                                   "pass_fail_threshold":  false
+                                                                               },
+                                                      "uncertainty":  {
+                                                                          "blocks":  6,
+                                                                          "pass_fail_criterion":  false,
+                                                                          "percentiles":  [
+                                                                                              2.5,
+                                                                                              97.5
+                                                                                          ],
+                                                                          "resamples":  10000,
+                                                                          "sample_size_per_resample":  6,
+                                                                          "sampling":  "with_replacement",
+                                                                          "seed":  20260811,
+                                                                          "type":  "descriptive_month_block_bootstrap"
+                                                                      }
+                                                  },
+                            "evidence_criteria_version":  "strategy_lab_evidence_v1",
+                            "maximum_nominated_rules":  3,
+                            "observation_contract":  {
+                                                         "candidate_observation":  "candidate_ticker_window",
+                                                         "headline_median":  "all_valid_ticker_window_observations",
+                                                         "missing_required_value":  "fail_or_mark_rule_pair_unavailable_with_count",
+                                                         "monthly_ticker_aggregation":  "equal_weight_valid_tickers",
+                                                         "natural_zero_trade_is_profitable":  false,
+                                                         "natural_zero_trade_net_profit_pct":  0,
+                                                         "natural_zero_trade_population_membership":  "included",
+                                                         "six_month_headline_aggregation":  "equal_weight_six_monthly_means",
+                                                         "unavailable_non_finite_metric":  "excluded_from_selection_not_zero_filled"
+                                                     },
+                            "primary_comparison":  "top1_oos_net_profit_vs_primary_profit",
+                            "rule_registry":  {
+                                                  "baseline_rule":  "primary_profit",
+                                                  "minimum_completed_trades":  15,
+                                                  "nomination_eligible_rules":  [
+                                                                                    "trade_gate15_profit",
+                                                                                    "trade_gate15_profit_factor",
+                                                                                    "trade_gate15_daily_sharpe",
+                                                                                    "trade_gate15_romad_mtm",
+                                                                                    "star_mean_profit",
+                                                                                    "star_worst_profit",
+                                                                                    "balanced_percentile_raw",
+                                                                                    "balanced_percentile_star"
+                                                                                ],
+                                                  "non_nominatable_diagnostics":  [
+                                                                                      "trade_gate15_romad_realized",
+                                                                                      "balanced_percentile_raw_realized",
+                                                                                      "balanced_percentile_star_realized",
+                                                                                      "pareto_plus_primary",
+                                                                                      "population_no_skill",
+                                                                                      "oos_oracle",
+                                                                                      "oos_anti_oracle"
+                                                                                  ],
+                                                  "selectable_rules":  [
+                                                                           "primary_profit",
+                                                                           "trade_gate15_profit",
+                                                                           "trade_gate15_profit_factor",
+                                                                           "trade_gate15_daily_sharpe",
+                                                                           "trade_gate15_romad_mtm",
+                                                                           "star_mean_profit",
+                                                                           "star_worst_profit",
+                                                                           "balanced_percentile_raw",
+                                                                           "balanced_percentile_star"
+                                                                       ],
+                                                  "tie_break":  [
+                                                                    {
+                                                                        "direction":  "descending",
+                                                                        "field":  "rule_score"
+                                                                    },
+                                                                    {
+                                                                        "direction":  "descending",
+                                                                        "field":  "IS net_profit_pct"
+                                                                    },
+                                                                    {
+                                                                        "direction":  "ascending",
+                                                                        "field":  "semantic_key"
+                                                                    },
+                                                                    {
+                                                                        "direction":  "ascending",
+                                                                        "field":  "candidate_id"
+                                                                    }
+                                                                ],
+                                                  "version":  "strategy_lab_rules_v1"
+                                              },
+                            "split":  {
+                                          "algorithm":  "sha256_canonical_symbol_ascending_v1",
+                                          "development_ticker_count":  24,
+                                          "holdout_ticker_count":  94
+                                      }
+                        },
+    "run_name":  "s06_v064a2_trend_chandelier",
+    "schema_version":  "strategy_lab_runspec_v1"
+}

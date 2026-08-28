@@ -42,6 +42,14 @@ economics are `initialCapital=1000.0`, `riskPerTrade=2.0`,
 intentionally not modelled. `tickSize=0.0001` is provenance only because the
 execution profile uses `priceRounding=none`.
 
+TZ-17.2 adds six tracked full-policy run specs named
+`s06_v064a2_{reversal,trend}_{r_trail,chandelier,fixed_af_sar}.json`.
+They retain the canonical inventory, windows, resources, economics, and
+preregistration while fixing one entry/trail pair. Full dataset generation is
+deferred. The reusable smoke certifier derives count and group shape from the
+loaded plan; only the 480-candidate RR Bracket profile is compared with the
+immutable legacy matrix.
+
 ## Commands
 
 Run every command from the repository root with the configured project Python.

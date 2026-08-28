@@ -697,3 +697,18 @@ Additive idempotent migrations leave historical rows `NULL` and perform no
 backfill. Generic Queue, Results, API, and Analytics transports expose stored
 facts without new charts or identity changes. DSR, Monthly Sharpe, WFE,
 stitched OOS, trading, drawdown, and exports remain unchanged.
+
+## S06 v06-4-A2 multi-trail certification (TZ-17.2)
+
+The separate `s06_r_trend_v06_4_a2_b2` adapter preserves both existing S06
+entry modes and initial-stop preparation. Full variant populations are Bracket
+480, R Trail 3,600, Chandelier 6,000, Fixed-AF SAR 2,400, and combined 12,480.
+The combined semantic digest is
+`4d7173e4c4b2bb26a68195e32fb6b8a27b47c7098af7bcaecd158d1431337036`;
+its plan fingerprint is
+`73244c7dc697e11b33e721956b2b3a9c45098f055a64e95f26b921934763578d`.
+Complete 480-row compiled outputs, including MTM, match the old disabled-MA
+Bracket path for both entry modes. Six frozen TradingView configurations cover
+all three trail families and both entries. Their only non-exact observations
+are the accepted fill-bar initial-stop, one-tick candidate, CSV rounding,
+final-boundary, and TradingView intrabar-drawdown representations.

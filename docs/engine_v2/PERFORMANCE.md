@@ -948,3 +948,26 @@ unaffected. The follow-up certification gates do not change the formula,
 operation order, sidecar ABI, Numba architecture, or compiled loop structure;
 no speculative kernel optimization is warranted for this bounded research-only
 cost.
+
+## TZ-17.2 S06 v06-4-A2 import (2026-08-28)
+
+Windows 10, Python 3.13.7, NumPy 2.3.3, Numba 0.65.1, one compiled worker,
+task-local caches, real SUI 30-minute data, and excluded exact-signature JIT.
+The unchanged old 48,480-candidate path measured 13.038s median wall and 8.548s
+Fast versus the same-host pre-change 13.112s and 8.720s (-0.56% and -1.97%).
+Candidate 18,436 retained net 45.74422762364992, drawdown 14.13382645989712,
+and 55 trades.
+
+| New/paired plan | Candidates | Median wall |
+|---|---:|---:|
+| Existing S06 Bracket | 480 | 0.087317s |
+| New S06 Bracket | 480 | 0.087648s |
+| R Trail | 3,600 | 0.357126s |
+| Chandelier | 6,000 | 0.577487s |
+| Fixed-AF SAR | 2,400 | 0.261838s |
+| Combined | 12,480 | 1.175622s |
+
+The paired Bracket delta is +0.38%. Signal preparation had one row throughout;
+dataprep rows were 2 for each non-Chandelier single-mode plan, 4 for Chandelier
+(two `stopLP` by two active ATR lengths), and 10 combined. Chandelier ATR length
+therefore does not create rows for modes that do not consume it.

@@ -234,6 +234,14 @@ def test_finite_mtm_group_gate_accepts_partial_availability_and_rejects_empty_co
         finite_mtm_group_facts(group, group_label="CRVUSDT/window_01.npy")
 
 
+def test_finite_mtm_group_gate_uses_the_loaded_plan_candidate_count():
+    group = np.full((2400, 2, len(METRIC_AXIS)), np.nan, dtype=np.float64)
+    group[2399, 0, METRIC_AXIS.index("max_drawdown_mtm_pct")] = 1.0
+    assert finite_mtm_group_facts(
+        group, group_label="SAR/window_01.npy", candidate_count=2400
+    ) == {"finite_mtm_count": 1, "mtm_value_count": 4800}
+
+
 def test_legacy_column_preservation_accepts_exact_equal_nan_values():
     rng = np.random.default_rng(41)
     schema_v1 = rng.normal(size=(480, 2, 20)).astype(np.float64)

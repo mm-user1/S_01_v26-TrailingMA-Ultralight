@@ -58,6 +58,21 @@ def test_current_runspec_is_typed_bound_and_identity_checked():
     assert spec.pre_registration_sha256 == "e45105989c8786fe4c36719e616671cfcefad79874ea8d2de26f87bea40d8539"
 
 
+def test_all_six_s06_v064a2_full_policy_specs_are_identity_checked():
+    paths = sorted(RUNSPEC_PATH.parent.glob("s06_v064a2_*.json"))
+    assert len(paths) == 6
+    observed = {}
+    for path in paths:
+        spec = load_run_spec(path)
+        assert spec.strategy_id == "s06_r_trend_v06_4_a2_b2"
+        assert spec.plan is not None
+        assert spec.generation["planning"]["planning_policy"] == "full"
+        assert len(spec.generation["planning"]["enabled_variants"]) == 1
+        assert spec.plan.deduped_candidate_count == spec.generation["planning"]["expected_candidate_count"]
+        observed[path.stem] = spec.plan.deduped_candidate_count
+    assert sorted(observed.values()) == [2400, 2400, 3600, 3600, 6000, 6000]
+
+
 def test_another_registered_v2_strategy_uses_the_same_generic_loader(tmp_path):
     raw = _raw_runspec()
     config = get_strategy_config("s06_r_trend_v02_regime_trendlines_b2")
