@@ -113,6 +113,16 @@ def test_invalid_numeric_ranges_fail_clearly():
         build_grid_v2_plan(bad)
 
 
+@pytest.mark.parametrize("value", [1.1, "1.1", True, float("nan"), float("inf")])
+def test_generic_fixed_integer_coercion_rejects_lossy_values(value):
+    with pytest.raises(ValueError, match="optionalInt.*finite and integral|optionalInt.*booleans"):
+        build_grid_v2_plan(
+            _base_config(),
+            GridV2Settings(enabled_axes=()),
+            {"optionalInt": value},
+        )
+
+
 def test_cross_role_depends_on_still_rejected():
     config = _base_config()
     config["parameters"]["selectSignal"]["depends_on"] = "stopX"

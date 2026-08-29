@@ -1082,9 +1082,16 @@ def _grid_v2_plan_prelude(
     defaults = _parameter_defaults(params_spec)
     fixed_params = dict(defaults)
     fixed_params.update(dict(base_params or {}))
-    domains = _build_parameter_domains(config_copy, settings, fixed_params, profile)
     selector_values = _selector_values_by_variant(config_copy, profile)
     selected_variants = _selected_variants(profile, settings, fixed_params)
+    fixed_params = _canonicalize_globally_inactive_params(
+        params_spec,
+        profile,
+        fixed_params,
+        selector_values,
+        selected_variants,
+    )
+    domains = _build_parameter_domains(config_copy, settings, fixed_params, profile)
     return _grid_v2_plan_prelude_from_parts(
         config=config_copy,
         settings=settings,
@@ -2661,6 +2668,35 @@ def _candidate_seed_params(params: Mapping[str, Any]) -> dict[str, Any]:
     return {str(name): value for name, value in params.items() if not str(name).endswith("_options")}
 
 
+def _canonicalize_globally_inactive_params(
+    params_spec: Mapping[str, Any],
+    profile: ExecutionProfile,
+    fixed_params: Mapping[str, Any],
+    selector_values: Mapping[str, Any],
+    selected_variants: Sequence[str],
+) -> dict[str, Any]:
+    """Replace fields unused by every selected variant before fixed coercion."""
+
+    active_names: set[str] = set()
+    for variant_name in selected_variants:
+        variant_params = dict(fixed_params)
+        if profile.variant_selector is not None:
+            variant_params[profile.variant_selector.param] = selector_values[variant_name]
+        active_names.update(active_parameter_names(profile, variant_params))
+
+    canonical = dict(fixed_params)
+    for name in profile.parameter_names:
+        spec = params_spec.get(name)
+        if (
+            name not in active_names
+            and profile.parameter_roles.get(name) != "runtime"
+            and isinstance(spec, Mapping)
+            and "default" in spec
+        ):
+            canonical[name] = spec["default"]
+    return canonical
+
+
 def _build_parameter_domains(
     config: Mapping[str, Any],
     settings: GridV2Settings,
@@ -2696,7 +2732,13 @@ def _build_parameter_domains(
         if is_axis:
             values, source = _axis_values(name, spec, param_type, fixed_params)
         else:
-            values, source = (_coerce_value(default, param_type),), "fixed_default"
+            try:
+                fixed_value = _coerce_value(default, param_type)
+            except (ArithmeticError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Grid V2 fixed parameter '{name}' has an invalid {param_type} value: {exc}"
+                ) from exc
+            values, source = (fixed_value,), "fixed_default"
         if not values:
             raise ValueError(f"Grid V2 parameter '{name}' has an empty domain.")
         domains[name] = GridV2ParameterDomain(
@@ -2833,7 +2875,15 @@ def _coerce_decimal(value: Decimal, param_type: str) -> Any:
 def _coerce_value(value: Any, param_type: str) -> Any:
     normalized_type = str(param_type).strip().lower()
     if normalized_type in {"int", "integer"}:
-        return int(Decimal(str(value)).to_integral_value())
+        if isinstance(value, bool):
+            raise ValueError("integer values cannot be booleans.")
+        try:
+            parsed = Decimal(str(value))
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError("integer values must be numeric.") from exc
+        if not parsed.is_finite() or parsed != parsed.to_integral_value():
+            raise ValueError("integer values must be finite and integral.")
+        return int(parsed)
     if normalized_type in {"float", "number"}:
         parsed = float(value)
         if not math.isfinite(parsed):

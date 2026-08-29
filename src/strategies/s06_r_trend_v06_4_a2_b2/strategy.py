@@ -41,6 +41,14 @@ DATAPREP_CACHE_PARAM_NAMES = (
     "stopLP",
     "chandelierATRLength",
 )
+_VARIANT_PARAMETER_NAMES = (
+    "stopRR",
+    "trailRR",
+    "trailDistanceR",
+    "chandelierATRLength",
+    "chandelierATRMult",
+    "sarSpeed",
+)
 
 
 @lru_cache(maxsize=1)
@@ -73,6 +81,18 @@ def normalized_params(params: Mapping[str, Any] | None = None) -> dict[str, Any]
     return merged
 
 
+def _validated_execution_params(
+    params: Mapping[str, Any] | None,
+) -> tuple[S06V064A2Params, dict[str, Any]]:
+    """Return the parsed contract and the canonical mapping consumed by V2."""
+
+    merged = normalized_params(params)
+    parsed = S06V064A2Params.from_dict(merged)
+    for name in _VARIANT_PARAMETER_NAMES:
+        merged[name] = getattr(parsed, name)
+    return parsed, merged
+
+
 def build_v2_execution_data(df: pd.DataFrame, params: Mapping[str, Any]) -> ExecutionData:
     parsed = S06V064A2Params.from_dict(normalized_params(params))
     if parsed.dateFilter and parsed.end is not None and not df.empty:
@@ -92,8 +112,7 @@ class S06RTrendV064A2B2(BaseStrategy):
         params: Dict[str, Any],
         trade_start_idx: int = 0,
     ) -> StrategyResult:
-        merged = normalized_params(params)
-        parsed = S06V064A2Params.from_dict(merged)
+        parsed, execution_params = _validated_execution_params(params)
         if parsed.dateFilter and parsed.end is not None and not df.empty:
             eligible = np.flatnonzero(df.index <= parsed.end)
             df = df.iloc[0:0].copy() if eligible.size == 0 else df.iloc[: int(eligible[-1]) + 1]
@@ -101,7 +120,7 @@ class S06RTrendV064A2B2(BaseStrategy):
         return run_v2_strategy(
             data=data,
             profile=load_profile(),
-            params=merged,
+            params=execution_params,
             trade_start_idx=trade_start_idx,
         ).strategy_result
 

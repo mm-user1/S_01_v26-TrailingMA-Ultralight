@@ -58,6 +58,15 @@ REL_TOL = 1e-9
 ABS_TOL = 1e-12
 MISMATCH_SAMPLE_LIMIT = 5
 WINDOW_NET_PROFIT_BASIS = "legacy_wfa_100"
+LEGACY_BRACKET_IDENTITY = {
+    "strategy_id": "s06_r_trend_v02_b2",
+    "strategy_version": "v02-b2",
+    "candidate_count": 480,
+    "plan_fingerprint": "c0e40ede6521a1cc02063ef2c9245f58c0093ca97aeb4bd858b75b5d09c7f434",
+    "semantic_key_digest": "60e563c74876258e52de4c4ff3b598ed3a3a12d55d640f52ce262cd6b543fb55",
+    "target": "rr",
+    "trail": "none",
+}
 SELECTED_TRIAL_NET_PROFIT_BASIS = "initial_capital_1000"
 PROTECTED_CANONICAL_OUTPUTS = tuple(
     (
@@ -1117,7 +1126,7 @@ def _smoke_gate(
     else:
         legacy_columns = {
             "status": "not_applicable",
-            "reason": "loaded plan is not the 480-candidate RR bracket profile",
+            "reason": "loaded plan does not match the exact frozen legacy Bracket identity",
         }
     return {
         "outputs": [str(path) for path in outputs],
@@ -1137,6 +1146,19 @@ def _smoke_gate(
         "finite_mtm": finite_mtm,
         "legacy_columns": legacy_columns,
     }
+
+
+def _matches_frozen_legacy_bracket_plan(spec: Any, plan: Any) -> bool:
+    execution = spec.generation.get("execution", {})
+    return bool(
+        spec.strategy_id == LEGACY_BRACKET_IDENTITY["strategy_id"]
+        and plan.strategy_version == LEGACY_BRACKET_IDENTITY["strategy_version"]
+        and plan.deduped_candidate_count == LEGACY_BRACKET_IDENTITY["candidate_count"]
+        and plan.plan_fingerprint == LEGACY_BRACKET_IDENTITY["plan_fingerprint"]
+        and semantic_key_digest(plan) == LEGACY_BRACKET_IDENTITY["semantic_key_digest"]
+        and execution.get("target") == LEGACY_BRACKET_IDENTITY["target"]
+        and execution.get("trail") == LEGACY_BRACKET_IDENTITY["trail"]
+    )
 
 
 def certify_real_pack(
@@ -1294,11 +1316,7 @@ def certify_real_pack(
         repo,
         candidate_count=candidate_count,
         window_count=expected_window_count,
-        compare_legacy_bracket=bool(
-            candidate_count == EXPECTED_CANDIDATE_COUNT
-            and spec.generation["execution"]["target"] == "rr"
-            and spec.generation["execution"]["trail"] == "none"
-        ),
+        compare_legacy_bracket=_matches_frozen_legacy_bracket_plan(spec, plan),
     )
 
     evidence = {

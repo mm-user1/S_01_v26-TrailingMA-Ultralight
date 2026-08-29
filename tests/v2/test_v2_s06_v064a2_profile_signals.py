@@ -104,6 +104,85 @@ def test_aliases_collapse_to_canonical_identity_and_inactive_values_are_inert():
 
 
 @pytest.mark.parametrize(
+    ("trail_mode", "inactive_fields"),
+    [
+        (
+            "Off (Bracket)",
+            ("trailRR", "trailDistanceR", "chandelierATRLength", "chandelierATRMult", "sarSpeed"),
+        ),
+        (
+            "R Trail",
+            ("stopRR", "chandelierATRLength", "chandelierATRMult", "sarSpeed"),
+        ),
+        (
+            "Chandelier Exit",
+            ("stopRR", "trailDistanceR", "sarSpeed"),
+        ),
+        (
+            "Fixed-AF SAR",
+            ("stopRR", "trailDistanceR", "chandelierATRLength", "chandelierATRMult"),
+        ),
+    ],
+)
+def test_direct_execution_canonicalizes_every_inactive_variant_field(
+    trail_mode, inactive_fields
+):
+    frame = _frame()
+    common = {"trailMode": trail_mode, "entryMode": "Trend @ Square", "dateFilter": False}
+    expected = strategy.S06RTrendV064A2B2.run(frame, common)
+    actual = strategy.S06RTrendV064A2B2.run(
+        frame,
+        {**common, **dict.fromkeys(inactive_fields, "inactive-bad")},
+    )
+
+    assert actual.trades == expected.trades
+    np.testing.assert_array_equal(actual.equity_curve, expected.equity_curve)
+    np.testing.assert_array_equal(actual.balance_curve, expected.balance_curve)
+
+
+@pytest.mark.parametrize(
+    ("trail_mode", "field"),
+    [
+        ("Off (Bracket)", "stopRR"),
+        ("R Trail", "trailRR"),
+        ("R Trail", "trailDistanceR"),
+        ("Chandelier Exit", "chandelierATRLength"),
+        ("Chandelier Exit", "chandelierATRMult"),
+        ("Fixed-AF SAR", "sarSpeed"),
+    ],
+)
+def test_direct_execution_rejects_malformed_active_fields(trail_mode, field):
+    with pytest.raises(ValueError, match=field):
+        strategy.S06RTrendV064A2B2.run(
+            _frame(),
+            {"trailMode": trail_mode, field: "active-bad", "dateFilter": False},
+        )
+
+
+@pytest.mark.parametrize("value", [2, 4, 2.0, 4.0, "2", "2.0"])
+def test_stop_lp_exact_integral_forms_pass_parser_and_direct_execution(value):
+    assert S06V064A2Params.from_dict({"stopLP": value}).stopLP == int(float(value))
+    strategy.S06RTrendV064A2B2.run(
+        _frame(),
+        {"trailMode": "Off (Bracket)", "stopLP": value, "dateFilter": False},
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [2.9, "2.9", True, False, float("nan"), float("inf"), float("-inf"), "bad"],
+)
+def test_stop_lp_fractional_boolean_nonfinite_and_nonnumeric_forms_are_rejected(value):
+    with pytest.raises(ValueError, match="stopLP"):
+        S06V064A2Params.from_dict({"stopLP": value})
+    with pytest.raises(ValueError, match="stopLP"):
+        strategy.S06RTrendV064A2B2.run(
+            _frame(),
+            {"trailMode": "Off (Bracket)", "stopLP": value, "dateFilter": False},
+        )
+
+
+@pytest.mark.parametrize(
     ("trail_mode", "field", "value"),
     [
         ("Off (Bracket)", "stopRR", 1.0),

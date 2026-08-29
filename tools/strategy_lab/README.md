@@ -48,7 +48,9 @@ They retain the canonical inventory, windows, resources, economics, and
 preregistration while fixing one entry/trail pair. Full dataset generation is
 deferred. The reusable smoke certifier derives count and group shape from the
 loaded plan; only the 480-candidate RR Bracket profile is compared with the
-immutable legacy matrix.
+immutable legacy matrix when strategy ID/version, candidate count, plan
+fingerprint, semantic-key digest, and RR/no-trail topology all match the frozen
+`s06_bracket_mvp` identity.
 
 ## Commands
 

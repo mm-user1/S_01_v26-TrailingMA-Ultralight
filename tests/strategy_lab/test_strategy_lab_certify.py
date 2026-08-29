@@ -18,6 +18,7 @@ from tools.strategy_lab.certify import (
     WINDOW_NET_PROFIT_BASIS,
     _compare_grid_runs,
     _grid_run_parity_facts,
+    _matches_frozen_legacy_bracket_plan,
     _selected_slow_parity,
     _selected_slow_row_mismatches,
     allowed_roots_with_data_root,
@@ -63,6 +64,20 @@ def test_geometry_candidate_selection_is_fixed_before_metrics_are_available():
         "stopMaxPct",
         "stopMaxDays",
     }
+
+
+def test_legacy_comparison_requires_the_exact_frozen_plan_identity():
+    spec = load_run_spec(
+        REPO_ROOT / "tools" / "strategy_lab" / "runspecs" / "s06_bracket_mvp.json"
+    )
+    assert spec.plan is not None
+    assert _matches_frozen_legacy_bracket_plan(spec, spec.plan) is True
+
+    unrelated_lookalike = replace(spec.plan, plan_fingerprint="0" * 64)
+    assert unrelated_lookalike.deduped_candidate_count == 480
+    assert spec.generation["execution"]["target"] == "rr"
+    assert spec.generation["execution"]["trail"] == "none"
+    assert _matches_frozen_legacy_bracket_plan(spec, unrelated_lookalike) is False
 
 
 @pytest.mark.parametrize(

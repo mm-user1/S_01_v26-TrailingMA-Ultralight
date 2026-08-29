@@ -74,6 +74,78 @@ def test_sampled_boundary_membership_and_order_are_pinned(budget):
     assert len(set(first.candidate_table.semantic_keys_by_row or ())) == budget
 
 
+@pytest.mark.parametrize(
+    ("variant", "trail_mode", "inactive_fields"),
+    [
+        ("bracket", "Off (Bracket)", ("trailRR", "trailDistanceR", "chandelierATRLength", "chandelierATRMult", "sarSpeed")),
+        ("r_trail", "R Trail", ("stopRR", "chandelierATRLength", "chandelierATRMult", "sarSpeed")),
+        ("chandelier", "Chandelier Exit", ("stopRR", "trailDistanceR", "sarSpeed")),
+        ("fixed_af_sar", "Fixed-AF SAR", ("stopRR", "trailDistanceR", "chandelierATRLength", "chandelierATRMult")),
+    ],
+)
+def test_single_variant_grid_makes_every_inactive_fixed_value_identity_inert(
+    variant, trail_mode, inactive_fields
+):
+    settings = GridV2Settings(enabled_variants=(variant,), enabled_axes=())
+    clean = build_grid_v2_plan(CONFIG, settings, {"trailMode": trail_mode})
+    stale = build_grid_v2_plan(
+        CONFIG,
+        settings,
+        {"trailMode": trail_mode, **dict.fromkeys(inactive_fields, "inactive-bad")},
+    )
+
+    assert stale.deduped_candidate_count == clean.deduped_candidate_count == 1
+    assert stale.plan_fingerprint == clean.plan_fingerprint
+    assert semantic_key_digest(stale) == semantic_key_digest(clean)
+    assert stale.candidate_for_index(0).semantic_key == clean.candidate_for_index(0).semantic_key
+    assert stale.candidate_for_index(0).params == clean.candidate_for_index(0).params
+
+
+@pytest.mark.parametrize(
+    ("variants", "field"),
+    [
+        (("bracket", "r_trail"), "stopRR"),
+        (("bracket", "r_trail"), "trailRR"),
+        (("bracket", "r_trail"), "trailDistanceR"),
+        (("r_trail", "chandelier"), "chandelierATRLength"),
+        (("r_trail", "chandelier"), "chandelierATRMult"),
+        (("r_trail", "fixed_af_sar"), "sarSpeed"),
+    ],
+)
+def test_combined_grid_rejects_malformed_field_active_in_any_selected_variant(
+    variants, field
+):
+    with pytest.raises(ValueError, match=field):
+        build_grid_v2_plan(
+            CONFIG,
+            GridV2Settings(enabled_variants=variants, enabled_axes=()),
+            {field: "active-bad"},
+        )
+
+
+@pytest.mark.parametrize("value", [2, 4, 2.0, 4.0, "2", "2.0"])
+def test_grid_fixed_stop_lp_accepts_exact_integral_forms(value):
+    plan = build_grid_v2_plan(
+        CONFIG,
+        GridV2Settings(enabled_variants=("bracket",), enabled_axes=()),
+        {"trailMode": "Off (Bracket)", "stopLP": value},
+    )
+    assert plan.parameter_domains["stopLP"].values == (int(float(value)),)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [2.9, "2.9", True, False, float("nan"), float("inf"), float("-inf"), "bad"],
+)
+def test_grid_fixed_stop_lp_rejects_nonintegral_forms(value):
+    with pytest.raises(ValueError, match="stopLP"):
+        build_grid_v2_plan(
+            CONFIG,
+            GridV2Settings(enabled_variants=("bracket",), enabled_axes=()),
+            {"trailMode": "Off (Bracket)", "stopLP": value},
+        )
+
+
 def test_all_frozen_external_assets_retain_declared_hashes():
     manifest = json.loads((BASELINE_ROOT / "dataset.json").read_text(encoding="utf-8"))
     declared = list(manifest["asset_hashes"])
@@ -123,28 +195,95 @@ def test_each_external_configuration_has_reference_compiled_and_mtm_parity(refer
 
 
 TV_EXPECTED = {
-    REFERENCE_IDS[0]: (52, 52, [("equal", 0, 52, 0, 52)], 1),
-    REFERENCE_IDS[1]: (42, 42, [("equal", 0, 42, 0, 42)], 0),
-    REFERENCE_IDS[2]: (68, 69, [("equal", 0, 58, 0, 58), ("insert", 58, 58, 58, 59), ("equal", 58, 68, 59, 69)], 11),
-    REFERENCE_IDS[3]: (47, 47, [("equal", 0, 47, 0, 47)], 0),
-    REFERENCE_IDS[4]: (51, 52, [("equal", 0, 42, 0, 42), ("insert", 42, 42, 42, 43), ("equal", 42, 51, 43, 52)], 10),
-    REFERENCE_IDS[5]: (34, 34, [("equal", 0, 34, 0, 34)], 0),
+    REFERENCE_IDS[0]: {
+        "counts": (52, 52),
+        "alignment": [("equal", 0, 52, 0, 52)],
+        "unmatched_merlin": [],
+        "exit_mismatches": [(43, 43, "2025-11-03T15:30:00Z", "2025-11-03T15:00:00Z")],
+        "nonzero": {"entry_price": 0, "exit_price": 30, "quantity": 26, "net_pnl": 52},
+        "max_at": {"entry_price": (1, 1), "exit_price": (43, 43), "quantity": (52, 52), "net_pnl": (43, 43)},
+        "above": {
+            "entry_price": [], "exit_price": [(43, 43)],
+            "quantity": [(number, number) for number in range(44, 53)],
+            "net_pnl": [(37, 37), (43, 43), (44, 44), (45, 45), (48, 48), (50, 50), (52, 52)],
+        },
+    },
+    REFERENCE_IDS[1]: {
+        "counts": (42, 42), "alignment": [("equal", 0, 42, 0, 42)],
+        "unmatched_merlin": [], "exit_mismatches": [],
+        "nonzero": {"entry_price": 0, "exit_price": 20, "quantity": 10, "net_pnl": 42},
+        "max_at": {"entry_price": (1, 1), "exit_price": (8, 8), "quantity": (33, 33), "net_pnl": (35, 35)},
+        "above": dict.fromkeys(("entry_price", "exit_price", "quantity", "net_pnl"), []),
+    },
+    REFERENCE_IDS[2]: {
+        "counts": (68, 69),
+        "alignment": [("equal", 0, 58, 0, 58), ("insert", 58, 58, 58, 59), ("equal", 58, 68, 59, 69)],
+        "unmatched_merlin": [{"number": 59, "identity": ("long", "2025-11-03T16:00:00Z")}],
+        "exit_mismatches": [
+            (58, 58, "2025-11-03T15:30:00Z", "2025-11-03T15:00:00Z"),
+            (68, 69, "2025-11-30T23:30:00Z", "2025-12-01T00:00:00Z"),
+        ],
+        "nonzero": {"entry_price": 0, "exit_price": 66, "quantity": 48, "net_pnl": 68},
+        "max_at": {"entry_price": (1, 1), "exit_price": (68, 69), "quantity": (67, 68), "net_pnl": (68, 69)},
+        "above": {
+            "entry_price": [], "exit_price": [(58, 58), (68, 69)],
+            "quantity": [(32, 32), (42, 42), (45, 45), (48, 48), (49, 49), (50, 50), (52, 52), (53, 53), (54, 54), (55, 55), (56, 56), (58, 58), (59, 60), (60, 61), (61, 62), (62, 63), (63, 64), (64, 65), (65, 66), (66, 67), (67, 68), (68, 69)],
+            "net_pnl": [(41, 41), (58, 58), (59, 60), (61, 62), (65, 66), (66, 67), (68, 69)],
+        },
+    },
+    REFERENCE_IDS[3]: {
+        "counts": (47, 47), "alignment": [("equal", 0, 47, 0, 47)],
+        "unmatched_merlin": [], "exit_mismatches": [],
+        "nonzero": {"entry_price": 0, "exit_price": 44, "quantity": 12, "net_pnl": 47},
+        "max_at": {"entry_price": (1, 1), "exit_price": (34, 34), "quantity": (47, 47), "net_pnl": (40, 40)},
+        "above": dict.fromkeys(("entry_price", "exit_price", "quantity", "net_pnl"), []),
+    },
+    REFERENCE_IDS[4]: {
+        "counts": (51, 52),
+        "alignment": [("equal", 0, 42, 0, 42), ("insert", 42, 42, 42, 43), ("equal", 42, 51, 43, 52)],
+        "unmatched_merlin": [{"number": 43, "identity": ("long", "2025-11-03T16:00:00Z")}],
+        "exit_mismatches": [
+            (42, 42, "2025-11-03T15:30:00Z", "2025-11-03T15:00:00Z"),
+            (51, 52, "2025-11-30T23:30:00Z", "2025-12-01T00:00:00Z"),
+        ],
+        "nonzero": {"entry_price": 0, "exit_price": 40, "quantity": 28, "net_pnl": 51},
+        "max_at": {"entry_price": (1, 1), "exit_price": (51, 52), "quantity": (45, 46), "net_pnl": (51, 52)},
+        "above": {
+            "entry_price": [], "exit_price": [(42, 42), (51, 52)],
+            "quantity": [(35, 35), (37, 37), (38, 38), (39, 39), (42, 42), (43, 44), (44, 45), (45, 46), (46, 47), (47, 48), (48, 49), (49, 50), (50, 51), (51, 52)],
+            "net_pnl": [(42, 42), (43, 44), (49, 50), (51, 52)],
+        },
+    },
+    REFERENCE_IDS[5]: {
+        "counts": (34, 34), "alignment": [("equal", 0, 34, 0, 34)],
+        "unmatched_merlin": [], "exit_mismatches": [],
+        "nonzero": {"entry_price": 0, "exit_price": 18, "quantity": 3, "net_pnl": 34},
+        "max_at": {"entry_price": (1, 1), "exit_price": (34, 34), "quantity": (32, 32), "net_pnl": (11, 11)},
+        "above": dict.fromkeys(("entry_price", "exit_price", "quantity", "net_pnl"), []),
+    },
 }
 
 
 @pytest.mark.parametrize("reference_id", REFERENCE_IDS)
 def test_tradingview_differences_remain_exactly_within_the_accepted_cases(reference_id):
-    expected_count, merlin_count, alignment, zipped_exit_mismatches = TV_EXPECTED[reference_id]
+    expected = TV_EXPECTED[reference_id]
     facts = tradingview_comparison(reference_id)
-    assert (facts["tradingview_count"], facts["merlin_count"]) == (expected_count, merlin_count)
-    assert entry_alignment(reference_id) == alignment
-    assert facts["exact"]["exit_time"]["count"] == zipped_exit_mismatches
+    assert (facts["tradingview_count"], facts["merlin_count"]) == expected["counts"]
+    assert facts["matched_count"] == facts["tradingview_count"]
+    assert facts["unmatched_tradingview"] == []
+    assert facts["unmatched_merlin"] == expected["unmatched_merlin"]
+    assert entry_alignment(reference_id) == expected["alignment"]
+    assert facts["exact"]["direction"] == {"count": 0, "mismatches": []}
+    assert facts["exact"]["entry_time"] == {"count": 0, "mismatches": []}
+    assert [
+        (item["tradingview_number"], item["merlin_number"], item["expected"], item["actual"])
+        for item in facts["exact"]["exit_time"]["mismatches"]
+    ] == expected["exit_mismatches"]
+    for field, numeric in facts["numeric"].items():
+        assert numeric["nonzero"] == expected["nonzero"][field]
+        assert numeric["max_at"] == expected["max_at"][field]
+        assert numeric["above_csv_rounding"] == expected["above"][field]
     if reference_id in (REFERENCE_IDS[1], REFERENCE_IDS[3], REFERENCE_IDS[5]):
-        assert facts["exact"] == {
-            "direction": {"count": 0, "first": None},
-            "entry_time": {"count": 0, "first": None},
-            "exit_time": {"count": 0, "first": None},
-        }
         assert facts["numeric"]["exit_price"]["max_abs"] < 0.0001
         assert facts["numeric"]["quantity"]["max_abs"] <= 0.01000000000001
         assert facts["numeric"]["net_pnl"]["max_abs"] < 0.007

@@ -51,8 +51,6 @@ def normalize_parameter_aliases(payload: Mapping[str, Any] | None) -> dict[str, 
         if canonical not in result and alias in result:
             result[canonical] = result[alias]
         result.pop(alias, None)
-    if "stopLP" in result:
-        result["stopLP"] = int(float(result["stopLP"]))
     return result
 
 
@@ -71,6 +69,15 @@ def _integer_value(name: str, value: Any) -> int:
     if not math.isfinite(numeric) or not numeric.is_integer():
         raise ValueError(f"{name} must be an integer.")
     return int(numeric)
+
+
+def _float_value(name: str, value: Any) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be numeric.")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be numeric.") from exc
 
 
 @dataclass(frozen=True)
@@ -126,23 +133,30 @@ class S06V064A2Params:
             thresholdOS=_integer_value("thresholdOS", d.get("thresholdOS", cls.thresholdOS)),
             thresholdOB=_integer_value("thresholdOB", d.get("thresholdOB", cls.thresholdOB)),
             stopX=float(d.get("stopX", cls.stopX)),
-            stopRR=float(active("stopRR", cls.stopRR, {"Off (Bracket)"})),
+            stopRR=_float_value("stopRR", active("stopRR", cls.stopRR, {"Off (Bracket)"})),
             stopLP=_integer_value("stopLP", d.get("stopLP", cls.stopLP)),
             stopMaxPct=float(d.get("stopMaxPct", cls.stopMaxPct)),
             stopMaxDays=_integer_value("stopMaxDays", d.get("stopMaxDays", cls.stopMaxDays)),
             riskPerTrade=float(d.get("riskPerTrade", cls.riskPerTrade)),
             contractSize=float(d.get("contractSize", cls.contractSize)),
             trailMode=trail_mode,
-            trailRR=float(active("trailRR", cls.trailRR, TRAIL_MODES - {"Off (Bracket)"})),
-            trailDistanceR=float(active("trailDistanceR", cls.trailDistanceR, {"R Trail"})),
+            trailRR=_float_value(
+                "trailRR", active("trailRR", cls.trailRR, TRAIL_MODES - {"Off (Bracket)"})
+            ),
+            trailDistanceR=_float_value(
+                "trailDistanceR", active("trailDistanceR", cls.trailDistanceR, {"R Trail"})
+            ),
             chandelierATRLength=_integer_value(
                 "chandelierATRLength",
                 active("chandelierATRLength", cls.chandelierATRLength, {"Chandelier Exit"}),
             ),
-            chandelierATRMult=float(
-                active("chandelierATRMult", cls.chandelierATRMult, {"Chandelier Exit"})
+            chandelierATRMult=_float_value(
+                "chandelierATRMult",
+                active("chandelierATRMult", cls.chandelierATRMult, {"Chandelier Exit"}),
             ),
-            sarSpeed=float(active("sarSpeed", cls.sarSpeed, {"Fixed-AF SAR"})),
+            sarSpeed=_float_value(
+                "sarSpeed", active("sarSpeed", cls.sarSpeed, {"Fixed-AF SAR"})
+            ),
             initialCapital=float(d.get("initialCapital", cls.initialCapital)),
             commissionPct=float(d.get("commissionPct", cls.commissionPct)),
             warmupBars=int(d.get("warmupBars", cls.warmupBars)),

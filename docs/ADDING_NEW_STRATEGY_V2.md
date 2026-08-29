@@ -886,4 +886,9 @@ Declare each mode in `execution.variants` and use the profile's active-parameter
 facts; do not use `depends_on` or validate inactive mode fields. Indicator work
 must also be request-gated: common S06 signals and initial stops are shared,
 Chandelier ATR is prepared only for Chandelier rows, and MA arrays are absent.
-Cache identity includes only fields actually consumed by signal/dataprep.
+Cache identity includes only fields actually consumed by signal/dataprep. At
+the execution boundary, pass canonical parsed values rather than the earlier
+raw mapping. Grid fixed-value coercion likewise replaces a field with its
+declared default when it is inactive in every selected variant; if any selected
+variant consumes the field, normal strict coercion still applies. Integer fixed
+values must be finite and exactly integral rather than rounded or truncated.

@@ -99,7 +99,35 @@ def iso_timestamp(value) -> str:
 def tradingview_comparison(reference_id: str) -> dict:
     _, _, rows = load_reference(reference_id)
     run = run_reference(reference_id)
-    result = run.strategy_result
+    trades = run.strategy_result.trades
+    expected_identities = [(row["direction"], row["entry_time_utc"]) for row in rows]
+    actual_identities = [(trade.direction, iso_timestamp(trade.entry_time)) for trade in trades]
+    opcodes = SequenceMatcher(
+        a=expected_identities,
+        b=actual_identities,
+        autojunk=False,
+    ).get_opcodes()
+    matched_indices = [
+        (expected_index, actual_index)
+        for tag, expected_start, expected_stop, actual_start, actual_stop in opcodes
+        if tag == "equal"
+        for expected_index, actual_index in zip(
+            range(expected_start, expected_stop),
+            range(actual_start, actual_stop),
+        )
+    ]
+    unmatched_tradingview = [
+        {"number": index + 1, "identity": expected_identities[index]}
+        for tag, expected_start, expected_stop, _, _ in opcodes
+        if tag in {"delete", "replace"}
+        for index in range(expected_start, expected_stop)
+    ]
+    unmatched_merlin = [
+        {"number": index + 1, "identity": actual_identities[index]}
+        for tag, _, _, actual_start, actual_stop in opcodes
+        if tag in {"insert", "replace"}
+        for index in range(actual_start, actual_stop)
+    ]
     fields = {
         "direction": lambda row, trade: (row["direction"], trade.direction),
         "entry_time": lambda row, trade: (row["entry_time_utc"], iso_timestamp(trade.entry_time)),
@@ -108,11 +136,19 @@ def tradingview_comparison(reference_id: str) -> dict:
     exact = {}
     for name, getter in fields.items():
         mismatches = []
-        for index, (row, trade) in enumerate(zip(rows, result.trades), start=1):
+        for expected_index, actual_index in matched_indices:
+            row, trade = rows[expected_index], trades[actual_index]
             expected, actual = getter(row, trade)
             if expected != actual:
-                mismatches.append((index, expected, actual))
-        exact[name] = {"count": len(mismatches), "first": mismatches[0] if mismatches else None}
+                mismatches.append(
+                    {
+                        "tradingview_number": expected_index + 1,
+                        "merlin_number": actual_index + 1,
+                        "expected": expected,
+                        "actual": actual,
+                    }
+                )
+        exact[name] = {"count": len(mismatches), "mismatches": mismatches}
 
     numeric_fields = {
         "entry_price": ("entry_price_usdt", "entry_price"),
@@ -122,32 +158,42 @@ def tradingview_comparison(reference_id: str) -> dict:
     }
     numeric = {}
     for name, (column, attribute) in numeric_fields.items():
-        deltas = [
-            abs(float(row[column]) - float(getattr(trade, attribute)))
-            for row, trade in zip(rows, result.trades)
-        ]
+        deltas = []
+        for expected_index, actual_index in matched_indices:
+            delta = abs(
+                float(rows[expected_index][column])
+                - float(getattr(trades[actual_index], attribute))
+            )
+            deltas.append((expected_index + 1, actual_index + 1, delta))
+        maximum = max(deltas, key=lambda item: item[2], default=None)
         numeric[name] = {
-            "nonzero": sum(delta > 1e-12 for delta in deltas),
-            "max_abs": max(deltas, default=0.0),
+            "nonzero": sum(delta > 1e-12 for _, _, delta in deltas),
+            "max_abs": maximum[2] if maximum else 0.0,
+            "max_at": maximum[:2] if maximum else None,
+            "above_csv_rounding": [
+                (expected_number, actual_number)
+                for expected_number, actual_number, delta in deltas
+                if delta > {"entry_price": 0.0001, "exit_price": 0.0001, "quantity": 0.01000000000001, "net_pnl": 0.007}[name]
+            ],
         }
     return {
         "reference": reference_id,
         "tradingview_count": len(rows),
-        "merlin_count": result.total_trades,
+        "merlin_count": len(trades),
+        "alignment": opcodes,
+        "matched_count": len(matched_indices),
+        "unmatched_tradingview": unmatched_tradingview,
+        "unmatched_merlin": unmatched_merlin,
         "exact": exact,
         "numeric": numeric,
-        "merlin_net_profit_pct": result.net_profit_pct,
-        "merlin_max_drawdown_pct": result.max_drawdown_pct,
+        "merlin_net_profit_pct": run.strategy_result.net_profit_pct,
+        "merlin_max_drawdown_pct": run.strategy_result.max_drawdown_pct,
         "merlin_max_drawdown_mtm_pct": run.max_drawdown_mtm_pct,
     }
 
 
 def entry_alignment(reference_id: str):
-    _, _, rows = load_reference(reference_id)
-    trades = run_reference(reference_id).strategy_result.trades
-    expected = [(row["direction"], row["entry_time_utc"]) for row in rows]
-    actual = [(trade.direction, iso_timestamp(trade.entry_time)) for trade in trades]
-    return SequenceMatcher(a=expected, b=actual, autojunk=False).get_opcodes()
+    return tradingview_comparison(reference_id)["alignment"]
 
 
 def trade_context(reference_id: str, start: int, stop: int) -> dict:

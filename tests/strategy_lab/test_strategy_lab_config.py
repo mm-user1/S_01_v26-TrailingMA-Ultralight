@@ -21,6 +21,7 @@ from tools.strategy_lab.config import (
     load_run_spec,
     semantic_key_digest,
 )
+from tools.strategy_lab.certify import _matches_frozen_legacy_bracket_plan
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -58,19 +59,56 @@ def test_current_runspec_is_typed_bound_and_identity_checked():
     assert spec.pre_registration_sha256 == "e45105989c8786fe4c36719e616671cfcefad79874ea8d2de26f87bea40d8539"
 
 
-def test_all_six_s06_v064a2_full_policy_specs_are_identity_checked():
-    paths = sorted(RUNSPEC_PATH.parent.glob("s06_v064a2_*.json"))
-    assert len(paths) == 6
-    observed = {}
-    for path in paths:
-        spec = load_run_spec(path)
-        assert spec.strategy_id == "s06_r_trend_v06_4_a2_b2"
-        assert spec.plan is not None
-        assert spec.generation["planning"]["planning_policy"] == "full"
-        assert len(spec.generation["planning"]["enabled_variants"]) == 1
-        assert spec.plan.deduped_candidate_count == spec.generation["planning"]["expected_candidate_count"]
-        observed[path.stem] = spec.plan.deduped_candidate_count
-    assert sorted(observed.values()) == [2400, 2400, 3600, 3600, 6000, 6000]
+RUNSPEC_PAIRINGS = {
+    "s06_v064a2_reversal_r_trail.json": (
+        "Reversal @ Triangle", "R Trail", "r_trail", 3600,
+        "1a2f515d3e0d5d2812220c0492d1e3df2f8f583919328a71d98a23c4a9c4df7b",
+        "5bbf99b35adcfa1769a14cb63b0b70f6baaa000e3dddaac8bc2873d1d27acd39",
+    ),
+    "s06_v064a2_trend_r_trail.json": (
+        "Trend @ Square", "R Trail", "r_trail", 3600,
+        "6e7d29017619e6305744974b6f6a9213d45ae06e540af0c03d9bc72511425b26",
+        "9f393ef677331e84f6caceb37c563c5f58a55d37718309318e09c5d578562b29",
+    ),
+    "s06_v064a2_reversal_chandelier.json": (
+        "Reversal @ Triangle", "Chandelier Exit", "chandelier", 6000,
+        "7cfc2d9be50fa12be793e73cffd52f8b8907a53e9b66de82c61f509cb21d9e04",
+        "168b2a77afc161f8e044fc8299a89ba941ce79d84ba51970beba912499279d6f",
+    ),
+    "s06_v064a2_trend_chandelier.json": (
+        "Trend @ Square", "Chandelier Exit", "chandelier", 6000,
+        "e2ea87062a8d88e6b35cbf8a68e68a0c703aad3f9ac11fb0f108e649dac1ca09",
+        "43644d75e73b2f9d7419e9bb73adf8a1ab3588d781781d3947e618bad1208dc1",
+    ),
+    "s06_v064a2_reversal_fixed_af_sar.json": (
+        "Reversal @ Triangle", "Fixed-AF SAR", "fixed_af_sar", 2400,
+        "fcb0e2529341b897696111863f9424ab44a1527a8aff04c3a4a0eb8ae0c39023",
+        "8de8e2c86c4817073a288d0d41b0d10f676a036bfbfb277a8483f7ae530e641e",
+    ),
+    "s06_v064a2_trend_fixed_af_sar.json": (
+        "Trend @ Square", "Fixed-AF SAR", "fixed_af_sar", 2400,
+        "b10627f2c919247dda6d92c506646370c8a61daf17defb19a95f46f3e2639562",
+        "d59ad55066774eef2183d9cb86b07551ec180a0c187f1c2d97ed315ff7929e32",
+    ),
+}
+
+
+@pytest.mark.parametrize("filename", RUNSPEC_PAIRINGS)
+def test_s06_v064a2_runspec_semantic_pairing_is_exact(filename):
+    entry_mode, trail_mode, variant, count, fingerprint, digest = RUNSPEC_PAIRINGS[filename]
+    spec = load_run_spec(RUNSPEC_PATH.parent / filename)
+    assert spec.plan is not None
+    assert (spec.strategy_id, spec.plan.strategy_version) == (
+        "s06_r_trend_v06_4_a2_b2", "v06-4-a2-b2"
+    )
+    assert spec.generation["planning"]["planning_policy"] == "full"
+    assert spec.generation["planning"]["enabled_variants"] == [variant]
+    base_params = spec.generation["economics"]["base_params"]
+    assert (base_params["entryMode"], base_params["trailMode"]) == (entry_mode, trail_mode)
+    assert spec.plan.deduped_candidate_count == count
+    assert spec.plan.plan_fingerprint == fingerprint
+    assert semantic_key_digest(spec.plan) == digest
+    assert _matches_frozen_legacy_bracket_plan(spec, spec.plan) is False
 
 
 def test_another_registered_v2_strategy_uses_the_same_generic_loader(tmp_path):
