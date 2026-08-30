@@ -13,6 +13,7 @@ from ui.server import app
 
 
 STRATEGY_ID = "s06_r_trend_v06_4_a2_b2"
+_GLOBAL_RUNTIME_PARAMS = {"dateFilter", "start", "end", "warmupBars"}
 
 
 @pytest.fixture
@@ -54,15 +55,48 @@ def _fixed_params() -> dict:
     return params
 
 
-def _grid_request() -> dict:
+def _ui_grid_request(
+    config: dict,
+    *,
+    modes: list[str],
+    enabled_names: set[str] | None = None,
+    fixed_overrides: dict | None = None,
+) -> dict:
+    enabled_params = {}
+    param_ranges = {}
+    param_types = {}
+    fixed_params = {"dateFilter": False, "start": None, "end": None}
+
+    for name, param in config["parameters"].items():
+        param_types[name] = param.get("type", "float")
+        optimize = param.get("optimize") or {}
+        if optimize.get("enabled") is True:
+            checked = (
+                name in enabled_names
+                if enabled_names is not None
+                else optimize.get("default_enabled", True) is not False
+            )
+            enabled_params[name] = checked
+            if checked:
+                param_ranges[name] = [
+                    optimize.get("min", param.get("min", 0)),
+                    optimize.get("max", param.get("max", 100)),
+                    optimize.get("step", param.get("step", 1)),
+                ]
+            elif name not in _GLOBAL_RUNTIME_PARAMS:
+                fixed_params[name] = param.get("default")
+        elif name not in _GLOBAL_RUNTIME_PARAMS:
+            fixed_params[name] = param.get("default")
+
+    fixed_params.update(fixed_overrides or {})
     return {
         "strategy_id": STRATEGY_ID,
         "optimization_mode": "grid",
-        "enabled_params": {"stopLP": True},
-        "param_ranges": {},
-        "param_types": {},
-        "fixed_params": _fixed_params(),
-        "grid_enabled_modes": ["fixed_af_sar"],
+        "enabled_params": enabled_params,
+        "param_ranges": param_ranges,
+        "param_types": param_types,
+        "fixed_params": fixed_params,
+        "grid_enabled_modes": modes,
         "objectives": ["net_profit_pct"],
         "grid_fast_objectives": ["net_profit_pct"],
         "primary_objective": "net_profit_pct",
@@ -73,6 +107,15 @@ def _grid_request() -> dict:
         "worker_processes": 1,
         "warmupBars": 120,
     }
+
+
+def _grid_request() -> dict:
+    return _ui_grid_request(
+        get_strategy_config(STRATEGY_ID),
+        modes=["fixed_af_sar"],
+        enabled_names={"stopLP"},
+        fixed_overrides=_fixed_params(),
+    )
 
 
 def test_new_strategy_discovery_dynamic_config_and_grid_preview(client):
@@ -86,6 +129,39 @@ def test_new_strategy_discovery_dynamic_config_and_grid_preview(client):
     assert config["parameters"]["trailMode"]["options"] == [
         "Off (Bracket)", "R Trail", "Chandelier Exit", "Fixed-AF SAR"
     ]
+    assert config["parameters"]["trailMode"]["optimize"]["enabled"] is False
+
+    r_trail_request = _ui_grid_request(config, modes=["r_trail"])
+    assert "trailMode" not in r_trail_request["enabled_params"]
+    assert r_trail_request["fixed_params"]["trailMode"] == "R Trail"
+    r_trail_response = client.post("/api/grid/preview", json=r_trail_request)
+    assert r_trail_response.status_code == 200
+    r_trail_preview = r_trail_response.get_json()["preview"]
+    assert r_trail_preview["full_candidate_count"] == 3600
+    assert [row["mode"] for row in r_trail_preview["modes"]] == ["r_trail"]
+
+    combined_request = _ui_grid_request(
+        config, modes=["r_trail", "chandelier"]
+    )
+    combined_response = client.post("/api/grid/preview", json=combined_request)
+    assert combined_response.status_code == 200
+    combined_preview = combined_response.get_json()["preview"]
+    assert combined_preview["full_candidate_count"] == 9600
+    assert [row["mode"] for row in combined_preview["modes"]] == [
+        "r_trail", "chandelier"
+    ]
+
+    malformed_request = _ui_grid_request(config, modes=["r_trail"])
+    malformed_request["enabled_params"]["trailMode"] = True
+    malformed_request["param_ranges"]["trailMode"] = {
+        "type": "select",
+        "values": ["R Trail"],
+    }
+    malformed_response = client.post("/api/grid/preview", json=malformed_request)
+    assert malformed_response.status_code == 400
+    assert malformed_response.get_json()["error"] == (
+        "Grid V2 axis 'trailMode' is not an optimized non-runtime parameter."
+    )
 
     preview_response = client.post("/api/grid/preview", json=_grid_request())
     assert preview_response.status_code == 200
@@ -121,6 +197,8 @@ def test_bounded_fixed_grid_wfa_queue_storage_results_and_analytics_round_trip(
     queued = client.get("/api/queue").get_json()["items"][0]
     queued_fixed = queued["config"]["fixed_params"]
     assert queued["strategyId"] == STRATEGY_ID
+    assert "trailMode" not in queued["config"]["enabled_params"]
+    assert queued["config"]["grid_enabled_modes"] == ["fixed_af_sar"]
     assert queued_fixed["entryMode"] == "Trend @ Square"
     assert queued_fixed["trailMode"] == "Fixed-AF SAR"
     assert queued_fixed["trailRR"] == 1.5

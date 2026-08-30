@@ -176,8 +176,8 @@ class S06V064A2Params:
         if not 1 <= self.thresholdOS <= 50 or not 1 <= self.thresholdOB <= 50:
             raise ValueError("thresholdOS and thresholdOB must be between 1 and 50.")
         _finite_in_range("stopX", self.stopX, 1.0, 3.0)
-        if self.stopLP not in {2, 4}:
-            raise ValueError("stopLP must be 2 or 4.")
+        if self.stopLP <= 0:
+            raise ValueError("stopLP must be a positive integer.")
         _finite_in_range("stopMaxPct", self.stopMaxPct, 2.0, 8.0)
         if self.stopMaxDays not in {2, 4, 6}:
             raise ValueError("stopMaxDays must be 2, 4, or 6.")

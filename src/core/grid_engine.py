@@ -513,23 +513,12 @@ def _settings_from_config(config: OptimizationConfig) -> GridSettings:
 
 
 def _grid_v2_settings_from_config(config: OptimizationConfig):
-    from strategies import get_strategy_config
-
     from .grid_v2 import GridV2Settings
 
-    strategy_config = get_strategy_config(config.strategy_id)
-    parameter_specs = strategy_config.get("parameters", {}) if isinstance(strategy_config, Mapping) else {}
-    optimized_names = {
-        str(name)
-        for name, spec in parameter_specs.items()
-        if isinstance(spec, Mapping)
-        and isinstance(spec.get("optimize", {}), Mapping)
-        and bool(spec.get("optimize", {}).get("enabled", False))
-    }
     enabled_params = getattr(config, "enabled_params", {}) or {}
     enabled_axes = tuple(
         name for name, enabled in enabled_params.items()
-        if bool(enabled) and str(name) in optimized_names
+        if bool(enabled)
     )
     enabled_variants = tuple(getattr(config, "grid_enabled_modes", []) or ()) or None
     compiled_workers = max(1, int(getattr(config, "worker_processes", 1) or 1))

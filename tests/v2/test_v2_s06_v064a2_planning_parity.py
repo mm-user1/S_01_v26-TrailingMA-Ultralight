@@ -64,6 +64,23 @@ def test_full_counts_identities_uniqueness_and_preview_parity(variants):
     assert keys is not None and len(keys) == len(set(keys)) == count
 
 
+def test_r_trail_and_chandelier_combined_count_is_unchanged():
+    settings = GridV2Settings(enabled_variants=("r_trail", "chandelier"))
+    plan = build_grid_v2_plan(CONFIG, settings)
+    preview = preview_grid_v2_counts(CONFIG, settings)
+
+    assert plan.deduped_candidate_count == preview.planned_candidate_count == 9_600
+
+
+def test_stop_lp_current_grid_domain_remains_exactly_two_and_four():
+    declaration = CONFIG["parameters"]["stopLP"]
+    assert (declaration["min"], declaration["max"], declaration["step"]) == (2, 4, 2)
+    assert declaration["optimize"] == {"enabled": True, "min": 2, "max": 4, "step": 2}
+
+    plan = build_grid_v2_plan(CONFIG, GridV2Settings(enabled_variants=("bracket",)))
+    assert plan.parameter_domains["stopLP"].values == (2, 4)
+
+
 @pytest.mark.parametrize("budget", list(SAMPLED_PINS))
 def test_sampled_boundary_membership_and_order_are_pinned(budget):
     settings = GridV2Settings(planning_policy="sampled", requested_budget=budget, seed=42)

@@ -121,6 +121,9 @@ Declare `execution` with:
   metadata.
 
 `variantSelector.userFacing` defaults to `true` for backward compatibility.
+A user-facing `variantSelector` is selected through Grid modes and must not be
+declared as an ordinary optimizable parameter axis. The selector parameter may
+still retain its fixed/default value for direct strategy configuration.
 Set it to `false` only when variants are internal execution variants controlled
 by a normal strategy parameter, not user-selectable Grid modes. For example,
 S03-like Emergency SL strategies map `useEmergencySL=false/true` to internal

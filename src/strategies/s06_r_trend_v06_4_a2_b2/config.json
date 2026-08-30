@@ -213,7 +213,7 @@
       "options": ["Off (Bracket)", "R Trail", "Chandelier Exit", "Fixed-AF SAR"],
       "group": "Trailing",
       "role": "execution",
-      "optimize": { "enabled": true }
+      "optimize": { "enabled": false }
     },
     "trailRR": {
       "type": "float",

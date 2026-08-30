@@ -60,6 +60,16 @@ def test_identity_profile_mapping_and_active_only_bindings_are_exact():
     assert config["parameters"]["trailMode"]["options"] == [
         "Off (Bracket)", "R Trail", "Chandelier Exit", "Fixed-AF SAR"
     ]
+    assert config["parameters"]["trailMode"]["optimize"] == {"enabled": False}
+    assert config["execution"]["variantSelector"] == {
+        "param": "trailMode",
+        "mapping": {
+            "Off (Bracket)": "bracket",
+            "R Trail": "r_trail",
+            "Chandelier Exit": "chandelier",
+            "Fixed-AF SAR": "fixed_af_sar",
+        },
+    }
     assert list(profile.variants) == ["bracket", "r_trail", "chandelier", "fixed_af_sar"]
     assert profile.validation_warnings == ()
     assert all("depends_on" not in spec for spec in config["parameters"].values())
@@ -159,7 +169,7 @@ def test_direct_execution_rejects_malformed_active_fields(trail_mode, field):
         )
 
 
-@pytest.mark.parametrize("value", [2, 4, 2.0, 4.0, "2", "2.0"])
+@pytest.mark.parametrize("value", [2, 3, 4, 5, 2.0, 3.0, 5.0, "2", "2.0", "3", "5.0"])
 def test_stop_lp_exact_integral_forms_pass_parser_and_direct_execution(value):
     assert S06V064A2Params.from_dict({"stopLP": value}).stopLP == int(float(value))
     strategy.S06RTrendV064A2B2.run(
@@ -170,9 +180,11 @@ def test_stop_lp_exact_integral_forms_pass_parser_and_direct_execution(value):
 
 @pytest.mark.parametrize(
     "value",
-    [2.9, "2.9", True, False, float("nan"), float("inf"), float("-inf"), "bad"],
+    [0, -1, 2.9, "2.9", True, False, float("nan"), float("inf"), float("-inf"), "bad"],
 )
-def test_stop_lp_fractional_boolean_nonfinite_and_nonnumeric_forms_are_rejected(value):
+def test_stop_lp_nonpositive_fractional_boolean_nonfinite_and_nonnumeric_forms_are_rejected(
+    value,
+):
     with pytest.raises(ValueError, match="stopLP"):
         S06V064A2Params.from_dict({"stopLP": value})
     with pytest.raises(ValueError, match="stopLP"):
