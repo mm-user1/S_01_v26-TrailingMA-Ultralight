@@ -976,6 +976,8 @@ function getWorkerProcessesValue() {
 }
 
 function getOptimizerMode() {
+  const engine = String(window.currentStrategyConfig?.engine || 'v1').trim().toLowerCase();
+  if (engine === 'v2') return 'grid';
   const selected = document.querySelector('input[name="optimizerMode"]:checked');
   return selected && selected.value === 'grid' ? 'grid' : 'optuna';
 }
@@ -2439,19 +2441,41 @@ function syncGridObjectiveAndConstraintUi() {
 }
 
 function syncOptimizerModeUI() {
-  if (!window.currentStrategyConfig) return;
-  const mode = getOptimizerMode();
-  const isGrid = mode === 'grid';
+  const strategyConfig = window.currentStrategyConfig;
+  const isV2 = String(strategyConfig?.engine || 'v1').trim().toLowerCase() === 'v2';
   const gridSettings = document.getElementById('gridSettings');
   const optunaSettings = document.getElementById('optunaSettings');
   const gridRadio = document.getElementById('optimizerModeGrid');
+  const optunaRadio = document.getElementById('optimizerModeOptuna');
+  const optunaLabel = document.getElementById('optimizerModeOptunaLabel');
   const gridHelp = document.getElementById('gridModeHelp');
+
+  if (optunaLabel) optunaLabel.style.display = isV2 ? 'none' : '';
+  if (optunaRadio) optunaRadio.disabled = isV2;
+
+  if (!strategyConfig) {
+    if (optunaRadio) {
+      optunaRadio.disabled = false;
+      optunaRadio.checked = true;
+    }
+    if (gridRadio) gridRadio.checked = false;
+    if (gridHelp) gridHelp.textContent = '';
+    if (gridSettings) gridSettings.style.display = 'none';
+    if (optunaSettings) optunaSettings.style.display = 'block';
+    return;
+  }
+
+  if (isV2) {
+    if (gridRadio) gridRadio.checked = true;
+    if (optunaRadio) optunaRadio.checked = false;
+  }
+
   const gridMeta = getEnabledGridMetadata();
 
   if (gridRadio) {
     gridRadio.disabled = !gridMeta.available;
-    if (!gridMeta.available && gridRadio.checked) {
-      document.getElementById('optimizerModeOptuna').checked = true;
+    if (!isV2 && !gridMeta.available && gridRadio.checked && optunaRadio) {
+      optunaRadio.checked = true;
     }
   }
 

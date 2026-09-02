@@ -1,6 +1,6 @@
 # Merlin
 
-Config-driven backtesting and Optuna optimization platform for cryptocurrency trading strategies with SQLite database persistence and web-based studies management.
+Config-driven backtesting and optimization platform for cryptocurrency trading strategies with SQLite database persistence and web-based studies management.
 
 ## Features
 
@@ -8,7 +8,7 @@ Config-driven backtesting and Optuna optimization platform for cryptocurrency tr
 - **Multi-database support** - Multiple `.db` files with active DB switching
 - **Studies browser** - Web UI for browsing, opening, and managing historical optimization studies
 - **Multi-strategy support** - S01 Trailing MA, S03 Reversal, S04 StochRSI, and S06 R-Trend included, easily extensible
-- **Optuna optimization** - Single- and multi-objective optimization (1-6 objectives) with Pareto front results, primary-objective sorting, and multiple samplers (Random, TPE/MOTPE, NSGA-II/NSGA-III)
+- **Optuna optimization (Backtester V1)** - Single- and multi-objective optimization (1-6 objectives) with Pareto front results, primary-objective sorting, and multiple samplers (Random, TPE/MOTPE, NSGA-II/NSGA-III). Backtester V2 is Grid-only for new optimization and WFA requests; historical V2 Optuna studies remain readable and replayable.
 - **Grid optimization** - Legacy V1 backends retain strategy-owned generation;
   Backtester V2 supports exact full enumeration or generic deterministic
   budgeted planning across ordered logical blocks
@@ -55,7 +55,9 @@ Trail-only Optuna/WFA studies because it is inactive in Trail mode.
 Imported Backtester V2 strategies use the core-owned Grid V2 planner. Its
 `full` policy preserves the certified historical candidate population and
 order; its `sampled` policy uses deterministic balanced discrete LHS when the
-requested budget is smaller than the valid space.
+requested budget is smaller than the valid space. New V2 optimization and WFA
+requests must carry explicit `optimization_mode="grid"`; Optuna remains
+available for Backtester V1.
 
 ## Project Structure
 
@@ -84,12 +86,12 @@ project-root/
 1. Browse and select OHLCV CSV data (or use included `data/raw/OKX_LINKUSDT.P, 15 2025.05.01-2025.11.20.csv`)
 2. Select strategy from dropdown
 3. Configure parameters via dynamic form
-4. Pick optimizer mode (Optuna or Grid) and configure strategy-appropriate Grid modes or sampling controls
-5. Enable Initial Search Coverage mode (Optuna) for systematic parameter space exploration
+4. For Backtester V1, pick Optuna or Grid; Backtester V2 selects Grid automatically. Configure strategy-appropriate Grid modes or sampling controls.
+5. For Backtester V1 Optuna, optionally enable Initial Search Coverage for systematic parameter space exploration
 6. Preview Grid parameter space (mode allocation, coverage) before running
 7. Toggle trial-level logging on/off
 8. Preview WFA window layout and configure adaptive triggers + cooldown
-9. Run Optuna, Grid, or Walk-Forward Analysis (fixed or adaptive)
+9. Run Backtester V1 Optuna/Grid or Backtester V2 Grid, or Walk-Forward Analysis (fixed or adaptive)
 10. Queue multiple runs for sequential execution
 11. Results automatically saved to database
 

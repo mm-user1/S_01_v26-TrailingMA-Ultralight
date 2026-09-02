@@ -50,6 +50,9 @@ function clearStrategyGeneratedState() {
     window.lastGridPreview = null;
     window.lastGridPreviewConfigKey = null;
   }
+  if (typeof syncOptimizerModeUI === 'function') {
+    syncOptimizerModeUI();
+  }
 }
 
 function shouldRenderDynamicBacktestParam(paramName, paramDef = {}) {

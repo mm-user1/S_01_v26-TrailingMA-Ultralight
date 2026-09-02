@@ -163,16 +163,16 @@ project-root/
      - `WFConfig`, `WFResult`, `WindowResult`, `WindowSplit`, `StitchWindow`, `TriggerResult`, `ISPipelineResult`, `WindowExecutionPlan`, `OOSStitchedResult` -> `walkforward_engine.py`
      - Strategy params dataclass -> each strategy's `strategy.py`
 
-4. **Dual Optimizer Modes (Optuna + Grid)**
-   - Two optimization modes share constraints, objectives, scoring, and the `trials` table:
-     - **Optuna** (Bayesian/evolutionary): single- and multi-objective (1-6 objectives), Pareto front, soft constraints, samplers (Random, TPE/MOTPE, NSGA-II, NSGA-III), budgets (n_trials/timeout/patience), pruning (single-objective only), Initial Search Coverage, trial deduplication.
+4. **Optimizer Policy (Optuna + Grid)**
+   - The optimization modes share constraints, objectives, scoring, and the `trials` table, with an engine-generation boundary:
+     - **Optuna (Backtester V1 only for new runs)** (Bayesian/evolutionary): single- and multi-objective (1-6 objectives), Pareto front, soft constraints, samplers (Random, TPE/MOTPE, NSGA-II, NSGA-III), budgets (n_trials/timeout/patience), pruning (single-objective only), Initial Search Coverage, trial deduplication. Historical V2 Optuna studies remain readable and replayable.
      - **Grid** (deterministic): shared discovery/ranking/storage supports two planning generations. Backtester V1 dispatches to strategy-owned `fast_grid.py` backends: S03 v10/v11 retain budgeted seeded LHS/full generation for `cc_only`/`tbands_only`/`both`, while S06 retains 100% enumeration for selectable `bracket`/`trail` modes (48,480 default combinations; up to 436,320 with optional Threshold OS/OB axes). Backtester V2 uses a generic core-owned planner with explicit `full|sampled` policy. Full preserves the certified historical population/order; sampled allocates a bounded budget across ordered logical blocks and uses deterministic balanced discrete LHS in O(K) planning memory. The static `full_enumeration_v2` backend profile does not imply the effective policy of a run. Both generations share objectives, soft constraints, ranking, storage, selected-candidate reference validation, and slow-authoritative WFA OOS execution. Annualized UTC Daily Sharpe is request-gated and Fast-only; the existing Monthly Sharpe remains a distinct objective.
    - **Bool group rules**: strategy `config.json` can declare invalid boolean combinations (e.g., `at_least_one_true`) to reduce wasted trials
    - **Parameter dependencies**: numeric params can declare `depends_on` to be skipped when a parent bool is false
    - **In-memory backend**: `InMemoryJournalBackend` replaces file-based journal storage for faster multiprocess Optuna optimization
    - **Trial log switch**: `trials_log` flag controls Optuna trial-level INFO logging (togglable from UI)
    - **Robust trial handling**: NaN objectives mark a trial FAIL (study continues); failed trials are ignored by samplers
-   - Both modes save the same shape into `trials` (with `optimization_mode` and grid-specific columns such as `grid_mode_name` distinguishing rows)
+   - Backtester V1 Optuna/Grid and new V2 Grid save the same shape into `trials` (with `optimization_mode` and grid-specific columns such as `grid_mode_name` distinguishing rows)
 
 5. **Database Persistence**
    - All optimization results automatically saved to SQLite database
@@ -298,7 +298,7 @@ Strategies auto-discovered by `strategies/__init__.py` if both files exist.
 - `server_routes_analytics.py` - Analytics page + WFA summary API endpoint
 
 **Frontend (JavaScript):**
-- `templates/index.html` - Start page: strategy configuration, optimizer mode (Optuna/Grid), coverage mode, trials log toggle, Grid preview, fixed day/calendar-month WFA settings (with day-only adaptive cooldown), optimization launch, run queue
+- `templates/index.html` - Start page: strategy configuration, V1 Optuna/Grid or V2 Grid-only optimizer selection, coverage mode, trials log toggle, Grid preview, fixed day/calendar-month WFA settings (with day-only adaptive cooldown), optimization launch, run queue
 - `templates/results.html` - Results page: studies browser, trials/windows display, trade downloads
 - `templates/analytics.html` - Analytics page: WFA research, multi-study comparison, filtering
 - `static/js/main.js` - Start page logic and form handling
@@ -319,11 +319,11 @@ Strategies auto-discovered by `strategies/__init__.py` if both files exist.
 
 ### Data Flow
 
-#### Optimization Flow (Optuna / Grid / WFA)
+#### Optimization Flow (V1 Optuna/Grid; V2 Grid; WFA)
 ```
 Start Page (index.html)
   -> User submits optimization (direct or via queue)
-  -> server_routes_run.py builds OptimizationConfig (mode = optuna | grid | wfa)
+  -> server_routes_run.py builds OptimizationConfig (V1: optuna|grid|wfa; V2: grid|wfa)
   -> optuna_engine | grid_engine | walkforward_engine (fixed or adaptive)
        Grid path: grid_engine -> strategies/<id>/fast_grid.py (fast pass) -> backtest_engine (slow pass)
   -> strategy (s01/s03/s04/...) + indicators
@@ -466,7 +466,7 @@ SQLite database stored in `src/storage/` directory. Multiple `.db` files support
 |----------|--------|---------|
 | `/api/backtest` | POST | Run single backtest (no storage) |
 | `/api/backtest/trades` | POST | Download trades CSV for single backtest |
-| `/api/optimize` | POST | Run Optuna or Grid optimization (chosen by `optimization_mode`/`optimizer_mode`), save to database |
+| `/api/optimize` | POST | Run optimization selected by canonical request field `optimization_mode`; V1 accepts Optuna/Grid and V2 requires explicit Grid. `optimizer_mode` is stored metadata, not a request alias. |
 | `/api/grid/preview` | POST | Preview Grid parameter space, mode allocation and coverage without running |
 | `/api/walkforward` | POST | Run WFA (fixed or adaptive mode), save to database |
 | `/api/optimization/status` | GET | Get current optimization state |

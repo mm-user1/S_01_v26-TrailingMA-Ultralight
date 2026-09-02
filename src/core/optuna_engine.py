@@ -3376,11 +3376,26 @@ class OptunaOptimizer:
         return self.trial_results
 
 
+def _require_optuna_supported_strategy(strategy_id: str) -> None:
+    """Reject new V2 Optuna execution at the public core boundary."""
+
+    from strategies import get_strategy_config
+
+    strategy_config = get_strategy_config(strategy_id)
+    engine = str(strategy_config.get("engine", "v1") or "v1").strip().lower()
+    if engine == "v2":
+        raise ValueError(
+            f"{strategy_id}: Backtester V2 is Grid-only; Optuna is unsupported "
+            "for new Backtester V2 optimization."
+        )
+
+
 def run_optuna_optimization(
     base_config, optuna_config: OptunaConfig
 ) -> Tuple[List[OptimizationResult], Optional[str]]:
     """Execute Optuna optimisation using the provided configuration."""
 
+    _require_optuna_supported_strategy(base_config.strategy_id)
     optimizer = OptunaOptimizer(base_config, optuna_config)
     results = optimizer.optimize()
     setattr(base_config, "optuna_all_results", getattr(optimizer, "all_trial_results", list(results)))
@@ -3419,6 +3434,7 @@ def run_optimization(config: OptimizationConfig) -> Tuple[List[OptimizationResul
     if optimizer_mode != "optuna":
         raise ValueError(f"Unsupported optimization mode: {optimizer_mode}")
 
+    _require_optuna_supported_strategy(config.strategy_id)
     objectives = getattr(config, "objectives", None) or getattr(config, "optuna_objectives", None) or []
     primary_objective = getattr(config, "primary_objective", None)
     constraints_payload = getattr(config, "constraints", None) or []

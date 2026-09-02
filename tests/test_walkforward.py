@@ -1241,6 +1241,70 @@ def test_run_optuna_on_window_forwards_coverage_mode(monkeypatch):
     assert captured["optuna_cfg"].warmup_trials == 33
 
 
+def test_v2_wfa_legacy_optuna_branch_is_guarded_with_wfa_window_mode(monkeypatch):
+    from core.optuna_engine import run_optuna_optimization as guarded_core_run
+
+    index = pd.date_range("2025-01-01", periods=12, freq="D", tz="UTC")
+    df = pd.DataFrame(
+        {"Open": 1.0, "High": 1.1, "Low": 0.9, "Close": 1.0, "Volume": 100.0},
+        index=index,
+    )
+    base_template = {
+        "optimization_mode": "optuna",
+        "enabled_params": {},
+        "param_ranges": {},
+        "param_types": {},
+        "fixed_params": {"dateFilter": False},
+        "risk_per_trade_pct": 2.0,
+        "contract_size": 0.01,
+        "commission_rate": 0.0005,
+        "worker_processes": 1,
+        "filter_min_profit": False,
+        "min_profit_threshold": 0.0,
+        "score_config": {},
+        "objectives": ["net_profit_pct"],
+        "primary_objective": "net_profit_pct",
+        "constraints": [],
+    }
+    optuna_settings = {
+        "objectives": ["net_profit_pct"],
+        "primary_objective": "net_profit_pct",
+        "constraints": [],
+        "budget_mode": "trials",
+        "n_trials": 1,
+        "time_limit": 60,
+        "convergence_patience": 10,
+        "enable_pruning": False,
+        "sampler": "tpe",
+        "pruner": "none",
+    }
+    engine = WalkForwardEngine(
+        WFConfig(
+            strategy_id="s06_r_trend_v02_b2",
+            is_period_days=5,
+            oos_period_days=2,
+            warmup_bars=1000,
+        ),
+        base_template,
+        optuna_settings,
+    )
+    captured_modes = []
+
+    def capture_window_mode(base_config, optuna_config):
+        captured_modes.append(base_config.optimization_mode)
+        return guarded_core_run(base_config, optuna_config)
+
+    monkeypatch.setattr(
+        "core.walkforward_engine.run_optuna_optimization",
+        capture_window_mode,
+    )
+
+    with pytest.raises(ValueError, match="Backtester V2 is Grid-only"):
+        engine._run_optuna_on_window(df, index[0], index[5])
+
+    assert captured_modes == ["wfa"]
+
+
 @pytest.mark.slow
 def test_run_optuna_on_window_multiprocess_uses_in_memory_worker_csv():
     data_path = Path(__file__).parent.parent / "data" / "raw" / "OKX_LINKUSDT.P, 15 2025.05.01-2025.11.20.csv"

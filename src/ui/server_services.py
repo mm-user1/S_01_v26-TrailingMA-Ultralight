@@ -1277,6 +1277,24 @@ def _normalize_v2_optimizer_payload(
     missing_date_filter: bool = False,
 ) -> Tuple[Dict[str, Any], ResolvedV2Runtime]:
     _require_valid_v2_context(context)
+    optimization_mode = payload.get("optimization_mode")
+    normalized_mode = (
+        optimization_mode.strip().lower()
+        if isinstance(optimization_mode, str)
+        else ""
+    )
+    if "optimization_mode" not in payload or normalized_mode != "grid":
+        raise _validation_error(
+            code="V2_GRID_ONLY_OPTIMIZER",
+            strategy_id=context.strategy_id,
+            path="optimization_mode",
+            message=(
+                f"{context.strategy_id}: Backtester V2 supports Grid optimization "
+                "only; set optimization_mode='grid'."
+            ),
+        )
+    payload = deepcopy(payload)
+    payload["optimization_mode"] = normalized_mode
     _validate_v2_optimizer_runtime_paths(context, payload)
     fixed_params = payload.get("fixed_params")
     runtime_members = _runtime_members_from_mapping(fixed_params, prefix="fixed_params")

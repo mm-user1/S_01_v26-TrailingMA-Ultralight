@@ -9,7 +9,9 @@ strategy signals/dataprep -> generic V2 execution profile -> core V2 runner/Grid
 The strategy owns indicators, causal signal arrays, parameter normalization,
 and any aligned dataprep arrays required by the declared execution profile.
 Core V2 owns fills, sizing, stops, targets, trails, guardrails, metrics, and
-Grid execution. Grid V2 owns candidate enumeration and batch screening.
+Grid execution. Grid V2 owns candidate enumeration and batch screening. Every
+new Backtester V2 strategy is Grid-only for optimization and WFA: callers must
+send explicit `optimization_mode="grid"`. Do not add an Optuna smoke path.
 
 ## Package Layout
 
@@ -217,7 +219,9 @@ compatibility projection, not the UI authority.
 
 The Phase-A server boundary resolves strategy identity before V2 runtime
 normalization for config readiness, Grid Preview, direct Backtest/trade
-download, and direct Optuna/Grid. Run endpoints accept only their documented
+download, and direct optimization/Grid. V2 optimization and WFA reject missing,
+blank, null, non-string, or non-Grid `optimization_mode` before runtime-axis,
+dataset, optimizer, state, or storage work. Run endpoints accept only their documented
 strategy aliases and require one non-empty value; equal aliases agree, empty
 aliases do not override a real value, and distinct non-empty aliases fail with
 `V2_CONFLICTING_STRATEGY_ID`. Missing and unknown identities use
@@ -266,7 +270,7 @@ runtime shapes remain unchanged.
 
 The Start page accepts a strategy config only after the response for the exact
 selected strategy has rendered successfully. While a config is loading or
-after it fails, direct Backtest/trade download, Optuna/Grid/WFA, Queue-item
+after it fails, direct Backtest/trade download, Grid/WFA, Queue-item
 creation, and automatic Grid Preview are blocked. Starting a load clears stale
 strategy-generated fields, strategy information, and Preview state while
 preserving global CSV, date/Warmup, database, budget, WFA, Queue, and Preset
@@ -526,7 +530,7 @@ not a rebase field.
 The WFA HTTP boundary passes raw `worker_processes` (including the accepted
 camel-case compatibility field) to the shared optimization-config builder; do
 not add a strategy-specific worker policy. The builder's normalized value is
-the common Grid, Optuna, Forward Test, and replay resource. New Grid V2 WFA
+    the common Grid, legacy Optuna, Forward Test, and replay resource. New Grid V2 WFA
 window diagnostics store that run's actual compiled workers and the exact
 top-level `grid_v2_plan_fingerprint`. Selected WFA Grid trials retain Fast
 `grid_rank`, `semantic_key`, and `candidate_id`; direct Grid V2 storage uses the
@@ -612,6 +616,8 @@ Add focused tests for every new V2 strategy:
 - no repainting/window-start invariance;
 - direct strategy discovery and `run()` smoke;
 - direct V2 run smoke for representative params;
+- V2 Grid-only boundary coverage, including explicit Grid acceptance and
+  deterministic rejection of missing/blank/null/Optuna modes before side effects;
 - Grid V2 count and identity smoke;
 - one-candidate and multi-candidate Grid V2 parity against direct V2 runs;
 - compiled-vs-reference Grid V2 subset parity when Numba is available;
@@ -737,14 +743,15 @@ repeatable.
 
 ## Persisted Runtime And Stored Execution
 
-Every newly saved V2 Optuna, Grid, or WFA study carries one request-level
+Every newly saved V2 Grid or WFA study carries one request-level
 `config_json.v2_runtime` envelope with schema `v2_runtime_metadata_v1` and
 contract `v2_runtime_contract_v1`. Its complete `values` mapping is ordered as
 `dateFilter`, `start`, `end`, `warmupBars`; diagnostics retain `info`, while
 `validation_warnings` is the warning-only ordered projection. V1 writers omit
 the key entirely. The envelope is transported by `OptimizationConfig` for
 direct runs and by the WFA base template; per-window configs deliberately omit
-it.
+it. Historical V2 Optuna studies remain readable and replayable without
+migration or rewrite.
 
 Stored reads prefer valid current metadata, then legacy fixed-param dates,
 then a non-NULL study Warmup, then a non-NULL config Warmup, and finally core
@@ -829,7 +836,7 @@ variance, or standard deviation below `1e-10`.
 
 Fast requests are execution-only and must not enter semantic identity, plan
 fingerprints, sampling, or cache identity. The UI exposes eight common Fast
-controls but permits at most six selected; Optuna keeps its separate cap.
+controls but permits at most six selected; Backtester V1 Optuna keeps its separate cap.
 Daily Sharpe is Fast-only. Non-finite selected objectives are
 removed from direct Grid and WFA ranking; a short WFA window can therefore
 exclude many SQN candidates. Sortino, Ulcer Index, and Consistency stay
@@ -875,7 +882,7 @@ population, each candidate keeps constant streaming state, and output columns
 23..25 transport the ratio and exact diagnostics. Selected results validate all
 three fields against the canonical reference; the reference-only compounding
 self-check is intentionally not duplicated in the kernels. Public Grid and
-Optuna derive the request from selected objectives, and generic Queue transport
+legacy Backtester V1 Optuna derive the request from selected objectives, and generic Queue transport
 preserves it. Final WFA reporting always requests the metric for real IS and
 real undelayed dense OOS series; delayed/no-trade OOS facts are suppressed.
 Nullable storage preserves historical absence without backfill. DSR, stitched

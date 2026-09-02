@@ -18,7 +18,10 @@ from core.optuna_engine import (  # noqa: E402
     OptunaConfig,
     OptunaOptimizer,
     SamplerConfig,
+    run_optimization,
+    run_optuna_optimization,
 )
+from strategies import get_strategy_config, list_strategies  # noqa: E402
 
 DATA_PATH = (
     Path(__file__).parent.parent
@@ -26,6 +29,89 @@ DATA_PATH = (
     / "raw"
     / "OKX_LINKUSDT.P, 15 2025.05.01-2025.11.20.csv"
 )
+
+
+def _minimal_optimization_config(strategy_id, *, mode="optuna"):
+    config = OptimizationConfig(
+        csv_file=str(DATA_PATH),
+        strategy_id=strategy_id,
+        enabled_params={},
+        param_ranges={},
+        param_types={},
+        fixed_params={},
+        worker_processes=1,
+        optimization_mode=mode,
+        objectives=["net_profit_pct"],
+        primary_objective="net_profit_pct",
+    )
+    config.optuna_n_trials = 1
+    config.optuna_enable_pruning = False
+    return config
+
+
+@pytest.mark.parametrize(
+    "strategy_id",
+    [
+        item["id"]
+        for item in list_strategies()
+        if str(get_strategy_config(item["id"]).get("engine", "v1")).strip().lower()
+        == "v2"
+    ],
+)
+def test_every_registered_v2_strategy_is_blocked_at_direct_optuna_boundary(
+    monkeypatch, strategy_id
+):
+    import core.optuna_engine as optuna_engine
+
+    monkeypatch.setattr(
+        optuna_engine,
+        "OptunaOptimizer",
+        lambda *_args, **_kwargs: pytest.fail("OptunaOptimizer must not be constructed"),
+    )
+    with pytest.raises(ValueError, match="Backtester V2 is Grid-only"):
+        run_optuna_optimization(
+            _minimal_optimization_config(strategy_id),
+            OptunaConfig(objectives=["net_profit_pct"], n_trials=1),
+        )
+
+
+def test_v2_generic_optuna_dispatch_is_blocked_before_optuna_configuration(monkeypatch):
+    import core.optuna_engine as optuna_engine
+
+    monkeypatch.setattr(
+        optuna_engine,
+        "run_optuna_optimization",
+        lambda *_args, **_kwargs: pytest.fail("Optuna dispatch must not start"),
+    )
+    with pytest.raises(ValueError, match="Optuna is unsupported"):
+        run_optimization(_minimal_optimization_config("s06_r_trend_v02_b2"))
+
+
+def test_v1_public_optuna_dispatch_still_executes_actual_optimizer():
+    config = OptimizationConfig(
+        csv_file=str(DATA_PATH),
+        strategy_id="s01_trailing_ma",
+        enabled_params={"maType": True},
+        param_ranges={},
+        param_types={"maType": "select"},
+        fixed_params={
+            "maType_options": ["EMA"],
+            "closeCountLong": 2,
+            "closeCountShort": 2,
+        },
+        worker_processes=1,
+        optimization_mode="optuna",
+        objectives=["net_profit_pct"],
+        primary_objective="net_profit_pct",
+    )
+    config.optuna_n_trials = 1
+    config.optuna_enable_pruning = False
+    config.sampler_type = "random"
+
+    results, study_id = run_optimization(config)
+
+    assert len(results) == 1
+    assert study_id
 
 
 @pytest.mark.slow

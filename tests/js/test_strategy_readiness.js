@@ -14,6 +14,10 @@ const uiHandlersSource = fs.readFileSync(
   path.join(repoRoot, 'src', 'ui', 'static', 'js', 'ui-handlers.js'),
   'utf8',
 );
+const presetsSource = fs.readFileSync(
+  path.join(repoRoot, 'src', 'ui', 'static', 'js', 'presets.js'),
+  'utf8',
+);
 
 function functionSource(fullSource, signature, nextSignature) {
   const start = fullSource.indexOf(signature);
@@ -54,7 +58,8 @@ const elements = new Map();
   'strategyName', 'strategyVersion', 'strategyDescription', 'strategyParamCount',
   'gridPreviewSummary', 'gridPreviewRows', 'gridPreviewError',
   'gridEnabledModes', 'gridV2ManualAllocation',
-  'optimizerModeGrid', 'optimizerModeOptuna', 'gridSettings', 'optunaSettings', 'gridModeHelp',
+  'optimizerModeGrid', 'optimizerModeOptuna', 'optimizerModeOptunaLabel',
+  'gridSettings', 'optunaSettings', 'optunaTrials', 'gridModeHelp',
   'dateFilter', 'startDate', 'startTime', 'endDate', 'endTime', 'warmupBars',
   'csvDirectory', 'dbTarget', 'gridBudget', 'gridSeed', 'gridV2PlanningPolicy',
   'gridAllocAuto', 'gridFastPrimaryObjective', 'wfIsPeriodDays',
@@ -99,6 +104,16 @@ const context = {
     warn(...args) { warnings.push(args.join(' ')); },
   },
   async fetchStrategyConfig() { throw new Error('not configured'); },
+  clonePreset(value) { return JSON.parse(JSON.stringify(value)); },
+  setCheckboxValue() {},
+  setInputValue() {},
+  parseISOTimestamp() { return {date: '', time: ''}; },
+  applyDynamicBacktestParams() {},
+  clearErrorMessage() {},
+  renderSelectedFiles() {},
+  syncMinProfitFilterUI() {},
+  syncScoreFilterUI() {},
+  updateScoreFormulaPreview() {},
   resetGridPreviewState() {
     context.window.lastGridPreview = null;
     context.window.lastGridPreviewConfigKey = null;
@@ -114,6 +129,8 @@ const context = {
   syncGridObjectiveUi() {},
   syncGridObjectiveAndConstraintUi() {},
   scheduleGridPreviewUpdate() {},
+  buildGridConfig() { return {optimization_mode: 'grid'}; },
+  buildOptunaConfig() { return {optimization_mode: 'optuna'}; },
   handleOptimizerCheckboxChange() {},
 };
 
@@ -122,9 +139,13 @@ vm.runInContext(
   `${source}\n${functionSource(uiHandlersSource, 'function getOptimizerMode()', 'function parseCompactCount')}`
     + `\n${functionSource(uiHandlersSource, 'function getEnabledGridMetadata()', 'function isFullEnumerationProfile')}`
     + `\n${functionSource(uiHandlersSource, 'function syncOptimizerModeUI()', 'async function submitOptimization')}`
+    + `\n${functionSource(uiHandlersSource, 'function buildCurrentOptimizerConfig(state)', 'function clearWFResults')}`
     + `\n${functionSource(uiHandlersSource, 'function bindOptimizerInputs()', 'function handleOptimizerCheckboxChange')}`
+    + '\nconst DEFAULT_PRESET = {dateFilter: true, start: "", end: ""};'
+    + `\n${functionSource(presetsSource, 'function normalizePresetValues(rawValues)', 'function updateDefaults')}`
     + '\nthis.__readinessTest = {'
-    + 'loadStrategyConfig, isCurrentStrategyConfigReady, syncOptimizerModeUI, bindOptimizerInputs, getOptimizerMode};',
+    + 'loadStrategyConfig, isCurrentStrategyConfigReady, syncOptimizerModeUI, bindOptimizerInputs, '
+    + 'getOptimizerMode, buildCurrentOptimizerConfig, applyPresetValues};',
   context,
 );
 
@@ -180,16 +201,42 @@ async function load(strategyId, outcome) {
 async function main() {
   context.window.currentStrategyConfig = null;
   context.__readinessTest.syncOptimizerModeUI();
-  assert.equal(context.__readinessTest.getOptimizerMode(), 'grid');
+  assert.equal(context.__readinessTest.getOptimizerMode(), 'optuna');
+  assert.equal(elements.get('optimizerModeOptuna').disabled, false);
+  assert.equal(elements.get('optimizerModeOptunaLabel').style.display, '');
 
   const gridBeforeReload = context.__readinessTest.getOptimizerMode();
-  const configA = config('A');
+  const configA = config('A', {engine: 'v2'});
   assert.equal(await load('a', configA), true);
   assert.equal(context.__readinessTest.isCurrentStrategyConfigReady(), true);
   assert.equal(context.window.currentStrategyConfigId, 'a');
   assert.equal(elements.get('backtestParamsContent').innerHTML, 'backtest:A');
   assert.equal(context.__readinessTest.getOptimizerMode(), 'grid');
   assert.equal(elements.get('optimizerModeGrid').disabled, false);
+  assert.equal(elements.get('optimizerModeGrid').checked, true);
+  assert.equal(elements.get('optimizerModeOptuna').disabled, true);
+  assert.equal(elements.get('optimizerModeOptuna').checked, false);
+  assert.equal(elements.get('optimizerModeOptunaLabel').style.display, 'none');
+  assert.equal(elements.get('optunaSettings').style.display, 'none');
+  assert.equal(elements.get('gridSettings').style.display, 'block');
+  assert.equal(elements.get('optunaTrials').disabled, false);
+  elements.get('optimizerModeOptuna').checked = true;
+  elements.get('optimizerModeGrid').checked = false;
+  assert.equal(context.__readinessTest.getOptimizerMode(), 'grid');
+  assert.equal(
+    context.__readinessTest.buildCurrentOptimizerConfig({}).optimization_mode,
+    'grid',
+  );
+  context.__readinessTest.applyPresetValues({
+    optimization_mode: 'optuna',
+    optimizerModeOptuna: true,
+  });
+  assert.equal(context.__readinessTest.getOptimizerMode(), 'grid');
+  assert.equal(
+    context.__readinessTest.buildCurrentOptimizerConfig({}).optimization_mode,
+    'grid',
+  );
+  context.__readinessTest.syncOptimizerModeUI();
   assert.equal(coverageConfigs.includes(configA), true);
   assert.equal(renderReadiness.every((ready) => ready === false), true);
 
@@ -215,6 +262,36 @@ async function main() {
 
   assert.equal(await load('c', config('C')), true);
   assert.equal(context.__readinessTest.isCurrentStrategyConfigReady(), true);
+  assert.equal(elements.get('optimizerModeOptuna').disabled, false);
+  assert.equal(elements.get('optimizerModeOptunaLabel').style.display, '');
+
+  elements.get('optimizerModeGrid').checked = true;
+  elements.get('optimizerModeOptuna').checked = false;
+  assert.equal(await load('v1-no-grid', config('V1 unavailable', {
+    grid_optimizer: {supported: false, available: false, reason: 'V1 Grid unavailable.'},
+  })), true);
+  assert.equal(context.__readinessTest.getOptimizerMode(), 'optuna');
+  assert.equal(elements.get('optimizerModeOptuna').checked, true);
+
+  assert.equal(await load('v2-no-grid', config('V2 unavailable', {
+    engine: 'v2',
+    grid_optimizer: {supported: false, available: false, reason: 'V2 Grid unavailable.'},
+  })), true);
+  assert.equal(context.__readinessTest.getOptimizerMode(), 'grid');
+  assert.equal(elements.get('optimizerModeGrid').checked, true);
+  assert.equal(elements.get('optimizerModeGrid').disabled, true);
+  assert.equal(elements.get('optimizerModeOptuna').disabled, true);
+  assert.equal(elements.get('gridModeHelp').textContent, 'V2 Grid unavailable.');
+
+  const failedV2 = deferred();
+  context.window.currentStrategyId = 'failed-v2';
+  context.fetchStrategyConfig = () => failedV2.promise;
+  const failedV2Load = context.__readinessTest.loadStrategyConfig('failed-v2');
+  failedV2.reject(new Error('V2 config failed.'));
+  assert.equal(await failedV2Load, false);
+  assert.equal(context.__readinessTest.getOptimizerMode(), 'optuna');
+  assert.equal(elements.get('optimizerModeOptuna').disabled, false);
+  assert.equal(elements.get('optimizerModeOptunaLabel').style.display, '');
 
   const staleSuccess = deferred();
   context.window.currentStrategyId = 'b';

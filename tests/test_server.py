@@ -29,7 +29,7 @@ from core.storage import (
     save_wfa_study_to_db,
     set_active_db,
 )
-from strategies import get_strategy_config
+from strategies import get_strategy_config, list_strategies
 
 
 @pytest.fixture
@@ -70,6 +70,8 @@ def test_grid_start_page_label_and_marker_are_compact():
     queue_js = (repo_root / "src" / "ui" / "static" / "js" / "queue.js").read_text(encoding="utf-8")
     run_routes_py = (repo_root / "src" / "ui" / "server_routes_run.py").read_text(encoding="utf-8")
 
+    assert 'id="optimizerModeOptunaLabel"' in index_html
+    assert "getElementById('optimizerModeOptunaLabel')" in ui_handlers_js
     assert "Grid v1 is supported only for S03 Reversal v10." not in ui_handlers_js
     assert "No fast Grid backend is available." in ui_handlers_js
     assert "в–ѕ" not in index_html
@@ -283,7 +285,7 @@ def test_optimizer_mode_sync_waits_for_strategy_config_before_grid_availability_
         "async function submitOptimization",
     )
 
-    assert sync_source.index("if (!window.currentStrategyConfig) return;") < sync_source.index(
+    assert sync_source.index("if (!strategyConfig)") < sync_source.index(
         "const gridMeta = getEnabledGridMetadata()"
     )
 
@@ -1304,17 +1306,224 @@ def test_invalid_v2_profile_fails_walkforward_before_work(monkeypatch, client):
 
 
 @pytest.mark.parametrize(
-    "strategy_id", ["s06_r_trend_v02_b2", "s03_reversal_v10"]
+    ("strategy_id", "config"),
+    [
+        ("s06_r_trend_v02_b2", {"optimization_mode": "grid", "fixed_params": {"dateFilter": False}}),
+        ("s03_reversal_v10", {}),
+    ],
 )
 def test_valid_v2_and_v1_walkforward_retain_existing_post_profile_path(
-    client, strategy_id
+    client, strategy_id, config
 ):
     response = client.post(
         "/api/walkforward",
-        data={"strategy": strategy_id, "config": "{}"},
+        data={"strategy": strategy_id, "config": json.dumps(config)},
     )
     assert response.status_code == 400
     assert response.get_json() == {"error": "CSV path is required."}
+
+
+@pytest.mark.parametrize("endpoint", ["/api/optimize", "/api/walkforward"])
+@pytest.mark.parametrize(
+    ("mode_present", "mode_value"),
+    [
+        (False, None),
+        (True, None),
+        (True, ""),
+        (True, "   "),
+        (True, "optuna"),
+        (True, " OpTuNa "),
+        (True, "other"),
+    ],
+)
+def test_v2_optimizer_requests_require_explicit_grid_before_work(
+    client, monkeypatch, endpoint, mode_present, mode_value
+):
+    from ui import server_routes_run
+
+    payload = _s03_regime_er_grid_preview_payload(
+        optimization_mode="grid",
+        objectives=["net_profit_pct"],
+        grid_fast_objectives=["net_profit_pct"],
+    )
+    if mode_present:
+        payload["optimization_mode"] = mode_value
+    else:
+        payload.pop("optimization_mode", None)
+
+    for name in (
+        "_clear_cancelled_run",
+        "_resolve_csv_path",
+        "_build_optimization_config",
+        "load_data",
+        "run_optimization",
+        "_set_optimization_state",
+    ):
+        monkeypatch.setattr(
+            server_routes_run,
+            name,
+            lambda *_args, _name=name, **_kwargs: pytest.fail(
+                f"{_name} must not run before V2 optimizer validation"
+            ),
+        )
+
+    response = client.post(
+        endpoint,
+        data={
+            "strategy": "s03_reversal_v11_regime_er_b2",
+            "csvPath": "must-not-resolve.csv",
+            "config": json.dumps(payload),
+        },
+    )
+
+    assert response.status_code == 400
+    diagnostic = _v2_runtime_diagnostic(response)
+    assert diagnostic == {
+        "severity": "error",
+        "code": "V2_GRID_ONLY_OPTIMIZER",
+        "strategy_id": "s03_reversal_v11_regime_er_b2",
+        "path": "optimization_mode",
+        "variant": None,
+        "message": (
+            "s03_reversal_v11_regime_er_b2: Backtester V2 supports Grid "
+            "optimization only; set optimization_mode='grid'."
+        ),
+    }
+
+
+def test_v2_grid_mode_normalization_and_optimizer_error_precedence():
+    from ui import server_services
+
+    context = server_services._resolve_strategy_context(
+        [("strategy_id", True, "s06_r_trend_v02_b2")]
+    )
+    normalized, _runtime = server_services._normalize_v2_optimizer_payload(
+        context,
+        {"optimization_mode": " GrId ", "fixed_params": {"dateFilter": False}},
+        warmup_members=[],
+    )
+    assert normalized["optimization_mode"] == "grid"
+
+    with pytest.raises(Exception) as excinfo:
+        server_services._normalize_v2_optimizer_payload(
+            context,
+            {
+                "optimization_mode": "optuna",
+                "enabled_params": {"warmupBars": True},
+                "fixed_params": {"dateFilter": False},
+            },
+            warmup_members=[],
+        )
+    diagnostic = excinfo.value.diagnostics[0].to_dict()
+    assert diagnostic["code"] == "V2_GRID_ONLY_OPTIMIZER"
+    assert diagnostic["path"] == "optimization_mode"
+
+
+def test_v2_optimize_normalizes_explicit_grid_before_config_construction(
+    client, monkeypatch
+):
+    from ui import server_routes_run
+
+    payload = _s03_regime_er_grid_preview_payload(
+        optimization_mode=" GrId ",
+        objectives=["net_profit_pct"],
+        grid_fast_objectives=["net_profit_pct"],
+    )
+    captured = {}
+
+    monkeypatch.setattr(
+        server_routes_run,
+        "_resolve_csv_path",
+        lambda *_args, **_kwargs: "isolated.csv",
+    )
+
+    def capture_build(_data_source, config_payload, *_args, **_kwargs):
+        captured.update(config_payload)
+        raise ValueError("configuration construction reached")
+
+    monkeypatch.setattr(server_routes_run, "_build_optimization_config", capture_build)
+
+    response = client.post(
+        "/api/optimize",
+        data={
+            "strategy": "s03_reversal_v11_regime_er_b2",
+            "csvPath": "isolated.csv",
+            "config": json.dumps(payload),
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_data(as_text=True) == "configuration construction reached"
+    assert captured["optimization_mode"] == "grid"
+
+
+@pytest.mark.parametrize(
+    "strategy_id",
+    [
+        item["id"]
+        for item in list_strategies()
+        if str(get_strategy_config(item["id"]).get("engine", "v1")).strip().lower()
+        == "v2"
+    ],
+)
+def test_every_registered_v2_strategy_rejects_new_optuna_optimize_request(
+    client, strategy_id
+):
+    response = client.post(
+        "/api/optimize",
+        data={
+            "strategy": strategy_id,
+            "config": json.dumps(
+                {
+                    "optimization_mode": "optuna",
+                    "fixed_params": {"dateFilter": False},
+                }
+            ),
+        },
+    )
+    assert response.status_code == 400
+    diagnostic = _v2_runtime_diagnostic(response)
+    assert diagnostic["code"] == "V2_GRID_ONLY_OPTIMIZER"
+    assert diagnostic["strategy_id"] == strategy_id
+
+
+@pytest.mark.parametrize("mode_payload", [{}, {"optimization_mode": "   "}])
+def test_v1_missing_and_blank_optimizer_mode_still_default_to_optuna(mode_payload):
+    from ui import server_services
+
+    config = server_services._build_optimization_config(
+        "isolated.csv",
+        {
+            **mode_payload,
+            "enabled_params": {},
+            "param_ranges": {},
+            "param_types": {},
+            "fixed_params": {},
+        },
+        1,
+        "s03_reversal_v10",
+        1000,
+    )
+    assert config.optimization_mode == "optuna"
+
+
+def test_v1_explicit_null_optimizer_mode_retains_existing_rejection():
+    from ui import server_services
+
+    with pytest.raises(ValueError, match="Unsupported optimization mode: none"):
+        server_services._build_optimization_config(
+            "isolated.csv",
+            {
+                "optimization_mode": None,
+                "enabled_params": {},
+                "param_ranges": {},
+                "param_types": {},
+                "fixed_params": {},
+            },
+            1,
+            "s03_reversal_v10",
+            1000,
+        )
 
 
 @pytest.mark.parametrize(
@@ -1449,7 +1658,7 @@ def test_wfa_month_request_uses_authoritative_month_fields(
     monkeypatch.setattr(walkforward_engine, "WalkForwardEngine", DummyWalkForwardEngine)
     if is_v2:
         payload = _s03_regime_er_grid_preview_payload(
-            optimization_mode="optuna",
+            optimization_mode="grid",
             objectives=["net_profit_pct"],
             primary_objective="net_profit_pct",
         )
@@ -1864,7 +2073,7 @@ def test_v2_backtest_malformed_runtime_precedes_csv_access(monkeypatch, client):
     assert diagnostic["path"] == "warmupBars"
 
 
-@pytest.mark.parametrize("optimization_mode", ["optuna", "grid"])
+@pytest.mark.parametrize("optimization_mode", ["grid"])
 @pytest.mark.parametrize(
     ("container", "name", "path"),
     [
@@ -2165,6 +2374,7 @@ def test_v2_walkforward_runtime_failure_precedes_cancellation_and_csv(
             "config": json.dumps(
                 {
                     "strategy_id": "s06_r_trend_v02_b2",
+                    "optimization_mode": "grid",
                     "fixed_params": {"dateFilter": False},
                 }
             ),
@@ -2177,7 +2387,7 @@ def test_v2_walkforward_runtime_failure_precedes_cancellation_and_csv(
     assert diagnostic["path"] == "warmupBars"
 
 
-@pytest.mark.parametrize("optimization_mode", ["optuna", "grid"])
+@pytest.mark.parametrize("optimization_mode", ["grid"])
 def test_v2_ft_oos_derivation_uses_core_canonical_dates_once(
     monkeypatch,
     client,
@@ -2272,7 +2482,7 @@ def test_v2_ft_derived_runtime_failure_is_structured_and_stops_config_build(
     csv_path = tmp_path / "derived_runtime_failure.csv"
     csv_path.write_text("placeholder", encoding="utf-8")
     payload = _s03_regime_er_grid_preview_payload(
-        optimization_mode="optuna",
+        optimization_mode="grid",
         objectives=["net_profit_pct"],
         fixed_params={
             "dateFilter": False,
@@ -2647,12 +2857,16 @@ def test_tz64a_request_runtime_row_digests_and_identity_pins():
 
     blank_payload, blank_runtime = server_services._normalize_v2_optimizer_payload(
         context,
-        {"fixed_params": {"dateFilter": False, "start": "", "end": ""}},
+        {
+            "optimization_mode": "grid",
+            "fixed_params": {"dateFilter": False, "start": "", "end": ""},
+        },
         warmup_members=[],
     )
     dated_payload, dated_runtime = server_services._normalize_v2_optimizer_payload(
         context,
         {
+            "optimization_mode": "grid",
             "fixed_params": {
                 "dateFilter": True,
                 "start": "2025-05-01T00:00",
@@ -2663,13 +2877,14 @@ def test_tz64a_request_runtime_row_digests_and_identity_pins():
     )
     alias_payload, _alias_runtime = server_services._normalize_v2_optimizer_payload(
         context,
-        {"fixed_params": {"dateFilter": "0"}},
+        {"optimization_mode": "grid", "fixed_params": {"dateFilter": "0"}},
         warmup_members=[],
     )
     date_only_payload, _date_only_runtime = (
         server_services._normalize_v2_optimizer_payload(
             context,
             {
+                "optimization_mode": "grid",
                 "fixed_params": {
                     "dateFilter": True,
                     "start": "2025-06-01",
@@ -3504,7 +3719,7 @@ def test_queue_legacy_missing_warmup_reaches_v2_runtime_default_once(
 
     csv_path = tmp_path / "queue_legacy_warmup.csv"
     csv_path.write_text("placeholder", encoding="utf-8")
-    payload = _s03_regime_er_grid_preview_payload(optimization_mode="optuna")
+    payload = _s03_regime_er_grid_preview_payload(optimization_mode="grid")
     captured = []
     normalization_calls = []
     original_builder = server_routes_run._build_optimization_config
@@ -3841,7 +4056,7 @@ def test_walkforward_construction_validation_is_structured_before_state(
             "config": json.dumps(
                 {
                     "strategy_id": "s06_r_trend_v02_b2",
-                    "optimization_mode": "optuna",
+                    "optimization_mode": "grid",
                     "enabled_params": {},
                     "param_ranges": {},
                     "param_types": {},
@@ -4412,6 +4627,18 @@ def test_stored_execution_endpoint_inventory_uses_shared_runtime_and_reads_tests
         )
         original_study = deepcopy(load_study_from_db(study_id)["study"])
         original_trial = deepcopy(get_study_trial(study_id, 7))
+        studies_response = client.get("/api/studies")
+        study_response = client.get(f"/api/studies/{study_id}")
+        assert studies_response.status_code == study_response.status_code == 200
+        listed_study = next(
+            item
+            for item in studies_response.get_json()["studies"]
+            if item["study_id"] == study_id
+        )
+        loaded_study = study_response.get_json()["study"]
+        assert listed_study["optimization_mode"] == "optuna"
+        assert loaded_study["optimization_mode"] == "optuna"
+        assert loaded_study["strategy_id"] == "s06_r_trend_v02_b2"
 
         manual = client.post(
             f"/api/studies/{study_id}/test",
@@ -4555,6 +4782,10 @@ def test_v1_stored_trade_export_keeps_legacy_merge_semantics(
             params={"maLength3": 75, "dateFilter": True, "start": "candidate"},
         )
 
+        loaded = client.get(f"/api/studies/{study_id}")
+        assert loaded.status_code == 200
+        assert loaded.get_json()["study"]["optimization_mode"] == "optuna"
+        assert loaded.get_json()["study"]["strategy_id"] == "s03_reversal_v10"
         response = client.post(f"/api/studies/{study_id}/trials/7/trades")
 
     assert response.status_code == 200

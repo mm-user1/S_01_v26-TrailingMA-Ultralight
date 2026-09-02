@@ -8,6 +8,18 @@ const vm = require('node:vm');
 const repoRoot = path.resolve(__dirname, '..', '..');
 const queuePath = path.join(repoRoot, 'src', 'ui', 'static', 'js', 'queue.js');
 const source = fs.readFileSync(queuePath, 'utf8');
+const uiHandlersSource = fs.readFileSync(
+  path.join(repoRoot, 'src', 'ui', 'static', 'js', 'ui-handlers.js'),
+  'utf8',
+);
+
+function functionSource(fullSource, signature, nextSignature) {
+  const start = fullSource.indexOf(signature);
+  const end = fullSource.indexOf(nextSignature, start);
+  assert.notEqual(start, -1, `Missing ${signature}`);
+  assert.notEqual(end, -1, `Missing ${nextSignature}`);
+  return fullSource.slice(start, end);
+}
 
 const storage = new Map();
 let storageReads = 0;
@@ -24,7 +36,14 @@ const context = {
   window: {},
   document: {
     getElementById(id) { return formElements[id] || null; },
-    querySelector() { return null; },
+    querySelector(selector) {
+      if (selector === 'input[name="optimizerMode"]:checked') {
+        return formElements.optimizerModeGrid?.checked
+          ? formElements.optimizerModeGrid
+          : formElements.optimizerModeOptuna;
+      }
+      return null;
+    },
     querySelectorAll() { return []; },
   },
   setCheckboxValue(id, value) {
@@ -68,13 +87,32 @@ const context = {
   clonePreset(value) {
     return JSON.parse(JSON.stringify(value));
   },
+  getSelectedCsvPaths() { return ['C:\\data\\sample.csv']; },
+  isCurrentStrategyConfigReady() { return true; },
+  validateOptimizerForm() { return []; },
+  gatherFormState() { return {start: '2025-01-01', end: '2025-02-01'}; },
+  getDatabaseTargetValidationError() { return ''; },
+  buildGridConfig() {
+    return {optimization_mode: 'grid', enabled_params: {period: true}};
+  },
+  buildOptunaConfig() {
+    return {optimization_mode: 'optuna', enabled_params: {period: true}};
+  },
+  showQueueError(message) { throw new Error(message); },
 };
 vm.createContext(context);
 vm.runInContext(
-  `${source}\nthis.__queueTest = {
+  `${source}\n`
+  + functionSource(uiHandlersSource, 'function getOptimizerMode()', 'function parseCompactCount')
+  + '\n'
+  + functionSource(uiHandlersSource, 'function buildCurrentOptimizerConfig(state)', 'function clearWFResults')
+  + `\nthis.__queueTest = {
     appendQueueWarmupField,
     appendQueueWfaPeriodFields,
     applyQueueConfigFallback,
+    applyQueueGridConfig,
+    applyQueueUiSnapshot,
+    collectQueueItem,
     buildQueueAutoSetModeLabel,
     buildQueueTooltip,
     buildStateForItem,
@@ -87,7 +125,9 @@ vm.runInContext(
       queueStateLoaded = false;
       queueStateLoadPromise = null;
     },
-    isLoaded() { return queueStateLoaded; }
+    isLoaded() { return queueStateLoaded; },
+    getOptimizerMode,
+    buildCurrentOptimizerConfig
   };`,
   context,
 );
@@ -119,6 +159,33 @@ async function main() {
   assert.equal(typeof context.fetchQueueStateRequest, 'function');
   assert.equal(typeof context.saveQueueStateRequest, 'function');
   assert.equal(typeof context.clearQueueStateRequest, 'function');
+
+  formElements.optimizerModeGrid = {id: 'optimizerModeGrid', type: 'radio', value: 'grid', checked: false};
+  formElements.optimizerModeOptuna = {id: 'optimizerModeOptuna', type: 'radio', value: 'optuna', checked: true};
+  formElements.warmupBars = {value: '1000'};
+  formElements.dbTarget = {value: ''};
+  formElements.enableWF = {type: 'checkbox', checked: false, disabled: false};
+  context.window.currentStrategyId = 's06_r_trend_v02_b2';
+  context.window.currentStrategyConfig = {engine: 'v2', parameters: {period: {type: 'int'}}};
+
+  const oldV2ItemConfig = {optimization_mode: 'optuna'};
+  context.__queueTest.applyQueueGridConfig(oldV2ItemConfig);
+  context.__queueTest.applyQueueUiSnapshot({
+    controls: {
+      optimizerModeGrid: {checked: false},
+      optimizerModeOptuna: {checked: true},
+    },
+  });
+  assert.equal(context.__queueTest.getOptimizerMode(), 'grid');
+  assert.equal(
+    context.__queueTest.buildCurrentOptimizerConfig({}).optimization_mode,
+    'grid',
+  );
+  assert.equal(oldV2ItemConfig.optimization_mode, 'optuna');
+
+  const newV2Item = context.__queueTest.collectQueueItem();
+  assert.equal(newV2Item.config.optimization_mode, 'grid');
+  assert.equal(newV2Item.mode, 'grid');
 
   const dailyItem = sourceItem('daily');
   dailyItem.config.grid_fast_objectives = ['sharpe_daily', 'sharpe_ratio'];

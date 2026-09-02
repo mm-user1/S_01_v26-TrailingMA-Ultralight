@@ -95,7 +95,7 @@ Key: Flask, pandas, numpy, matplotlib, optuna==4.6.0
 
 1. **Config-driven design** - Parameter schemas in `config.json`, UI renders dynamically
 2. **camelCase naming** - End-to-end: Pine Script -> config.json -> Python -> CSV
-3. **Dual optimizer modes** - Optuna (Bayesian/evolutionary) and Grid (deterministic; per-strategy backend chooses generation: S03 = LHS/full by mode, S06 = complete enumeration); both share constraints/objectives/storage. Optuna offers optional Initial Search Coverage for systematic parameter exploration.
+3. **Optimizer policy** - Backtester V1 supports Optuna (Bayesian/evolutionary) and Grid. Backtester V2 is Grid-only for new optimization and WFA requests and requires explicit `optimization_mode="grid"`; historical V2 Optuna studies remain readable and replayable. The modes share constraints/objectives/storage, and V1 Optuna offers optional Initial Search Coverage.
 4. **Strategy isolation** - Each strategy owns its params dataclass; optional Numba-accelerated fast Grid backend per strategy (`s03_reversal_v10/fast_grid.py`, `s03_reversal_v11/fast_grid.py`, `s06_r_trend_v02/fast_grid.py`)
 5. **Rolling WFA** - Fixed WFA supports unchanged day windows (default) or complete calendar-month windows; Adaptive remains day-only. Both use stitched OOS equity, annualized WFE, optional cooldown after adaptive triggers, and per-module top-N trial retention.
 6. **In-memory backend** - RAM-based Optuna journal storage for faster multiprocess optimization
@@ -455,9 +455,10 @@ backend advertises capability via `get_backend_metadata()` (normalized by
     and `warmupBars`. They are normalized by the core, excluded from candidate
     domains and semantic/plan identity, and cannot be Grid axes or option
     overrides. Only the three date fields are rebased for WFA windows.
-  - New V2 Optuna, Grid, and WFA studies persist one exact request-level
-    `v2_runtime_metadata_v1` envelope in `config_json.v2_runtime`; V1 omits the
-    key and no migration is performed. Stored execution resolves the current
+   - New V2 Grid and WFA studies persist one exact request-level
+     `v2_runtime_metadata_v1` envelope in `config_json.v2_runtime`; V1 omits the
+     key and no migration is performed. Historical V2 Optuna studies remain
+     readable and replayable. Stored execution resolves the current
     registry/profile first, uses the shared current/legacy/defaulted runtime
     reader, ignores candidate runtime authority, applies operation dates last,
     and keeps Warmup separate behind the `dateFilter` preparation gate.
@@ -570,8 +571,8 @@ backend advertises capability via `get_backend_metadata()` (normalized by
 
 **Start Page (`/` - index.html):**
 - Strategy selection and parameter configuration
-- Optimizer mode selector: **Optuna** or **Grid**
-- Optuna settings (objectives + primary objective, budget, sampler, pruner, constraints)
+- Optimizer mode selector: Backtester V1 exposes **Optuna** and **Grid**; Backtester V2 is locked to **Grid**
+- Optuna settings for Backtester V1 (objectives + primary objective, budget, sampler, pruner, constraints)
 - Grid settings (V2 Full/Budgeted planning, candidate budget, seed, top candidates, fast + optional slow objective sets, mode allocation, diversity, advanced)
 - Grid preview panel calls `POST /api/grid/preview` to show parameter space size, mode allocation and coverage
 - Initial Search Coverage mode toggle (Optuna) with coverage analysis and warmup auto-fill
@@ -580,7 +581,7 @@ backend advertises capability via `get_backend_metadata()` (normalized by
 - Scheduled run queue management
 - CSV file browser
 - Dataset preview (WFA window layout)
-- Run Optuna / Run Grid / Run WFA buttons
+- Run Backtester V1 Optuna/Grid or Backtester V2 Grid, plus WFA
 - Results automatically saved to database
 - Light theme UI with dynamic forms from `config.json`
 
@@ -667,7 +668,7 @@ backend advertises capability via `get_backend_metadata()` (normalized by
 - `GET /analytics` - Serve Analytics page
 
 ### Optimization
-- `POST /api/optimize` - Run Optuna or Grid optimization (chosen via `optimization_mode`/`optimizer_mode`), returns study_id
+- `POST /api/optimize` - Run optimization chosen by canonical request field `optimization_mode`; V1 accepts Optuna/Grid and V2 accepts only explicit Grid. `optimizer_mode` is stored metadata, not a request alias.
 - `POST /api/grid/preview` - Preview Grid parameter space, mode allocation and coverage without running
 - `POST /api/walkforward` - Run WFA (fixed or adaptive mode), returns study_id
 - `POST /api/backtest` - Run single backtest (no database storage)
@@ -800,7 +801,7 @@ calendar-month items retain authoritative month counts and use labels such as
 
 V1 and V2 Grid expose eight common Fast Objective controls: Net Profit, Max
 Drawdown, RoMaD, Profit Factor, Win Rate, Monthly Sharpe, Daily Sharpe, and SQN.
-At most six may be selected in one request; Optuna independently retains its
+At most six may be selected in one request; Backtester V1 Optuna independently retains its
 existing six-objective cap. Monthly Sharpe, Daily Sharpe, and SQN are computed
 only when requested. Daily Sharpe is explicitly Fast-only; Sortino, Ulcer
 Index, and Consistency remain Slow-only, and Fast Constraints are unchanged.
@@ -871,7 +872,7 @@ stream constant per-candidate state, and validate selected rows against the
 canonical reference. The canonical compounded-return self-check stays
 reference-only; Fast parity supplies the same boundaries, Welford statistics,
 eligibility, and strict invalidation without a product accumulator. Sparse WFA
-timestamps never imply synthesized dates. It is a maximize Optuna objective and
+timestamps never imply synthesized dates. It is a maximize Backtester V1 Optuna objective and
 an explicit Fast-only Grid objective; generic Queue transport preserves it.
 Final fixed and Adaptive WFA windows always report Daily Sharpe for real IS and
 real undelayed dense OOS series, even when another objective selected the
