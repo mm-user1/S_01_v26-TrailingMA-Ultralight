@@ -646,6 +646,71 @@ def test_certifier_maps_selected_nonfinite_oos_to_unavailable_and_still_detects_
         _compare(result, [item], "primary_profit")
 
 
+def test_certifier_handles_consecutive_empty_pool_turnover_and_checks_pool_size(tmp_path):
+    tickers = tuple((f"D{index:02d}", "dev") for index in range(3)) + (("H", "holdout"),)
+    root = _synthetic_dataset(tmp_path, tickers=tickers, declared_dev_pool=3)
+
+    def empty_is_pool(matrix, ticker, window_id, axis):
+        del ticker, window_id
+        matrix[:, 0, axis.index("net_profit_pct")] = np.nan
+
+    _mutate_groups(root, empty_is_pool)
+    item = _input(root)
+    result = evaluate_allocation([item], candidate_rule="primary_profit")
+    dataset = result.summary["datasets"]["canonical"]
+    assert [block["available_tickers"] for block in dataset["blocks"]] == [0, 0]
+    assert [
+        block["variants"]["matched_fraction"]["k"] for block in dataset["blocks"]
+    ] == [None, None]
+    transition = dataset["variants"]["matched_fraction"]["turnover"]["transitions"][1]
+    assert transition == {
+        "status": "unavailable",
+        "reason": "zero_available_pool",
+        "value": None,
+    }
+    _compare(result, [item], "primary_profit")
+    assert certify((("canonical", root),), "primary_profit")["status"] == "passed"
+
+    dataset["blocks"][0]["available_tickers"] = 1
+    with pytest.raises(AnalysisError, match="available_tickers"):
+        _compare(result, [item], "primary_profit")
+    dataset["blocks"][0]["available_tickers"] = 0
+    transition["value"] = 0.0
+    with pytest.raises(AnalysisError, match="turnover mismatch"):
+        _compare(result, [item], "primary_profit")
+
+
+@pytest.mark.parametrize("monthly_return", [-100.0, -150.0])
+def test_certifier_handles_nonpositive_monthly_gross_factor_and_rejects_finite_result(
+    tmp_path, monthly_return
+):
+    tickers = tuple((f"D{index:02d}", "dev") for index in range(8)) + (("H", "holdout"),)
+    root = _synthetic_dataset(tmp_path, tickers=tickers, declared_dev_pool=8)
+
+    def wipeout_first_oos(matrix, ticker, window_id, axis):
+        del ticker
+        if window_id == 1:
+            matrix[:, 1, axis.index("net_profit_pct")] = monthly_return
+
+    _mutate_groups(root, wipeout_first_oos)
+    item = _input(root)
+    result = evaluate_allocation([item], candidate_rule="primary_profit")
+    primary = result.summary["datasets"]["canonical"]["variants"]["primary"]
+    assert primary["monthly_capacity_returns_pct"][0] == monthly_return
+    assert primary["portfolio"] == {
+        "status": "unavailable",
+        "reason": "monthly gross factor is non-finite or non-positive",
+        "compounded_return_pct": None,
+        "monthly_series_max_drawdown_pct": None,
+    }
+    _compare(result, [item], "primary_profit")
+    assert certify((("canonical", root),), "primary_profit")["status"] == "passed"
+
+    primary["portfolio"]["compounded_return_pct"] = 0.0
+    with pytest.raises(AnalysisError, match="allocation certification mismatch"):
+        _compare(result, [item], "primary_profit")
+
+
 def test_arbitrary_universe_sizes_and_label_identity_validation(tmp_path):
     tickers = tuple((f"D{index:02d}", "dev") for index in range(13)) + (("H", "holdout"),)
     item = _input(_synthetic_dataset(tmp_path, tickers=tickers, declared_dev_pool=13))

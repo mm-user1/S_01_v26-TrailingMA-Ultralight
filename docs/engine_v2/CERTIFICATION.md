@@ -709,8 +709,8 @@ its plan fingerprint is
 `73244c7dc697e11b33e721956b2b3a9c45098f055a64e95f26b921934763578d`.
 Complete 480-row compiled outputs, including MTM, match the old disabled-MA
 Bracket path for both entry modes. Six frozen TradingView configurations cover
-all three trail families and both entries. Their only non-exact observations
-are the accepted fill-bar initial-stop, one-tick candidate, CSV rounding,
+all three trail families and both entries. Their non-exact observations arise
+only from the accepted fill-bar initial-stop, one-tick candidate, CSV rounding,
 final-boundary, and TradingView intrabar-drawdown representations.
 
 Merlin intentionally arms a valid initial protective stop on the entry fill

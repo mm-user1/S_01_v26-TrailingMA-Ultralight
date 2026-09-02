@@ -311,7 +311,10 @@ def _reference(
                     "seed_sha": digest.hex(),
                     "candidate_ids": candidate_ids,
                 }
-            output[item.label][block_key] = {"variants": variants}
+            output[item.label][block_key] = {
+                "available_tickers": len(rows),
+                "variants": variants,
+            }
     return output
 
 
@@ -354,6 +357,11 @@ def _compare(result, inputs: Sequence[DatasetInput], candidate_rule: str) -> Non
         observed_by_block = {tuple(block["block_key"]): block for block in blocks}
         for block_key, expected_block in reference.items():
             observed_block = observed_by_block[block_key]
+            _near(
+                observed_block["available_tickers"],
+                expected_block["available_tickers"],
+                f"{item.label}/{block_key}/available_tickers",
+            )
             pairs = {
                 row["ticker"]: row
                 for row in result.pair_decisions
@@ -414,6 +422,23 @@ def _compare(result, inputs: Sequence[DatasetInput], candidate_rule: str) -> Non
                     None,
                     f"{item.label}/{name}/drawdown",
                 )
+            elif any(
+                not math.isfinite(1.0 + value / 100.0)
+                or 1.0 + value / 100.0 <= 0.0
+                for value in expected_monthly
+            ):
+                _near(summary["portfolio"]["status"], "unavailable", f"{item.label}/{name}/status")
+                _near(
+                    summary["portfolio"]["reason"],
+                    "monthly gross factor is non-finite or non-positive",
+                    f"{item.label}/{name}/reason",
+                )
+                _near(summary["portfolio"]["compounded_return_pct"], None, f"{item.label}/{name}/compounding")
+                _near(
+                    summary["portfolio"]["monthly_series_max_drawdown_pct"],
+                    None,
+                    f"{item.label}/{name}/drawdown",
+                )
             else:
                 equity = 1.0
                 curve = [equity]
@@ -438,7 +463,11 @@ def _compare(result, inputs: Sequence[DatasetInput], candidate_rule: str) -> Non
             for index in range(1, len(ordered_reference)):
                 prior = ordered_reference[index - 1]["variants"][name]
                 current = ordered_reference[index]["variants"][name]
-                if prior["k"] != current["k"]:
+                if (
+                    prior["k"] is None
+                    or current["k"] is None
+                    or prior["k"] != current["k"]
+                ):
                     expected_turnover.append(None)
                     continue
                 k = current["k"]
