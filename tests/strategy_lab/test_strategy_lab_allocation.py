@@ -21,7 +21,7 @@ from tools.strategy_lab.analysis.allocation import (
     random_percentile_fraction,
 )
 from tools.strategy_lab.analysis.cli import main as analysis_main
-from tools.strategy_lab.analysis.allocation_certify import certify
+from tools.strategy_lab.analysis.allocation_certify import _compare, certify
 from tools.strategy_lab.analysis.dataset import AnalysisError, open_dataset
 from tools.strategy_lab.analysis.json_utils import canonical_json_bytes
 from tools.strategy_lab.analysis.output import (
@@ -524,6 +524,126 @@ def test_n2_pool_intersects_candidate_and_score_availability(tmp_path):
         assert block["locally_available_tickers"] in (1, 2)
         assert block["available_tickers"] == 1
         assert block["variants"]["primary"]["selected_tickers"] == ["AAA"]
+
+
+def test_certifier_n2_uses_one_shared_is_available_pool_before_oos(tmp_path):
+    tickers = tuple((f"D{index:02d}", "dev") for index in range(10)) + (("H", "holdout"),)
+    one_root = _synthetic_dataset(
+        tmp_path / "one", tickers=tickers, declared_dev_pool=10
+    )
+    two_root = _synthetic_dataset(
+        tmp_path / "two", tickers=tickers, declared_dev_pool=10
+    )
+    _distinguish(two_root, "two")
+
+    def remove_d00_is(matrix, ticker, window_id, axis):
+        del window_id
+        if ticker == "D00":
+            matrix[:, 0, axis.index("net_profit_pct")] = np.nan
+
+    _mutate_groups(two_root, remove_d00_is)
+    inputs = [_input(one_root, "one"), _input(two_root, "two")]
+    result = evaluate_allocation(inputs, candidate_rule="primary_profit")
+    frozen_controls = {}
+    for label in ("one", "two"):
+        block = result.summary["datasets"][label]["blocks"][0]
+        assert block["available_tickers"] == 9
+        assert "D00" not in block["variants"]["primary"]["selected_tickers"]
+        pairs = {
+            row["ticker"]: row
+            for row in result.pair_decisions
+            if row["dataset_label"] == label
+            and row["window_id"] == block["window_id"]
+            and row["status"] == "selected"
+        }
+        assert set(pairs) == {f"D{index:02d}" for index in range(1, 10)}
+        ranked = sorted(pairs, key=lambda ticker: (-pairs[ticker]["ticker_score"], ticker))
+        bottom = sorted(pairs, key=lambda ticker: (pairs[ticker]["ticker_score"], ticker))
+        oracle = sorted(pairs, key=lambda ticker: (-pairs[ticker]["oos_return_pct"], ticker))
+        anti = sorted(pairs, key=lambda ticker: (pairs[ticker]["oos_return_pct"], ticker))
+        primary = block["variants"]["primary"]
+        assert primary["capacity_return_pct"] == pytest.approx(
+            sum(pairs[ticker]["oos_return_pct"] for ticker in ranked[:6]) / 6
+        )
+        assert primary["bottom_k"]["capacity_return_pct"] == pytest.approx(
+            sum(pairs[ticker]["oos_return_pct"] for ticker in bottom[:6]) / 6
+        )
+        assert primary["oracle_k"]["capacity_return_pct"] == pytest.approx(
+            sum(pairs[ticker]["oos_return_pct"] for ticker in oracle[:6]) / 6
+        )
+        assert primary["anti_oracle_k"]["capacity_return_pct"] == pytest.approx(
+            sum(pairs[ticker]["oos_return_pct"] for ticker in anti[:6]) / 6
+        )
+        assert primary["all_available_mean_pct"] == pytest.approx(
+            np.mean([row["oos_return_pct"] for row in pairs.values()])
+        )
+        frozen_controls[label] = {
+            "selected": primary["selected_tickers"],
+            "top": primary["capacity_return_pct"],
+            "bottom": primary["bottom_k"]["capacity_return_pct"],
+            "oracle": primary["oracle_k"]["capacity_return_pct"],
+            "anti": primary["anti_oracle_k"]["capacity_return_pct"],
+            "all": primary["all_available_mean_pct"],
+        }
+    assert certify((("one", one_root), ("two", two_root)), "primary_profit")["status"] == "passed"
+
+    def mutate_excluded_oos(matrix, ticker, window_id, axis):
+        del window_id
+        if ticker == "D00":
+            matrix[:, 1, axis.index("net_profit_pct")] = 1_000_000.0
+
+    _mutate_groups(one_root, mutate_excluded_oos)
+    changed = evaluate_allocation(
+        [_input(one_root, "one"), _input(two_root, "two")],
+        candidate_rule="primary_profit",
+    )
+    for label in ("one", "two"):
+        primary = changed.summary["datasets"][label]["blocks"][0]["variants"]["primary"]
+        assert {
+            "selected": primary["selected_tickers"],
+            "top": primary["capacity_return_pct"],
+            "bottom": primary["bottom_k"]["capacity_return_pct"],
+            "oracle": primary["oracle_k"]["capacity_return_pct"],
+            "anti": primary["anti_oracle_k"]["capacity_return_pct"],
+            "all": primary["all_available_mean_pct"],
+        } == frozen_controls[label]
+    assert certify((("one", one_root), ("two", two_root)), "primary_profit")["status"] == "passed"
+
+
+def test_certifier_maps_selected_nonfinite_oos_to_unavailable_and_still_detects_mismatch(
+    tmp_path,
+):
+    tickers = tuple((f"D{index:02d}", "dev") for index in range(10)) + (("H", "holdout"),)
+    root = _synthetic_dataset(tmp_path, tickers=tickers, declared_dev_pool=10)
+
+    def remove_selected_oos(matrix, ticker, window_id, axis):
+        del window_id
+        if ticker == "D09":
+            matrix[:, 1, axis.index("net_profit_pct")] = np.nan
+
+    _mutate_groups(root, remove_selected_oos)
+    item = _input(root)
+    result = evaluate_allocation([item], candidate_rule="primary_profit")
+    primary = result.summary["datasets"]["canonical"]["blocks"][0]["variants"]["primary"]
+    assert primary["available_tickers"] == 10
+    assert "D09" in primary["selected_tickers"]
+    assert primary["status"] == "unavailable"
+    assert primary["reason"] == "selected OOS return is unavailable"
+    assert primary["capacity_return_pct"] is None
+    selected = next(
+        row
+        for row in result.pair_decisions
+        if row["ticker"] == "D09" and row["window_id"] == 1
+    )
+    assert selected["candidate_id"] is not None
+    assert selected["status"] == "unavailable"
+    assert selected["oos_return_pct"] is None
+    _compare(result, [item], "primary_profit")
+    assert certify((("canonical", root),), "primary_profit")["status"] == "passed"
+
+    primary["capacity_return_pct"] = 0.0
+    with pytest.raises(AnalysisError, match="allocation certification mismatch"):
+        _compare(result, [item], "primary_profit")
 
 
 def test_arbitrary_universe_sizes_and_label_identity_validation(tmp_path):

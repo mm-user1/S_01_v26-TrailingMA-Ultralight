@@ -712,3 +712,10 @@ Bracket path for both entry modes. Six frozen TradingView configurations cover
 all three trail families and both entries. Their only non-exact observations
 are the accepted fill-bar initial-stop, one-tick candidate, CSV rounding,
 final-boundary, and TradingView intrabar-drawdown representations.
+
+Merlin intentionally arms a valid initial protective stop on the entry fill
+bar. The imported TradingView Pine behavior may not provide the same fill-bar
+stop. If that stop is reached, the divergence can change the exit, trade count,
+and every later equity-based position size, so the remaining trade sequence can
+also diverge. Certification therefore uses the pinned alignment opcodes and
+per-trade delta evidence; it does not assume a bounded one-trade price residual.

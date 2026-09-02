@@ -137,6 +137,10 @@ descending, then canonical symbol ascending. A Python-only custom
 `TickerScorer` receives an immutable scalar `SelectedISTickerView`, explicit
 name/version/JSON configuration, and no arrays, data accessors, OOS, or future
 facts. Candidate decisions and ordered ticker sets freeze before OOS is loaded.
+For each aligned multi-dataset calendar block, allocation first intersects the
+tickers having a valid IS candidate decision and finite IS ticker score in every
+input dataset. Each dataset ranks that same pool independently; OOS values are
+revealed only after the common pool and ranks are frozen.
 
 For each concrete primary, sensitivity, and matched-fraction K, slot weight is
 always `1/K`. Underfill leaves cash and never renormalizes selected tickers.
