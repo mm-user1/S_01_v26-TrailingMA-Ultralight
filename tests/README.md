@@ -1,92 +1,76 @@
 # Tests
 
-Pytest test suite for the Merlin backtesting platform.
+Merlin uses pytest for Python tests and direct Node execution for browser-side
+JavaScript tests. Tests must use isolated temporary storage and synthetic or
+explicitly authorized read-only inputs; they must not modify protected market
+data, baselines, or a live database.
 
-## Running Tests
+On Windows, run Python gates with the configured interpreter:
 
-```bash
-# Run all tests
-pytest tests/ -v
-
-# Run specific test file
-pytest tests/test_regression_s01.py -v
-
-# Run with coverage
-pytest tests/ --cov=src --cov-report=html
+```powershell
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest <arguments>
 ```
 
-## Test Files
+Linux/VPS environments use their configured project Python and native paths.
+The wrapper `tools/run_pytest.ps1` additionally creates a per-run pytest temp
+directory under `.pytest_tmp/`.
 
-| File | Purpose |
-|------|---------|
-| `conftest.py` | Shared fixtures: isolated storage, Flask test client, CSV roots config |
-| `test_sanity.py` | Infrastructure sanity checks (imports, directories, Python version) |
-| `test_regression_s01.py` | S01 baseline regression - validates results match saved baseline |
-| `test_s01_migration.py` | S01 migration validation - ensures migrated strategy works correctly |
-| `test_s03_reversal_v10.py` | S03 Reversal v10 strategy tests |
-| `test_s04_stochrsi.py` | S04 StochRSI strategy tests |
-| `test_metrics.py` | Metrics calculation tests (BasicMetrics, AdvancedMetrics) |
-| `test_export.py` | CSV export functionality tests |
-| `test_indicators.py` | Technical indicator tests (MA types, ATR, RSI) |
-| `test_naming_consistency.py` | camelCase naming guardrails - prevents snake_case parameters |
-| `test_walkforward.py` | Walk-forward analysis tests |
-| `test_adaptive_wfa.py` | Adaptive WFA trigger detection tests (CUSUM, drawdown, inactivity) |
-| `test_server.py` | HTTP API endpoint tests |
-| `test_storage.py` | Database storage tests |
-| `test_db_management.py` | Multi-database management tests (list, create, switch active DB) |
-| `test_post_process.py` | Post-process module tests (FT, DSR, stress test) |
-| `test_dsr.py` | Deflated Sharpe Ratio calculation tests |
-| `test_oos_selection.py` | OOS candidate selection tests |
-| `test_stress_test.py` | Stress test module tests |
-| `test_analytics.py` | Analytics equity aggregation tests (portfolio curves, annualized profit) |
-| `test_multiprocess_score.py` | Multi-process scoring tests |
-| `test_optuna_sanitization.py` | Optuna sanitization tests |
-| `test_score_normalization.py` | Score normalization tests |
-| `test_coverage_startup.py` | Initial Search Coverage mode tests |
-| `test_strategy_loop_regression.py` | Strategy loop performance regression tests |
+## Verification tiers
 
-## Test Categories
+Start with the narrowest test that owns the changed behavior, then expand in
+proportion to risk:
 
-### Sanity Tests
-Quick infrastructure checks. Run first to verify environment:
-```bash
-pytest tests/test_sanity.py -v
+```powershell
+# Focused file or test
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest tests\test_metrics.py -q
+
+# Root V1 and shared tests
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest tests -q --ignore=tests\v2 --ignore=tests\strategy_lab
+
+# V2 engine and HTTP contracts
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest tests\v2 -q
+
+# Strategy Lab
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest tests\strategy_lab -q
+
+# Browser-side JavaScript
+Get-ChildItem tests\js\*.test.js | ForEach-Object { node $_.FullName }
+
+# Complete Python suite when the change warrants it
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
-### Regression Tests
-Validate strategy results against saved baselines:
-```bash
-pytest tests/test_regression_s01.py -v
+Use collection as a fast structural gate when full execution is not required:
+
+```powershell
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest --collect-only -q
 ```
 
-If regression tests fail after intentional changes, regenerate baseline:
-```bash
-python tools/generate_baseline_s01.py
-```
+Use that collection output for the exact current test inventory; this guide
+does not maintain a brittle file-by-file table.
 
-### Strategy Tests
-Test individual strategy implementations:
-```bash
-pytest tests/test_s01_migration.py tests/test_s03_reversal_v10.py tests/test_s04_stochrsi.py -v
-```
+## Evidence-bearing tests
 
-### Naming Guardrails
-Ensure camelCase convention is maintained:
-```bash
-pytest tests/test_naming_consistency.py -v
-```
+Regression and certification tests may compare against tracked evidence under
+`data/baseline/` and `data/baseline_v2/`. A mismatch is a product or evidence
+review event, not permission to rewrite the baseline. Real-data Strategy Lab
+certification is opt-in, requires the exact external read-only pack, and is
+documented in the [Strategy Lab manual](../tools/strategy_lab/README.md).
 
-## Baseline Data
+Performance changes should also run the relevant benchmark and compare the
+same dataset, candidate plan, worker settings, warmup count, and measurement
+protocol. See [performance evidence](../docs/engine_v2/PERFORMANCE.md).
 
-Regression baselines stored in `data/baseline/`:
-- `s01_metrics.json` - Expected S01 metrics
-- `s01_trades.csv` - Expected S01 trade list
+## Test design rules
 
-## Adding Tests for New Strategies
+- Assert public behavior and stable identities rather than implementation
+  accidents.
+- Cover success, validation failures, and boundary cases.
+- Keep storage, temp files, environment variables, and process-global thread
+  state isolated and restored.
+- Add parity evidence when a V2 compiled path or execution mode is changed.
+- Keep V1 and V2 optimizer expectations explicit: V1 supports Optuna and Grid;
+  V2 is Grid-only.
 
-1. Create `tests/test_<strategy_id>.py`
-2. Include tests for:
-   - Basic execution (strategy runs without error)
-   - Expected results validation (against PineScript reference)
-   - Edge cases (empty data, extreme parameters)
-3. Run with: `pytest tests/test_<strategy_id>.py -v`
+For strategy integration requirements, use the [V1 guide](../docs/ADDING_NEW_STRATEGY.md)
+or the [V2 guide](../docs/ADDING_NEW_STRATEGY_V2.md).

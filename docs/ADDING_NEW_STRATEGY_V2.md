@@ -1,21 +1,53 @@
-# Adding A Backtester V2 Strategy
+# Importing a Backtester V2 Strategy
 
-Backtester V2 separates strategy logic from execution logic:
+This is the primary procedure for new Merlin strategy work. Read the stable
+[V2 architecture contract](engine_v2/ARCHITECTURE.md) and
+[cross-engine metrics contract](METRICS.md) before implementation. Exact
+existing evidence is catalogued in
+[V2 certification](engine_v2/CERTIFICATION.md) and baseline READMEs.
 
-```text
-strategy signals/dataprep -> generic V2 execution profile -> core V2 runner/Grid
-```
+Every new V2 strategy must ship a certified Grid planning/execution path. New
+Optimize and WFA requests use explicit `optimization_mode="grid"`; do not add
+an Optuna smoke path. Historical Optuna compatibility is a platform concern,
+not part of a new strategy package.
 
-The strategy owns indicators, causal signal arrays, parameter normalization,
-and any aligned dataprep arrays required by the declared execution profile.
-Core V2 owns fills, sizing, stops, targets, trails, guardrails, metrics, and
-Grid execution. Grid V2 owns candidate enumeration and batch screening. Every
-new Backtester V2 strategy is Grid-only for optimization and WFA: callers must
-send explicit `optimization_mode="grid"`. Do not add an Optuna smoke path.
+## 1. Freeze the external execution contract
 
-## Package Layout
+Before coding, record the exact Pine/external source and execution properties:
 
-Use a normal strategy package:
+- input names, types, defaults, option order, and tested parameter set;
+- chart timezone, timeframe, source rows/date range, and session behavior;
+- signal timing, order timing, sizing, commission, slippage/funding, rounding,
+  stops, targets, trails, forced exits, and same-bar rules;
+- TradingView/export conventions that differ from Merlin metrics;
+- expected trades, metrics, and any tolerated residuals.
+
+Preserve raw sources, exports, screenshots, and hashes. Put normalized
+machine-readable expectations in tracked baseline assets without changing the
+raw evidence. If a required external input is local-only, disclose that
+limitation; do not describe it as portable evidence.
+
+## 2. Confirm generic execution coverage
+
+Map the strategy to certified V2 modes before designing its package. Current
+families are:
+
+| Family | Supported shape |
+| --- | --- |
+| Position | next-open entry, ATR-swing stop, risk-per-trade sizing; RR target with no trail, or no target with MA/R-distance/Chandelier/Fixed-AF-SAR RR-activated trail; optional max-days, strict/none boundary, report-only/off margin, none/tick-outward rounding |
+| Signal reversal | next-open entry, fixed-percent-equity sizing, signal exits, optional percentage Emergency SL, strict/none boundary, no price rounding |
+
+The currently certified trail vocabulary is `none`, `ma`, `r_distance`,
+`chandelier`, and `fixed_af_sar` under the valid compositions in
+[V2 architecture](engine_v2/ARCHITECTURE.md).
+
+If the strategy fits, reuse generic core unchanged. If it needs a genuinely
+unsupported execution primitive, stop the import and separately certify that
+primitive in this order: contract/profile validation, reference kernel,
+direct tests, compiled parity, then architecture/certification updates. Never
+hide a new primitive in a strategy-specific V2 Grid loop.
+
+## 3. Create the package and thin adapter
 
 ```text
 src/strategies/<strategy_id>_b2/
@@ -25,880 +57,165 @@ src/strategies/<strategy_id>_b2/
   strategy.py
 ```
 
-`strategy.py` should stay thin:
+`signals.py` owns causal indicators, entry/exit arrays, and aligned dataprep.
+`strategy.py` should only load cached config/profile/defaults, normalize
+aliases, build `ExecutionData`, call `run_v2_strategy`, and return the standard
+`StrategyResult`.
 
-1. load cached config/profile/defaults;
-2. normalize user, UI, and baseline aliases;
-3. build `ExecutionData`;
-4. call `core.engine_v2.runner.run_v2_strategy`;
-5. return the standard Merlin `StrategyResult`.
-
-## What Belongs In Strategy Code
-
-Put this in the strategy package:
-
-- indicator calculations and deterministic signal generation;
-- mapping from config params to signal/dataprep params;
-- aligned arrays needed by the profile, such as ATR, rolling swing highs/lows,
-  moving-average trail levels, and request-gated Chandelier ATR rows;
-- config metadata, parameter roles, variant selector, and execution profile;
-- optional chart overlays later, if they remain read-only presentation data.
-
-## What Must Not Belong In Strategy Code
-
-Do not add:
-
-- a custom V2 execution engine;
-- a custom V2 Grid backend;
-- a strategy-specific Numba Grid loop;
-- strategy-owned stop, target, trail, sizing, or fill logic outside supported
-  V2 execution modes;
-- lookahead/repainting allowances documented as acceptable behavior.
-
-Generic mode names such as `target`, `trail`, `rr`, and `ma` are profile
-vocabulary. Core V2/Grid V2 must not branch on strategy IDs or strategy-specific
-variant names.
-
-## Config Requirements
-
-Set the engine:
-
-```json
-"engine": "v2"
-```
-
-Each parameter must keep the existing Merlin shape where applicable:
-
-```json
-{
-  "type": "float",
-  "label": "Stop X",
-  "default": 2.0,
-  "group": "Risk",
-  "role": "execution",
-  "optimize": { "enabled": true, "min": 1.0, "max": 3.0, "step": 0.5 }
-}
-```
-
-Every optimized parameter must declare `role` as one of:
-
-```text
-signal
-execution
-runtime
-```
-
-Use `signal` for params that change signal/dataprep cache contents, `execution`
-for params consumed by the profile, and `runtime` only for the core-owned
-runtime fields below. Avoid cross-role `depends_on`; V2 rejects it because it
-creates ambiguous cache keys.
-
-The `v2_runtime_contract_v1` field order is exactly `dateFilter`, `start`,
-`end`, `warmupBars`. Runtime declarations are optional for legacy V2 configs,
-but, when present, must match the core contract: strict booleans for
-`dateFilter`, normalized date strings for `start`/`end`, and an integer
-`warmupBars`. Production strategy declarations constrain `warmupBars` to
-100..5000; core/internal callers may use non-negative values. A missing
-`dateFilter` retains the legacy `false` default. These fields must not be
-optimized, selected through `{param}_options`, used as variant selectors, or
-placed in dependencies. They are excluded from candidate domains and both
-semantic and plan identity. WFA rebases only `dateFilter`, `start`, and `end`;
-`warmupBars` remains the run's configured runtime value.
-Omitting an optional declaration does not remove that field from persisted or
-resolved runtime metadata: the complete four-value envelope remains mandatory.
-
-A reserved declaration may omit `optimize`, meaning disabled. If present,
-`optimize` must be a mapping with `enabled=false`, `default_enabled=false`, and
-no axis metadata. `optimize: null` and other non-mapping values are invalid;
-declaration diagnostics list incompatible properties in stable order.
-
-Declare `execution` with:
-
-- base modes such as `entryOrder`, `stop`, `sizing`, `maxDays`, `boundary`,
-  `margin`, and `priceRounding`;
-- `variants` for alternative generic topologies;
-- `variantSelector` mapping a parameter value to a variant;
-- parameters consumed by each mode through the existing V2 mode bindings;
-- optional axes through normal `optimize.enabled` and `optimize.default_enabled`
-  metadata.
-
-`variantSelector.userFacing` defaults to `true` for backward compatibility.
-A user-facing `variantSelector` is selected through Grid modes and must not be
-declared as an ordinary optimizable parameter axis. The selector parameter may
-still retain its fixed/default value for direct strategy configuration.
-Set it to `false` only when variants are internal execution variants controlled
-by a normal strategy parameter, not user-selectable Grid modes. For example,
-S03-like Emergency SL strategies map `useEmergencySL=false/true` to internal
-`plain`/`emergency` variants, while the Start page exposes only the normal
-`Use Emergency SL` and Emergency SL parameter controls. With
-`userFacing=false`, Grid V2 resolves exactly one internal variant from fixed
-params, publishes no selectable `grid_enabled_modes`, rejects stale non-empty
-mode selections, and stores user-facing logical mode identity separately in
-`grid_mode_name`.
-
-For `select`/`options` Grid axes, a runtime config may restrict the enumerated
-values with `{param}_options`. The value must be a non-empty subset of the
-declared config options. Grid V2 preserves the strategy config order and rejects
-unknown runtime options. Use this for apples-to-apples candidate count checks
-instead of editing the strategy config.
-
-Same-role boolean `depends_on` is part of the Grid V2 planning contract. If a
-boolean parent is false, dependent child axes are inactive, do not multiply
-candidate counts, and are omitted from semantic identity/cache keys. Inactive
-children are passed to execution at their fixed/default value. Cross-role
-dependencies remain invalid.
-
-Profiles are validated when parsed, before reference execution or compiled
-packing. Every declared execution mode and variant-selector mapping must be a
-certified combination, every mode-consumed parameter must be declared as an
-execution parameter, and dependencies must be same-role boolean relationships.
-An optimized execution parameter with no currently certified consumer is fatal
-(`V2_UNBOUND_OPTIMIZED_EXECUTION_PARAM`). A fixed truly unbound parameter is
-allowed, reported as `V2_UNBOUND_FIXED_EXECUTION_PARAM`, and excluded from
-semantic identity. A parameter that has a certified consumer supported by at
-least one declared execution family but whose mode is not selected is a
-separate case: fixed values produce the informational
-`V2_UNSELECTED_MODE_EXECUTION_PARAM`, while optimization-enabled values fail
-with `V2_UNSELECTED_MODE_OPTIMIZED_EXECUTION_PARAM` and name the required mode.
-If known certified consumers belong only to incompatible execution families,
-the parameter follows the unbound warning/fatal policy and the diagnostic names
-the family mismatch instead of recommending an impossible mode. Consumer
-support is family-aware even when a valid mode, such as position `trail=ma`,
-requires coordinated companion mode changes in a complete variant.
-Informational diagnostics are not projected into `validation_warnings`.
-
-`V2_INACTIVE_ENABLED_AXIS` applies only when an enabled, bound axis is inactive
-in every selected planning block; it does not alter candidate count or
-identity. Bool-group discriminators fixed per logical block are active covered
-axes, not inactive axes. Diagnostics have stable fields `severity`, `code`,
-`strategy_id`, `path`, `variant`, and `message`.
-
-Use `optimization_rules.bool_groups` for small declarative logical mode groups.
-The `optimization_rules` key may be absent. When present it must be a mapping;
-explicit `null` and other non-mapping values fail with
-`V2_INVALID_BOOL_GROUP`.
-The supported production shape is a two-parameter `at_least_one_true` group with
-optional `logical_modes` metadata:
-
-```json
-{
-  "params": ["useCloseCount", "useTBands"],
-  "mode": "at_least_one_true",
-  "logical_modes": {
-    "cc_only": {"values": {"useCloseCount": true, "useTBands": false}, "label": "Close Count only"},
-    "tbands_only": {"values": {"useCloseCount": false, "useTBands": true}, "label": "T Bands only"},
-    "both": {"values": {"useCloseCount": true, "useTBands": true}, "label": "Both"}
-  }
-}
-```
-
-These logical mode keys are user-facing Grid modes for S03-like planning. They
-are not execution variants and must not be encoded as core strategy branches.
-Each bool discriminator is validated as a declared non-runtime boolean with a
-Grid domain. It remains an active semantic discriminator even though the
-planner fixes its value in each logical block instead of enumerating it as a
-within-block axis.
-
-When `logical_modes` is absent, Grid V2 uses its deterministic compatibility
-naming. When present it must be a mapping with non-empty stable keys. Every
-entry and its `values` member must be mappings; `values` must name exactly the
-two group parameters and contain valid boolean representations. The all-false
-combination and duplicate combinations are invalid. An optional `label` must
-be a non-empty string. Metadata must define every non-all-false combination
-reachable from the current domains; it may also define other valid combinations
-so one complete declaration remains usable when runtime domain restrictions
-select only a subset. Invalid metadata fails once during planning prelude
-construction with structured `V2_INVALID_BOOL_GROUP` diagnostics.
-
-Stage 2 user-facing diagnostic rendering must use the structured collection as
-its authority. Blocking surfaces render `error`; the normal warning panel
-filters to `severity == "warning"`. `info` diagnostics must not become permanent
-warning nags and may appear only in secondary author/debug details or another
-non-blocking affordance. The string-only `validation_warnings` tuple remains a
-compatibility projection, not the UI authority.
-
-The Phase-A server boundary resolves strategy identity before V2 runtime
-normalization for config readiness, Grid Preview, direct Backtest/trade
-download, and direct optimization/Grid. V2 optimization and WFA reject missing,
-blank, null, non-string, or non-Grid `optimization_mode` before runtime-axis,
-dataset, optimizer, state, or storage work. Run endpoints accept only their documented
-strategy aliases and require one non-empty value; equal aliases agree, empty
-aliases do not override a real value, and distinct non-empty aliases fail with
-`V2_CONFLICTING_STRATEGY_ID`. Missing and unknown identities use
-`V2_MISSING_STRATEGY_ID` and `V2_UNKNOWN_STRATEGY_ID`. There is no first-strategy
-or S03 fallback. Walk-Forward uses the same strict identity rule and canonical
-V2 runtime contract. A known V2 profile with fatal declarations is rejected
-before WFA dataset, window, worker, optimizer, state, or storage work; valid V2
-windows receive canonical UTC execution boundaries while V1 representations
-remain unchanged.
-
-At these V2 user boundaries, one server adapter calls the core runtime
-normalizer once. Its complete mapping always contains all four runtime fields,
-but its execution projection preserves request presence: present `dateFilter`
-becomes a real boolean, present blank `start`/`end` become `null`, present dates
-become canonical UTC strings, and absent date keys remain absent from
-`fixed_params`. User Warmup is accepted only through the separate runtime
-transport and becomes `OptimizationConfig.warmup_bars` or the Backtest data-
-preparation value. Reserved fields in `enabled_params`/`param_ranges`, reserved
-`*_options`, `fixed_params.warmupBars`, and Backtest
-`parameters.warmupBars` fail by presence with `V2_RESERVED_RUNTIME_AXIS`.
-
-A strict date-only `start` such as `2025-06-01` canonicalizes to
-`2025-06-01T00:00:00Z`. A strict date-only `end` canonicalizes to the inclusive
-end of that UTC day, `23:59:59.999999Z`, so legacy inclusive-day alignment and
-same-day date ranges are preserved. Naive datetime input remains UTC and
-timezone-bearing input is converted to the equivalent UTC instant. Runtime
-field values share one core normalization authority; duplicate transports are
-compared by canonical meaning rather than raw type or spelling.
-
-Forward Test and OOS Test intentionally override `dateFilter` to `true` while
-deriving the IS window. This is an orchestration fact required by the period
-split, not a second user-runtime parse. Forward Test strips candidate runtime
-keys before dispatch, then applies the aligned dataframe start and inclusive
-end timestamps to an execution-only mapping so the strategy gate includes the
-final FT day. The returned FT result retains only the original JSON-safe
-candidate mapping; execution Timestamps never enter module identity or WFA
-storage. Derived V2 dates use the same canonical UTC `Z` formatter; V1 retains
-its existing `+00:00` representation outside the approved date-aware FT
-correction.
-
-The V2 config resource returns deep-copied additive `runtime_contract`,
-`runtime_values`, `diagnostics`, and `validation_warnings` facts. A known invalid
-V2 profile returns structured HTTP 422 there and HTTP 400 on Phase-A run
-surfaces; an unknown config resource returns structured JSON 404. V1 config and
-runtime shapes remain unchanged.
-
-The Start page accepts a strategy config only after the response for the exact
-selected strategy has rendered successfully. While a config is loading or
-after it fails, direct Backtest/trade download, Grid/WFA, Queue-item
-creation, and automatic Grid Preview are blocked. Starting a load clears stale
-strategy-generated fields, strategy information, and Preview state while
-preserving global CSV, date/Warmup, database, budget, WFA, Queue, and Preset
-controls. Late responses for an obsolete selection are ignored. Persisted
-Queue execution does not depend on editable-form readiness. The client reuses
-the concise backend `error` without reimplementing V2 validation; warning-only
-configs remain usable, warnings may be logged, and `info` is not promoted to a
-warning.
-
-Queue is a supported generic V1/V2 JSON transport and does not own a second
-runtime schema or strategy-specific normalization layer. Optimize/WFA launch
-performs the authoritative runtime validation. A missing legacy Queue
-`warmupBars` key remains absent at launch and therefore uses the core default
-`1000`; present malformed values remain strict validation errors. Queue reads
-do not rewrite or delete stored state: unreadable encoding/JSON and invalid
-top-level shapes are preserved and reported, while legacy item/source
-normalization stays lenient for compatibility. Preset runtime integration is
-still deferred and is not certified by this phase.
-
-Server validation bodies remain structured JSON with the compatibility `error`
-string and authoritative diagnostics. The current Backtest, trade-download,
-and Optimize API clients extract only that concise `error` text for their normal
-message surface while preserving legacy plain-text failures. Runtime fields are
-excluded from both Python and JavaScript display-parameter identity, so runtime
-canonicalization does not change display IDs.
-
-## Signals.py Requirements
-
-Signal code must be deterministic and causal:
-
-- no reads from future bars;
-- no centered rolling windows or negative shifts;
-- no repainting after a bar is closed;
-- no execution-param leakage into signal/dataprep cache unless that parameter is
-  explicitly declared as part of the cache;
-- boolean signal arrays must be 1D, aligned to the prepared dataset, and use
-  explicit `False` for missing signal values;
-- float dataprep arrays must be 1D, aligned, and use `NaN` only where the
-  execution kernel expects inactive or unavailable levels.
-
-Keep signal construction in Python/NumPy/Pandas. The compiled Grid evaluator
-does not compile arbitrary strategy Python.
-
-## Required Strategy Hooks
-
-Expose these from `strategy.py`:
+Expose:
 
 ```python
 def load_config() -> dict: ...
 def load_profile() -> ExecutionProfile: ...
 def normalized_params(params: Mapping[str, Any] | None = None) -> dict: ...
-def build_v2_execution_data(df: pd.DataFrame, params: Mapping[str, Any]) -> ExecutionData: ...
+def build_v2_execution_data(df, params: Mapping[str, Any]) -> ExecutionData: ...
 ```
 
-Optional cache declarations:
+An optional ordered batch hook may reuse indicator work within one call/chunk:
+
+```python
+def build_v2_execution_data_batch(df, params_list) -> list[ExecutionData]: ...
+```
+
+Never retain a module-global DataFrame cache. Normalize floating working
+arrays at the preparation boundary; caller-created DataFrames are not
+guaranteed to have floating OHLC dtypes.
+
+## 4. Declare config roles and execution variants
+
+Set top-level `"engine": "v2"`. Public parameter names remain camelCase.
+Every optimized parameter declares exactly one role:
+
+- `signal` — changes signals or signal-dependent dataprep;
+- `execution` — consumed by a declared generic execution mode;
+- `runtime` — only a reserved core runtime field.
+
+Declare base execution modes, variants, their consumers, and an optional
+`variantSelector`. A user-facing selector becomes Grid mode selection. Set
+`userFacing=false` when a normal parameter chooses an internal variant, such
+as optional Emergency SL; internal names must not appear as Grid modes.
+
+Same-role boolean `depends_on` is allowed. Cross-role dependencies are invalid.
+Small two-boolean `at_least_one_true` groups may define user-facing
+`logical_modes`; define every reachable non-all-false combination once.
+
+Reserved runtime fields are ordered `dateFilter`, `start`, `end`, and
+`warmupBars`. If declared, they use `role=runtime`, are never optimized, and
+must match the core types/ranges. They are not option subsets, selectors,
+dependencies, candidate axes, or identity inputs. V2 requests transport user
+Warmup separately from `fixed_params`.
+
+For select/options axes, `{param}_options` may restrict a run to a non-empty
+subset while preserving config option order. Do not edit config domains merely
+to produce a comparison count.
+
+## 5. Make signals and dataprep deterministic
+
+Signal construction must be causal and prefix-invariant:
+
+- no future reads, centered windows, negative shifts, or repainting;
+- aligned one-dimensional boolean signals with missing values normalized to
+  `False`;
+- aligned float dataprep arrays, with NaN only where the core contract permits
+  unavailable/inactive levels;
+- execution parameters excluded from signal/dataprep unless explicitly part
+  of that preparation identity;
+- `trade_start_idx` honored after technical warmup.
+
+Direction/regime gates belong in entry arrays. Signal-based close-all behavior
+belongs in long/short exit arrays, not a new execution mode.
+
+## 6. Declare and test cache identity
+
+When present:
 
 ```python
 SIGNAL_CACHE_PARAM_NAMES = (...)
 DATAPREP_CACHE_PARAM_NAMES = (...)
 ```
 
-Optional batch build hook:
-
-```python
-def build_v2_execution_data_batch(
-    df: pd.DataFrame,
-    params_list: Sequence[Mapping[str, Any]],
-) -> list[ExecutionData]: ...
-```
-
-The batch hook is used by Grid V2 to build one run or one signal chunk more
-efficiently. It must return one aligned `ExecutionData` object per params
-mapping, in the same order. It is optional; if absent, Grid V2 calls
-`build_v2_execution_data` per unique cache row. Any shared indicator/cache work
-inside the hook must be scoped to the current call/chunk. Do not keep
-module-global DataFrame caches.
-
-`build_v2_execution_data` must return fully aligned `ExecutionData` containing
-timestamps, OHLC arrays, entry signals, and any profile-required arrays. It must
-not place orders or simulate exits.
-
-Do not assume OHLC Series in a caller-created DataFrame already have a floating
-dtype. A preparation boundary that needs NaN sentinels or floating arithmetic
-must explicitly obtain floating-point working arrays.
-
-## Supported Phase 2.5 Modes
-
-Phase 2.5 supports:
-
-```text
-entryOrder=market_next_open
-stop=atr_swing
-sizing=risk_per_trade
-target=rr or none
-trail=none, ma, r_distance, chandelier, or fixed_af_sar
-trailActivation=none or rr
-maxDays=true or false
-boundary=strict_close
-margin=off or report_only
-priceRounding=none or tick_outward
-```
-
-Certified exit topologies:
-
-```text
-target=rr, trail=none, trailActivation=none
-target=none, trail=ma, trailActivation=rr
-target=none, trail=r_distance, trailActivation=rr
-target=none, trail=chandelier, trailActivation=rr
-target=none, trail=fixed_af_sar, trailActivation=rr
-```
-
-The three stateful trails are close-derived and future-effective. The initial
-stop protects the entry-fill bar; activation at the completed bar High/Low
-moves protection to break-even at the actual fill, and a newly accepted method
-stop can execute only on a later bar. `r_distance` consumes `trailRR` and
-`trailDistanceR`. `fixed_af_sar` consumes `trailRR` and `sarSpeed`. Chandelier
-consumes `trailRR`, `chandelierATRLength`, and `chandelierATRMult`; the strategy
-must produce an aligned Pine-compatible ATR/RMA row as
-`ExecutionData.chandelier_atr` for the selected positive integer length.
-`chandelierATRLength` is dataprep/cache identity, while the multiplier is an
-execution scalar. Do not reuse an unrelated initial-stop ATR row when lengths
-differ.
-
-The first finite raw method candidate must be strictly below the completed
-close for a long or strictly above it for a short before tick rounding. Later
-finite candidates use only the protective ratchet. An armed Chandelier trail
-retains fill-price break-even while ATR is unavailable. The fixed-AF SAR is
-trade-local, initializes SAR from the actual fill and EP from the activation
-bar extreme, does not advance on the activation bar, and applies the current
-and previous bar range cap on later updates. These rules intentionally do not
-change the older `ma` mode's same-bar behavior.
-
-The `signal_reversal` topology supports S03-like signal systems on both the
-direct reference runner and the compiled Grid V2 stacked path:
-
-```text
-topology=signal_reversal
-entryOrder=market_next_open
-sizing=fixed_pct_equity
-exitOnSignal=true
-stop=none or emergency_pct
-boundary=strict_close or none
-priceRounding=none
-```
-
-`target`, `trail`, `trailActivation`, `maxDays`, and `margin` must be absent or
-their inert values (`none`, `false`, `off`). Sizing is
-`floor((realized_balance * positionPct / 100 / signal_bar_close) /
-contractSize) * contractSize`, planned at bar close and filled at the next
-open. Optional Emergency SL is a generic protective stop selected with
-`stop=emergency_pct`: it seeds from the actual next-open fill, cannot trigger on
-the fill bar, becomes eligible from `fill_index + 1`, fills long stops at
-`min(open, stop)` and short stops at `max(open, stop)`, and ratchets only on
-favorable close-based updates after `emergencySlUpdateBars`.
-
-Emergency SL should remain a normal strategy parameter. If it also selects an
-internal execution variant, mark the `variantSelector` as `userFacing=false` so
-Grid/UI mode controls do not expose internal names such as `plain` or
-`emergency`.
-
-Flat or close-all behavior is data-driven. Strategies should populate
-`Signals.long_exits` and `Signals.short_exits`; there is no separate `flatExit`
-execution mode. Direction or regime gates belong inside `long_entries` and
-`short_entries`, so opposite-signal reversal exits naturally follow the gated
-entry conditions. The compiled/Grid tier for this topology uses mapping config
-packing, not the vectorized table packer.
-
-If the next strategy fits these modes, add only the strategy package, config,
-hooks, and tests. Do not add a new Grid backend.
-
-## Grid V2 Runtime Settings
-
-The normal Grid dispatcher passes V2 runs into the generic Grid V2 planner and
-compiled evaluator when available. `grid_v2_prefer_compiled` defaults to `true`.
-Set it to `false` only when a reference-tier run is intentionally required.
-
-When compiled execution is available, Grid V2 uses a core-owned stacked batch
-path by default. Strategy code still only builds normal `ExecutionData` rows;
-it does not provide packed candidate arrays or a strategy-specific Grid loop.
-Core validates that the OHLC and timestamp arrays are identical across stacked
-execution-data rows before sharing them as 1D market arrays. Signal and
-dataprep arrays are stacked internally and addressed by per-candidate row
-indices. For `topology=signal_reversal`, the compiled stack contains
-`long_entries`, `short_entries`, optional `long_exits`, and optional
-`short_exits` normalized to boolean rows, with no float dataprep rows.
-
-Grid V2 candidate planning is also core-owned. Strategies do not build candidate
-objects or own Grid execution loops. The planner uses a typed candidate table
-internally and keeps the legacy `plan.candidates` tuple as a lazy debugging and
-test compatibility surface. Strategy authors only need accurate config/profile
-metadata and optional `SIGNAL_CACHE_PARAM_NAMES` / `DATAPREP_CACHE_PARAM_NAMES`
-declarations. Compiled Grid V2 config packing is also core-owned and table
-driven when compatible with the strategy normalizer; no new Phase 2.6.3 or
-Phase 2.6.3.1 strategy hook is required.
-
-`grid_v2_planning_policy` defaults to `full`. The `full` policy and a sampled
-request whose budget covers the full valid space both use the exact historical
-full builder and candidate order. The `sampled` policy with `K < N` allocates K
-across the planner's ordered logical blocks and samples each discrete Cartesian
-block with the versioned balanced-LHS PCG64 contract in
-`core/grid_v2_sampling.py`. Strategy packages do not implement or override this
-sampler.
-
-The static backend profile `full_enumeration_v2` identifies the Grid V2 backend
-contract; it does not identify the effective policy of an individual plan. UI,
-Queue, rerun, and WFA code must use `effective_planning_policy` and the effective
-allocation facts when deciding whether budget, seed, or sampled-plan metadata is
-operative. Stored study summaries use the equivalent
-`grid_v2_effective_planning_policy` field where applicable.
-
-Automatic sampled allocation requires `K` to be at least the number of enabled
-non-empty logical blocks and deterministically gives every such block at least
-one row. Manual allocation may explicitly assign `0%` and may use `K` below the
-block count. Manual percentages are allocation weights rather than hard exclusion
-flags: normal capacity reflow can assign rows to a zero-percent block after all
-positively weighted blocks have reached their capacities.
-
-For sampled eligibility, each planning block must have a fixed active schema,
-no `depends_on` parent may be a varied axis, inactive-axis dedup must be off,
-and every pair of blocks must be provably disjoint in semantic identity. A
-logical `grid_mode_name` alone is not a discriminator. Strategy authors should
-model logical blocks with differing execution variants/modes or a differing
-fixed active parameter, as the S03 boolean logical modes do. Unsupported
-layouts fail preview and execution explicitly.
-
-Candidate IDs are local to the resulting plan. Semantic keys continue to
-describe only strategy/execution/active-parameter semantics and never include
-planning policy, budget, seed, allocation, or worker count. Selected candidates
-still rerun through the public reference runner. Sampled execution currently
-uses mapping config packing; the structurally certified table packer remains
-the full-plan fast path.
-
-Current plan fingerprints use identity schema `grid_v2_plan_identity_v3`;
-candidate semantic identity uses `grid_v2_semantic_identity_v2`, and plans also
-publish `v2_runtime_contract_v1`. Identity includes normalized execution modes,
-so mode changes invalidate WFA plan reuse even when other planning inputs are
-unchanged. Reserved runtime values are excluded. Ordered semantic keys are
-hashed incrementally; do not reintroduce an aggregate JSON payload or copied
-key list.
-
-Candidate rows have both `variant_name` and `grid_mode_name`. For user-facing
-variant strategies such as S06 B2, both are normally the same values
-(`bracket`/`trail`). For internal-variant strategies such as S03 Regime-ER B2,
-`variant_name` stores the resolved execution variant (`plain`/`emergency`) and
-`grid_mode_name` stores the user-facing logical mode
-(`cc_only`/`tbands_only`/`both`). Diversity grouping uses `variant_name` for
-user-facing variants and `grid_mode_name` for internal-variant strategies, so
-the grouping field matches the modes exposed to the user.
-
-WFA Grid V2 plan reuse is also core-owned. Strategy authors do not add a
-Phase 2.6.4 hook or cache object. Treat `start`, `end`, and `dateFilter` as the
-runtime-only date-filter fields so the WFA engine can reuse candidate identity
-while rebasing those values per window. `warmupBars` is runtime-only too, but is
-not a rebase field.
-
-The WFA HTTP boundary passes raw `worker_processes` (including the accepted
-camel-case compatibility field) to the shared optimization-config builder; do
-not add a strategy-specific worker policy. The builder's normalized value is
-the common Grid, legacy Optuna, Forward Test, and replay resource. New Grid V2 WFA
-window diagnostics store that run's actual compiled workers and the exact
-top-level `grid_v2_plan_fingerprint`. Selected WFA Grid trials retain Fast
-`grid_rank`, `semantic_key`, and `candidate_id`; direct Grid V2 storage uses the
-same authoritative Fast rank, while `slow_refinement_rank` remains separate.
-Older studies may omit these additive diagnostics/metadata and remain readable
-without migration or rewrite.
-
-`grid_v2_max_cache_mb` overrides the signal/dataprep cache estimate limit. The
-default is `512`; custom values must be finite positive numbers. In the normal
-dispatcher, `worker_processes` caps Numba batch threads for compiled Grid V2
-evaluation. Signal/dataprep cache memory is estimated once per in-process run,
-so the dispatcher uses a cache worker multiplier of `1` even when multiple Numba
-threads are requested. The estimate includes the actual planned stacked
-signal/dataprep rows, compiled output arrays, and shared OHLC/timestamp arrays;
-the run fails before strategy data builds when the estimate exceeds the limit.
-
-For `topology=signal_reversal`, Grid V2 splits execution into chunks when the
-monolithic signal-stack estimate exceeds `grid_v2_max_cache_mb`. The same
-configured limit is still a fail-fast guardrail for non-signal/S06 stacked
-paths. Chunk diagnostics include `signal_build_seconds`, `stack_build_seconds`,
-`compiled_batch_seconds`, `cache_key_build_seconds`, `chunk_count`,
-`chunk_estimated_mb`, `max_chunk_candidates`, `max_chunk_estimated_mb`,
-`configured_limit_mb`, `estimated_signal_mb`,
-`full_run_estimated_signal_mb`, `signal_stack_rows_built`,
-`signal_stack_rows_peak`, `compiled_config_packing`, and
-`full_population_result_object_note`.
-
-The 512 MB guardrail bounds signal-stack chunk memory. Full-population result
-objects, candidate planning/materialization, ranking, and storage surfaces
-remain O(candidates) and are outside that guardrail. Strategy-side batch
-caches and temporary stack copies can also increase process peak memory beyond
-the reported chunk estimate. In chunked signal topology, `params_materialized`
-means params currently retained/materialized after chunk cache release, not
-total params ever built. `dataprep_hits` and `signal_hits` are logical
-cache-key reuse counters; a later chunk may rebuild arrays whose earlier
-physical copy was already released.
-
-Correct planning can still produce a grid that is too large to run under the
-default cache budget. The S03 Regime-ER B2 S03-like count with Regime off,
-Emergency SL off, 10 MA types excluding `VWAP`, 20 MA lengths, Close Count
-2..7, and T Bands 0.2..2.0 is:
-
-```text
-cc_only      = 7,200
-tbands_only = 20,000
-both        = 720,000
-total       = 747,200
-```
-
-Every candidate is signal-role heavy, so a full-enumeration run can exceed
-`grid_v2_max_cache_mb=512` on the SUI pilot dataset. Use the generic sampled
-planning policy when a bounded research run is intended; do not add sampling
-inside a strategy package or weaken the memory estimate.
-
-When comparing candidate counts across tools or baselines, document the enabled
-axes, enabled variants, `{param}_options` subsets, requested/effective planning
-policy, full space, delivered budget, seed, allocation method, and static backend
-profile. Do not infer full enumeration from the profile name:
-`full_enumeration_v2` can produce either a full or sampled Grid V2 plan. Treat a
-plan as full only when its authoritative effective policy/allocation facts say
-that it is full. Legacy V1 `full_enumeration` remains a separate strategy-owned
-profile.
-
-## Adding Unsupported Modes Later
-
-For a new execution mode, update the system in this order:
-
-1. extend V2 contracts/profile bindings and validation;
-2. implement reference-kernel behavior first;
-3. add direct execution and metrics tests;
-4. extend the compiled evaluator with the same primitive packed inputs;
-5. add compiled-vs-reference parity tests;
-6. update this document and certification docs.
-
-Do not add ad hoc exceptions in Grid V2 or strategy packages.
-
-## Required Tests
-
-Add focused tests for every new V2 strategy:
-
-- config/profile parse and role validation;
-- signal causality and prefix invariance;
-- no repainting/window-start invariance;
-- direct strategy discovery and `run()` smoke;
-- direct V2 run smoke for representative params;
-- V2 Grid-only boundary coverage, including explicit Grid acceptance and
-  deterministic rejection of missing/blank/null/Optuna modes before side effects;
-- Grid V2 count and identity smoke;
-- one-candidate and multi-candidate Grid V2 parity against direct V2 runs;
-- compiled-vs-reference Grid V2 subset parity when Numba is available;
-- selected slow-enrichment smoke through the normal Grid workflow.
-- select/options runtime subset count checks when `{param}_options` is part of
-  the workflow;
-- compiled Grid V2 thread-count determinism checks when a strategy relies on the
-  compiled evaluator.
-
-When using a V1 or external oracle, document any process-global test settings
-such as `NUMBA_DISABLE_JIT`.
-
-Cache-declaration invariant tests are mandatory, not optional. Stale
-`SIGNAL_CACHE_PARAM_NAMES`/`DATAPREP_CACHE_PARAM_NAMES` declarations are the
-highest-risk silent failure mode for imports: Grid V2 would reuse cached arrays
-across parameter values that should differ. The proven mechanical shape (see
-`tests/v2/test_v2_s06_regime_tl_causality.py`):
-
-- `set(SIGNAL_CACHE_PARAM_NAMES)` equals the config params with
-  `role="signal"`;
-- `DATAPREP_CACHE_PARAM_NAMES` equals the signal names plus every param that
-  changes dataprep arrays;
-- neither tuple contains runtime/window fields (`dateFilter`, `start`, `end`,
-  `warmupBars`);
-- a behavioral backstop: varying each declared signal param changes the signal
-  arrays, and an axis over a signal param yields that many distinct
-  `signal_combo_count` groups in `estimate_grid_v2_cache`.
-
-## Pilot Import Lessons (S06 Regime-TL, B2-TZ 26)
-
-Learned from the first real Pine v5 pilot import
-(`s06_r_trend_v02_regime_trendlines_b2`); apply these to every future import:
-
-- **Pin TradingView properties in the baseline package**:
-  `process_orders_on_close=false`, `fill_orders_on_standard_ohlc=true`, zero
-  slippage, percent commission, and the chart timezone. Record them in
-  `dataset.json` so parity failures can be triaged against the pinned setup.
-- **Pin the exact compiled Pine source.** The committed pilot Pine file
-  referenced a variable whose declaration was commented out (stats-table code),
-  so it cannot have been the byte-exact compiled source. Harmless here, but
-  export the source *after* the reference run, from the same editor state.
-- **Expect three residual classes vs TradingView exports** (all bounded,
-  none code defects): exit prices rounded to the display grid (one tick),
-  sizes rounded to one contract step, and per-trade PnL rounded to 2 decimals
-  (accumulates into a ~0.03pp net-profit residual over ~45 trades). TradingView
-  UI drawdown uses an equity/open-excursion convention that Merlin does not
-  reproduce — pin Merlin-convention values and document the TV numbers.
-  `round(profit_factor, 3)` does not reliably reproduce the TV display.
-- **Fixed-per-study selector params**: a bool like `useRegime` can stay
-  `"optimize": {"enabled": false}` and be varied per study through fixed params
-  when the certification target is one explicit regime state. Grid V2 now
-  models same-role boolean `depends_on` activation for planning, but selector
-  axes should still be added only with explicit count, identity, and cache tests.
-  Numeric companions may carry
-  `"optimize": {"enabled": true, "default_enabled": false, ...}` so they are
-  opt-in axes only.
-- **State-machine indicators need explicit warmup convergence checks.** A
-  regime/trendline state machine has unbounded memory in principle, unlike
-  bounded-lookback indicators. Lock the warmup recipe with a window-start
-  invariance test at a larger warmup; raise the warmup in the baseline recipe
-  if it diverges instead of touching core.
-- **JIT test process isolation**: never mix `NUMBA_DISABLE_JIT=1` oracle tests
-  with compiled Grid V2 assertions in one pytest process; run compiled parity
-  in a fresh JIT-on process.
-
-## Pilot Import Lessons (S03 Regime-ER, B2-TZ 36)
-
-Learned from importing `s03_reversal_v11_regime_er_b2`, the first production
-strategy on the `signal_reversal` topology:
-
-- **Map Pine `close_all` to exit arrays, not a new mode.** Regime-flat exits are
-  expressed as both `Signals.long_exits` and `Signals.short_exits`. The generic
-  topology then closes the active position at the next open and leaves
-  non-Emergency-SL exit reasons as `None`.
-- **Keep `useRegime` fixed per study.** The Regime-ER numeric params are signal
-  params, but `useRegime` itself is not a default Grid axis because disabled
-  regime would make those numeric params inert. Use fixed study params and opt
-  into numeric regime axes explicitly.
-- **Do not infer config defaults from one baseline.** The Regime-ER reference
-  uses `maOffset3=0.0`, `regimeErLength=30`, `regimeErThresh=0.40`, and
-  `emergencySlPct=10.0`; the Pine defaults remain `0.2`, `20`, `0.30`, and
-  `20.0` respectively. Baseline tests inject the reference params.
-- **Date-expiry `close_all` can require post-end bars.** The S03 Regime-ER
-  TradingView reference emits the final close after leaving the date range and
-  fills it at `2026-02-01T01:00:00Z`. The production B2 adapter follows the
-  established truncation-at-`end` pattern and closes at the strict boundary
-  `2026-02-01T00:00:00Z`; keep this as a documented residual unless core date
-  boundary semantics are deliberately reopened.
-- **Emergency SL export prices can be display-rounded.** The reference B
-  Emergency SL event matches in time and behavior; the TradingView CSV rounds
-  the computed fill price to the 4-decimal display grid. Use a one-tick
-  exit-price tolerance for that exported field, while keeping entry prices and
-  timestamps exact.
-- **S03-like Grid modes are logical modes, not Emergency variants.**
-  `plain`/`emergency` are internal execution variants selected by
-  `useEmergencySL`. User-facing Grid planning uses `cc_only`, `tbands_only`,
-  and `both`, with same-role boolean `depends_on` collapse so inactive Close
-  Count, T Bands, Regime-ER, and Emergency SL child axes do not multiply the
-  parameter space.
-- **Signal-reversal rescue performance evidence.** After TZ43, stored S03
-  Regime-ER B2 WFA studies in
-  `src/storage/2026-07-19_135447_s03-v11-regime-er-test.db` improved from
-  `11,750s -> 147s` on COREUSDT 1h and `11,756s -> 141s` on DOGEUSDT 1h with
-  the same `45,405` candidates/window and unchanged stitched OOS metrics. The
-  supporting artifacts are under `docs/_work/backtester_V2/benchmarks/`.
-- **Pure-Python Regime-ER fallback is for safety, not speed.** The optimized
-  Regime-ER loop has a JIT-off fallback so tests remain runnable with
-  `NUMBA_DISABLE_JIT=1`, but production Grid performance assumes normal Numba
-  availability.
-
-## Baseline And Certification
-
-Use a TradingView or other external baseline when the strategy is meant to
-match an external reference, when execution semantics are newly introduced, or
-when the strategy will be used as a certification target. Keep raw exports and
-screenshots unchanged, and use normalized UTC machine-readable files in
-automated tests.
-
-A Merlin-only baseline is acceptable for an internal strategy that uses already
-certified execution modes and has no external parity claim. Store enough params,
-data-window metadata, metrics, and trade signatures to make regressions
-repeatable.
-
-## Persisted Runtime And Stored Execution
-
-Every newly saved V2 Grid or WFA study carries one request-level
-`config_json.v2_runtime` envelope with schema `v2_runtime_metadata_v1` and
-contract `v2_runtime_contract_v1`. Its complete `values` mapping is ordered as
-`dateFilter`, `start`, `end`, `warmupBars`; diagnostics retain `info`, while
-`validation_warnings` is the warning-only ordered projection. V1 writers omit
-the key entirely. The envelope is transported by `OptimizationConfig` for
-direct runs and by the WFA base template; per-window configs deliberately omit
-it. Historical V2 Optuna studies remain readable and replayable without
-migration or rewrite.
-
-Stored reads prefer valid current metadata, then legacy fixed-param dates,
-then a non-NULL study Warmup, then a non-NULL config Warmup, and finally core
-defaults for genuinely absent old facts. Explicit false, blank, and internal
-zero values are presence-sensitive. An absent `config_json` value, SQL `NULL`,
-or an empty/whitespace-only legacy string is treated as historical absence,
-because older rows could legitimately predate stored config metadata; this is
-why independently valid legacy/default runtime fallback is allowed. Non-empty
-invalid JSON, arrays/scalars, and unsupported objects are corruption and block
-strict V2 execution. Syntactically versioned future metadata such as
-`v2_runtime_metadata_v2` is unavailable, while malformed unversioned schema
-labels may use independently valid legacy facts. In contrast, any present
-contract version that is not exactly `v2_runtime_contract_v1` (including a
-blank, typo, or future value) is unsupported and cannot downgrade. A missing
-contract member is malformed metadata and may use independently valid legacy
-facts. No read, post-process config update, or compatibility view rewrites the
-envelope.
-
-At stored execution, the current registry/profile determines V1 versus V2;
-metadata is only a persistence carrier. Candidate artifacts cannot own runtime.
-Historical FT/OOS/manual/WFA exports apply operation dates last and keep Warmup
-separate. An inactive `dateFilter` means full data with `trade_start_idx=0`
-even when stored dates are present. Unknown or removed strategies remain
-viewable from saved facts but cannot execute or export without current registry
-authority. Every Lancelot bundle has `exportMode="live"`. The API exports only
-the currently certified legacy strategy, `s03_reversal_v10`; every other
-strategy is rejected after a read-only identity lookup and before full
-study/candidate loading, stitched-OOS backfill, runtime resolution, CSV access,
-hashing, or bundle construction. This narrow integration is not part of the
-Backtester V2 import or certification contract. A new V2 strategy does not
-require Lancelot aliases or export certification. Adding another Lancelot
-strategy requires a separate reviewed Merlin/Lancelot contract and
-implementation task after its live-trading contract is known. The accepted S03
-v10 projection remains candidate-only and applies `dateFilter=false`,
-`start=null`, and `end=null` last, with Warmup at the bundle top level.
-Historical Merlin exports retain their operation dates.
-
-Corrected FT metrics intentionally may differ for V2 and date-aware V1
-strategies such as S06 because candidate IS bounds no longer win and the aligned
-final FT day is included. No historical FT rows are backfilled. Re-run prior
-S06 V1 or V2 Forward Tests whenever their saved FT metrics affect a decision.
-
-The S06 B2 and S06 Regime-TL B2 configs declare `dateFilter` and `warmupBars`
-with `role="runtime"` and omit optional `start`/`end` declarations. The S03
-Regime-ER B2 config declares all four reserved fields with `role="runtime"`.
-These declarations never create candidate axes.
-
-## Common Failure Modes
-
-Check these first when V2 strategy work drifts:
-
-- a signal parameter is missing from `SIGNAL_CACHE_PARAM_NAMES`;
-- an execution parameter is incorrectly marked as `signal` or `runtime`;
-- inactive variant parameters are changing semantic identity;
-- signal arrays have object dtype, `NaN`, or length mismatch;
-- rolling indicators use future bars or centered windows;
-- `trade_start_idx` is ignored in warmup data;
-- tick rounding is applied to risk sizing instead of only placed levels;
-- selected Grid candidates are not slow-enriched through the reference runner;
-- selected Grid candidates reuse fast guardrail summaries instead of the slow
-  reference summary;
-- cache estimates are multiplied by Numba thread count even though the
-  signal/dataprep cache is shared in process;
-- a test imported the V1 Numba oracle before setting process-global JIT state.
-
-## Inherited conditional Fast metrics
-
-New V2 strategies inherit conditional Fast Grid Monthly Sharpe, Daily Sharpe,
-and SQN from their
-certified execution family; strategy signal code must not implement a second
-formula. The compiled families stream Welford state in constant memory. Sharpe
-uses the evaluation-only calendar-month mark-to-market equity sequence starting
-at `trade_start_idx`. Initial capital anchors the first evaluation month, the
-bar preceding a month transition closes the old month, and the first bar in
-the new month belongs to the new month. The final partial month is retained. A
-completed-trade gate is explicit. Sharpe otherwise keeps the fixed
-2% annual risk-free rate divided by 12, population variance, and no annualizing
-square root. It is undefined with no completed trades, fewer than two real
-calendar observations, or non-positive/non-finite variance. SQN uses exact net trade PnL,
-sample variance, and is undefined below 30 completed trades, for non-positive
-variance, or standard deviation below `1e-10`.
-
-Fast requests are execution-only and must not enter semantic identity, plan
-fingerprints, sampling, or cache identity. The UI exposes eight common Fast
-controls but permits at most six selected; Backtester V1 Optuna keeps its separate cap.
-Daily Sharpe is Fast-only. Non-finite selected objectives are
-removed from direct Grid and WFA ranking; a short WFA window can therefore
-exclude many SQN candidates. Sortino, Ulcer Index, and Consistency stay
-Slow-only, Fast Constraints are unchanged, and V2 Grid DSR remains unavailable.
-
-The shared runner returns `StrategyResult.metric_start_idx=trade_start_idx` and
-`metric_initial_equity=initial_capital`; adapters must not replace or reinterpret
-those boundary facts.
-
-Those advanced-metric boundaries do not own Realized Max DD or RoMaD. The V2
-reference and compiled family must scan every finite realized `balance_curve`
-observation, including flat warmup and the final bar. Percentage DD is the
-maximum positive-peak fraction; absolute DD, where exposed, is an independent
-currency maximum. RoMaD uses percentage DD. Do not reuse `equity_curve`, the
-advanced anchor, or the optional Net Profit starting balance as a drawdown
-boundary or peak. Strategy Lab's separate request-gated
-`max_drawdown_mtm_pct` is valid only for the generic position family. It scans
-bar-close MTM equity from `trade_start_idx`, seeds the peak with initial
-capital, propagates non-finite observations to `NaN`, and transports compiled
-results in an optional sidecar without changing the 26-column output ABI.
-Signal-reversal requests fail explicitly. This is not TradingView intrabar
-drawdown. Future `romad_mtm` uses `NaN` when MTM DD is zero; existing realized
-RoMaD intentionally retains its legacy convention.
-
-## Typed selected Slow metrics
-
-`V2RunResult` retains the complete required `BasicMetrics` and
-`AdvancedMetrics` snapshots returned by its one reference enrichment call.
-Selected Slow consumers must read those objects directly; do not reconstruct
-metrics from `StrategyResult`, add fallback defaults, or recalculate them.
-Fast-row ownership is unchanged, and an undefined Sortino remains `None`.
-
-Daily Sharpe adds three typed fields to `AdvancedMetrics`. The
-shared reference runner computes them in its existing single enrichment call
-only when `compute_sharpe_daily=True`; certified adapters keep the default
-disabled behavior. UTC day closes use the evaluation boundary and initial-
-capital anchor, retain partial first/final observed days (including a one-bar
-inclusive-midnight end), and do not fill missing dates. An invalid opening
-denominator or any non-finite evaluation equity invalidates the whole daily
-series. Both compiled execution families inherit the internal request-gated
-implementation: one canonical contiguous `int32` day-ID array is shared by the
-population, each candidate keeps constant streaming state, and output columns
-23..25 transport the ratio and exact diagnostics. Selected results validate all
-three fields against the canonical reference; the reference-only compounding
-self-check is intentionally not duplicated in the kernels. Public Grid and
-legacy Backtester V1 Optuna derive the request from selected objectives, and generic Queue transport
-preserves it. Final WFA reporting always requests the metric for real IS and
-real undelayed dense OOS series; delayed/no-trade OOS facts are suppressed.
-Nullable storage preserves historical absence without backfill. DSR, stitched
-portfolio metrics, exports, and active-day constraints remain unchanged.
-
-## Multi-mode stateful trail adapters
-
-`s06_r_trend_v06_4_a2_b2` is the reference adapter for a strategy whose one
-selector maps to Bracket, R-distance, Chandelier, and fixed-AF SAR variants.
-Declare each mode in `execution.variants` and use the profile's active-parameter
-facts; do not use `depends_on` or validate inactive mode fields. Indicator work
-must also be request-gated: common S06 signals and initial stops are shared,
-Chandelier ATR is prepared only for Chandelier rows, and MA arrays are absent.
-Cache identity includes only fields actually consumed by signal/dataprep. At
-the execution boundary, pass canonical parsed values rather than the earlier
-raw mapping. Grid fixed-value coercion likewise replaces a field with its
-declared default when it is inactive in every selected variant; if any selected
-variant consumes the field, normal strict coercion still applies. Integer fixed
-values must be finite and exactly integral rather than rounded or truncated.
+The signal tuple must equal config parameters with `role=signal`. The dataprep
+tuple adds every parameter that changes dataprep arrays. Neither contains
+runtime fields. Add mechanical equality tests and behavioral backstops:
+varying each declared signal parameter must change relevant arrays, and a Grid
+axis must yield the expected distinct cache groups.
+
+Request-gate optional indicator work. Chandelier ATR, for example, is prepared
+only for Chandelier rows and its length participates in dataprep identity;
+unrelated ATR rows are not interchangeable.
+
+## 7. Prove Grid planning
+
+Use the shared planner; do not create candidates in strategy code. Verify:
+
+- enabled axes, inactive dependency children, variants/logical blocks, and
+  option subsets produce the intended full count;
+- semantic keys and candidate order are deterministic;
+- full planning preserves the complete canonical order;
+- sampled planning is deterministic for budget, seed, and allocation and is
+  eligible for the declared block topology;
+- effective planning policy—not backend profile name—is used in UI, Queue,
+  WFA, storage, and reports;
+- signal/dataprep cache and worker limits are realistic.
+
+Record enabled axes/modes, option subsets, requested/effective policy, full
+space, delivered budget, seed, allocation, and profile in any count claim.
+Use sampled planning for intentionally bounded work; never add sampling inside
+the strategy package or weaken cache estimates.
+
+## 8. Build parity and integration evidence
+
+Use layered evidence:
+
+1. signal values/state transitions against the source contract;
+2. direct reference V2 execution for representative modes and both sides;
+3. compiled-vs-reference one-candidate and multi-candidate parity;
+4. selected Fast candidate Slow/reference enrichment;
+5. external/Pine metric and trade parity where claimed;
+6. UI Grid Preview and direct Grid request construction;
+7. fixed/Adaptive WFA behavior applicable to the strategy;
+8. storage/reload/manual replay compatibility;
+9. Strategy Lab compatibility when the strategy is certified for that tool.
+
+Pin process-global settings such as `NUMBA_DISABLE_JIT` before imports and run
+JIT-off oracles separately from JIT-on compiled gates. Do not modify core when
+an external export merely rounds displayed prices, sizes, or PnL; document a
+bounded residual in certification evidence.
+
+Required focused tests include config/profile validation, discovery/run smoke,
+causality, no-repainting/window-start invariance, cache declarations, Grid-only
+HTTP/core rejection before side effects, full/sample count and identity,
+reference/compiled parity, thread determinism, selected Slow enrichment,
+runtime option subsets, WFA/storage transport, and external baseline assertions
+appropriate to the strategy.
+
+## 9. Update the correct authority
+
+- Stable new core guarantee: [V2 architecture](engine_v2/ARCHITECTURE.md).
+- Shared formula/availability change: [Metrics](METRICS.md).
+- Exact values, hashes, tolerances, or parity conclusion:
+  [Certification](engine_v2/CERTIFICATION.md) and baseline README.
+- Timing measurement: [Performance](engine_v2/PERFORMANCE.md).
+- New user-facing strategy: config-derived matrix in
+  [Project overview](PROJECT_OVERVIEW.md).
+
+Do not place phase chronology, benchmark numbers, local output status, or
+exact certification results in this procedure.
+
+## Common import failures
+
+- a signal/dataprep parameter is absent from cache identity;
+- an execution parameter is marked as signal/runtime or has no active consumer;
+- inactive parameters alter semantic identity or candidate counts;
+- an internal variant is accidentally exposed as a Grid mode;
+- signals are misaligned, object-typed, non-causal, or contain missing truth
+  values;
+- a state-machine indicator lacks warmup/window-start convergence tests;
+- execution logic leaks into `signals.py` or the adapter;
+- candidate generation, sampling, packing, or stop/trail logic is duplicated
+  in the strategy package;
+- selected results trust Fast summaries instead of the one Slow/reference run;
+- JIT-off oracle state contaminates compiled tests;
+- a TradingView UI drawdown is compared to realized or bar-close MTM drawdown
+  without naming the different convention;
+- local-only evidence is presented as available in a fresh clone.

@@ -1,606 +1,180 @@
-# Merlin - Project Overview
+# Merlin Project Overview
 
-Config-driven backtesting and optimization platform for cryptocurrency trading strategies with SQLite database persistence and web-based studies management.
+Merlin is a config-driven cryptocurrency strategy backtesting and
+optimization platform. This document owns current component responsibilities,
+principal data flows, persistence/UI structure, and the complete current
+strategy matrix. It does not duplicate route or source-file inventories.
 
-## Project Structure
+## Component map
 
-```
-project-root/
-|-- AGENTS.md                 # Codex bootstrap; points to CLAUDE.md
-|-- CLAUDE.md                 # Authoritative AI/development guidance
-|-- README.md                 # Quick start guide
-|-- requirements.txt          # Python dependencies
-|-- docs/                     # Documentation
-|   |-- PROJECT_OVERVIEW.md   # This file
-|   `-- ADDING_NEW_STRATEGY.md # Strategy development guide
-|-- data/                     # Data files (not code)
-|   |-- raw/                  # Source OHLCV CSV files
-|   `-- baseline/             # Regression test baselines
-|-- tools/                    # Development utilities
-|   |-- strategy_lab/         # V2-only dataset and opt-in real certification tools
-|   |-- generate_baseline_s01.py # Generate regression baselines
-|   |-- benchmark_indicators.py  # Indicator performance tests
-|   |-- benchmark_metrics.py     # Metrics performance tests
-|   `-- test_all_ma_types.py     # Test all 11 MA types
-|-- tests/                    # Pytest test suite
-|   |-- strategy_lab/          # Phase 0/1 and opt-in real certification tests
-|   |-- conftest.py            # Shared fixtures (isolated storage, Flask client)
-|   |-- test_sanity.py         # Infrastructure sanity checks
-|   |-- test_regression_s01.py # S01 baseline regression
-|   |-- test_s01_migration.py  # S01 migration validation
-|   |-- test_s03_reversal_v10.py # S03 strategy tests
-|   |-- test_s03_reversal_v11.py # S03 v11 Emergency SL tests
-|   |-- test_s04_stochrsi.py   # S04 strategy tests
-|   |-- test_s06_r_trend_v02.py # S06 execution and reference tests
-|   |-- test_s06_fast_grid.py # S06 full-enumeration Grid/parity tests
-|   |-- test_metrics.py        # Metrics calculation tests
-|   |-- test_export.py         # Export functionality tests
-|   |-- test_indicators.py     # Indicator tests
-|   |-- test_naming_consistency.py # camelCase naming guardrails
-|   |-- test_walkforward.py    # Walk-forward analysis tests
-|   |-- test_adaptive_wfa.py   # Adaptive WFA trigger detection tests
-|   |-- test_server.py         # HTTP API tests
-|   |-- test_storage.py        # Database storage tests
-|   |-- test_db_management.py  # Multi-database management tests
-|   |-- test_post_process.py   # Post-process module tests
-|   |-- test_dsr.py            # Deflated Sharpe Ratio tests
-|   |-- test_oos_selection.py  # OOS selection tests
-|   |-- test_stress_test.py    # Stress test tests
-|   |-- test_analytics.py          # Analytics equity aggregation tests
-|   |-- test_multiprocess_score.py    # Multi-process scoring tests
-|   |-- test_optuna_sanitization.py   # Optuna sanitization tests
-|   |-- test_score_normalization.py   # Score normalization tests
-|   |-- test_coverage_startup.py      # Initial Search Coverage mode tests
-|   |-- test_grid_engine.py           # Grid optimizer tests (allocation, LHS, validation)
-|   `-- test_strategy_loop_regression.py # Strategy loop performance regression
-`-- src/                      # Application source code
-    |-- run_backtest.py       # CLI backtest runner
-    |-- core/                 # Core engines and utilities
-    |   |-- backtest_engine.py   # Trade simulation engine
-    |   |-- optuna_engine.py     # Optuna optimization engine
-    |   |-- grid_engine.py       # Deterministic Grid optimizer (mode allocation, LHS, fast/slow refinement)
-    |   |-- walkforward_engine.py # Walk-forward analysis engine
-    |   |-- metrics.py           # Metrics calculation (Basic/Advanced/WFAMetrics)
-    |   |-- analytics.py         # Portfolio equity aggregation for Analytics page
-    |   |-- storage.py           # SQLite database functions (studies/trials/wfa_windows/wfa_window_trials/study_sets/analytics_group_cache)
-    |   |-- export.py            # Trade CSV export functions
-    |   |-- bundle_export.py     # Lancelot partial-bundle export
-    |   |-- param_identity.py    # Display-identity helpers (canonical params, hashed IDs)
-    |   |-- post_process.py      # Forward Test, DSR, Stress Test validation
-    |   `-- testing.py           # OOS selection and test utilities
-    |-- indicators/           # Technical indicator library
-    |   |-- ma.py              # Moving averages (11 types)
-    |   |-- volatility.py      # ATR, NATR
-    |   |-- oscillators.py     # RSI, StochRSI
-    |   `-- trend.py           # ADX, trend indicators
-    |-- strategies/           # Trading strategies
-    |   |-- base.py            # BaseStrategy class
-    |   |-- s01_trailing_ma/   # Trailing MA strategy
-    |   |   |-- config.json    # Parameter schema
-    |   |   `-- strategy.py    # Strategy implementation
-    |   |-- s03_reversal_v10/  # Reversal strategy (T-Bands + close counts)
-    |   |   |-- config.json
-    |   |   |-- strategy.py
-    |   |   `-- fast_grid.py   # Numba-accelerated Grid fast backend
-    |   |-- s03_reversal_v11/  # v10-based V1 strategy with optional Emergency SL
-    |   |   |-- config.json
-    |   |   |-- strategy.py
-    |   |   `-- fast_grid.py   # Numba-accelerated Grid fast backend
-    |   |-- s04_stochrsi/      # StochRSI strategy
-    |   |   |-- config.json
-    |   |   `-- strategy.py
-    |   `-- s06_r_trend_v02/   # R-Trend slow strategy + full-enumeration Numba Grid
-    |       |-- config.json
-    |       |-- strategy.py
-    |       `-- fast_grid.py
-    |-- storage/              # Database storage (gitignored)
-    |   |-- .gitkeep           # Directory marker
-    |   |-- *.db               # SQLite database files (WAL mode, multiple supported)
-    |   |-- journals/          # SQLite journal files
-    |   `-- queue.json         # Scheduled run queue state
-    |-- ui/                   # Web interface
-    |   |-- server.py                 # Flask entrypoint + app creation + route registration
-    |   |-- server_services.py        # Helpers/shared logic (no route decorators)
-    |   |-- server_routes_data.py     # Pages + studies/tests/trades + presets + strategies + DB/CSV/queue endpoints
-    |   |-- server_routes_run.py      # Optimization status/cancel + optimize/walkforward/backtest
-    |   |-- server_routes_analytics.py # Analytics page + WFA summary API
-    |   |-- templates/
-    |   |   |-- index.html    # Start page (configuration)
-    |   |   |-- results.html  # Results page (studies browser)
-    |   |   `-- analytics.html # Analytics page (WFA research)
-    |   `-- static/
-    |       |-- js/           # Frontend JavaScript
-    |       |   |-- main.js               # Start page logic
-    |       |   |-- results-state.js      # Results state + localStorage/sessionStorage
-    |       |   |-- results-format.js     # Results formatters + labels + MD5
-    |       |   |-- results-tables.js     # Results table/chart renderers
-    |       |   |-- results-controller.js # Results orchestration + API + events
-    |       |   |-- api.js                # API client functions
-    |       |   |-- strategy-config.js    # Dynamic form generation
-    |       |   |-- ui-handlers.js        # Shared UI event handlers
-    |       |   |-- optuna-ui.js          # Optuna Start-page UI helpers + coverage analysis
-    |       |   |-- optuna-results-ui.js  # Optuna Results-page render helpers
-    |       |   |-- post-process-ui.js    # Post process UI helpers
-    |       |   |-- oos-test-ui.js        # OOS test UI helpers
-    |       |   |-- wfa-results-ui.js     # WFA Results-page UI helpers
-    |       |   |-- presets.js            # Preset management
-    |       |   |-- results.js            # Results page initialization
-    |       |   |-- queue.js              # Scheduled run queue management
-    |       |   |-- dataset-preview.js    # WFA window layout preview
-    |       |   |-- analytics.js          # Analytics page logic + state
-    |       |   |-- analytics-equity.js   # Analytics equity curve rendering
-    |       |   |-- analytics-filters.js  # Analytics filter panel management
-    |       |   |-- analytics-table.js    # Analytics study table rendering
-    |       |   |-- analytics-sets.js     # Analytics study sets management (CRUD + membership)
-    |       |   |-- analytics-sets-view.js # Study sets view (sort/filter/bulk-color/bulk-delete)
-    |       |   `-- utils.js              # Shared utility functions
-    |       `-- css/
-    |           `-- style.css # Light theme styles
-    `-- presets/              # Saved parameter presets
-        `-- *.json
+```text
+src/core/             V1/V2 execution, optimization, Grid, WFA, metrics,
+                      persistence, analytics, post-processing, and exports
+src/core/engine_v2/   generic validated V2 reference and compiled execution
+src/strategies/       discoverable strategy packages and config metadata
+src/indicators/       shared technical indicators
+src/ui/               Flask routes/services and the three-page frontend
+data/                 market inputs and tracked baseline evidence
+tools/strategy_lab/   local V2-only research pipeline
+tests/                core/server, V2, JavaScript, and Strategy Lab suites
 ```
 
-## Architecture
+For detailed V2 guarantees see [V2 architecture](engine_v2/ARCHITECTURE.md).
+For formulas and surface availability see [Metrics](METRICS.md).
 
-### Core Principles
+## Core ownership
 
-1. **Config-Driven Design**
-   - Backend loads parameter schemas from each strategy's `config.json`
-   - Frontend renders UI controls dynamically from `config.json`
-   - Core modules remain strategy-agnostic
+`backtest_engine.py` owns V1 data preparation, trade/result structures, and
+single-strategy execution support. `optuna_engine.py` owns the legacy-supported
+V1 Optuna implementation and common optimization result/config structures.
+`grid_engine.py` owns shared Grid selection, validation, ranking, constraints,
+Fast/Slow refinement, and dispatch. V1 Fast Grid generation remains in its
+three strategy-owned backends; V2 planning and execution are generic in
+`grid_v2.py`, `grid_v2_sampling.py`, `grid_pareto.py`, and `engine_v2/`.
 
-2. **camelCase Naming Convention**
-   - Parameter names use camelCase end-to-end: Pine Script -> `config.json` -> Python -> Database
-   - Examples: `maType`, `closeCountLong`, `rsiLen`
-   - Internal control fields (`use_backtester`, `start`, `end`) may use snake_case but are excluded from UI/config
+`walkforward_engine.py` owns fixed day/calendar-month and Adaptive day-based
+WFA orchestration, window execution, plan reuse, and stitched OOS output.
+`metrics.py` owns canonical cross-engine metrics. `storage.py` owns SQLite
+schemas and reads/writes; `analytics.py` aggregates WFA equity; post-processing
+and export modules own their named operations.
 
-3. **Data Structure Ownership**
-   - Structures live where they're populated:
-     - `TradeRecord`, `StrategyResult` -> `backtest_engine.py` (`TradeRecord.exit_reason` is optional; S03 v11 Emergency SL exits use `"Emergency SL"`)
-     - `BasicMetrics`, `AdvancedMetrics`, `WFAMetrics` -> `metrics.py`
-     - `OptimizationResult`, `OptunaConfig`, `OptimizationConfig`, `InMemoryJournalBackend` -> `optuna_engine.py`
-     - `GridSelectionConfig`, `GridAllocation` (and per-strategy `GridParameterSpace`/`GridCandidate`/`FastGridData`) -> `grid_engine.py` and `strategies/.../fast_grid.py`
-     - `WFConfig`, `WFResult`, `WindowResult`, `WindowSplit`, `StitchWindow`, `TriggerResult`, `ISPipelineResult`, `WindowExecutionPlan`, `OOSStitchedResult` -> `walkforward_engine.py`
-     - Strategy params dataclass -> each strategy's `strategy.py`
+V2 strategies own config/profile metadata, deterministic signals/dataprep,
+cache identities, and thin adapters. Generic V2 core owns fills, sizing,
+stops, targets, trails, guardrails, metrics transport, and compiled Grid
+evaluation. New V2 strategies do not add strategy-specific execution/Grid
+kernels for already-supported modes.
 
-4. **Optimizer Policy (Optuna + Grid)**
-   - The optimization modes share constraints, objectives, scoring, and the `trials` table, with an engine-generation boundary:
-     - **Optuna (Backtester V1 only for new runs)** (Bayesian/evolutionary): single- and multi-objective (1-6 objectives), Pareto front, soft constraints, samplers (Random, TPE/MOTPE, NSGA-II, NSGA-III), budgets (n_trials/timeout/patience), pruning (single-objective only), Initial Search Coverage, trial deduplication. Historical V2 Optuna studies remain readable and replayable.
-     - **Grid** (deterministic): shared discovery/ranking/storage supports two planning generations. Backtester V1 dispatches to strategy-owned `fast_grid.py` backends: S03 v10/v11 retain budgeted seeded LHS/full generation for `cc_only`/`tbands_only`/`both`, while S06 retains 100% enumeration for selectable `bracket`/`trail` modes (48,480 default combinations; up to 436,320 with optional Threshold OS/OB axes). Backtester V2 uses a generic core-owned planner with explicit `full|sampled` policy. Full preserves the certified historical population/order; sampled allocates a bounded budget across ordered logical blocks and uses deterministic balanced discrete LHS in O(K) planning memory. The static `full_enumeration_v2` backend profile does not imply the effective policy of a run. Both generations share objectives, soft constraints, ranking, storage, selected-candidate reference validation, and slow-authoritative WFA OOS execution. Annualized UTC Daily Sharpe is request-gated and Fast-only; the existing Monthly Sharpe remains a distinct objective.
-   - **Bool group rules**: strategy `config.json` can declare invalid boolean combinations (e.g., `at_least_one_true`) to reduce wasted trials
-   - **Parameter dependencies**: numeric params can declare `depends_on` to be skipped when a parent bool is false
-   - **In-memory backend**: `InMemoryJournalBackend` replaces file-based journal storage for faster multiprocess Optuna optimization
-   - **Trial log switch**: `trials_log` flag controls Optuna trial-level INFO logging (togglable from UI)
-   - **Robust trial handling**: NaN objectives mark a trial FAIL (study continues); failed trials are ignored by samplers
-   - Backtester V1 Optuna/Grid and new V2 Grid save the same shape into `trials` (with `optimization_mode` and grid-specific columns such as `grid_mode_name` distinguishing rows)
+## Optimizer and execution flow
 
-5. **Database Persistence**
-   - All optimization results automatically saved to SQLite database
-   - Multiple `.db` files supported with active DB switching
-   - Studies browsable through web UI Results page
-   - Trade exports generated on-demand from stored parameters
-   - Original CSV files referenced, not duplicated
-   - **Analytics group cache** stores aggregated WFA equity for all-studies and per-set views to keep the Analytics page snappy
-
-### Module Responsibilities
-
-#### Core Engines (`src/core/`)
-
-| Module | Purpose |
-|--------|---------|
-| `backtest_engine.py` | Bar-by-bar trade simulation, position management, data preparation |
-| `optuna_engine.py` | Optuna optimization engine: single/multi-objective, constraints, samplers (TPE/Random/NSGA), pruning (single-objective only), Initial Search Coverage, trial deduplication, InMemoryJournalBackend, and database persistence |
-| `grid_engine.py` | Deterministic Grid optimizer: generic budget parsing, mode allocation, LHS sampling, ranking, validation orchestration, fast/slow refinement, storage handoff (`save_grid_study_to_db`, `build_grid_dsr_results`, `preview_grid_parameter_space`) |
-| `walkforward_engine.py` | Rolling walk-forward analysis with fixed day windows or complete calendar-month windows, stitched OOS equity, annualized WFE, day-only adaptive re-optimization triggers (CUSUM, drawdown, inactivity), adaptive cooldown, per-module top-N trial retention, database persistence |
-| `metrics.py` | Calculate BasicMetrics, AdvancedMetrics, and WFAMetrics (Monthly Sharpe, annualized UTC Daily Sharpe with observation/active-day diagnostics, RoMaD, Profit Factor, SQN, Ulcer Index, Consistency R²) |
-| `analytics.py` | Portfolio equity aggregation: equal-weight curve merging, forward-fill alignment, annualized profit, max drawdown for aggregated curves |
-| `storage.py` | SQLite database operations: save/load studies, manage trials/windows/wfa_window_trials, multi-database management, study sets CRUD with color/sort_order, analytics group cache, queue state persistence |
-| `export.py` | Export trade history to CSV (TradingView format) |
-| `bundle_export.py` | Build the certified S03 v10 Lancelot partial bundle from a trial (Optuna/Grid) or WFA window |
-| `param_identity.py` | Display identity helpers: canonical param normalization and hashed IDs that ignore runtime-only fields |
-| `post_process.py` | Forward Test validation, DSR (Deflated Sharpe Ratio) analysis, Stress Test, profit degradation metrics |
-| `testing.py` | OOS selection utilities, stress test candidate filtering, comparison metrics |
-
-Advanced metrics consume a canonical evaluation view of `StrategyResult`.
-`metric_start_idx` marks the first in-curve evaluation observation and
-`metric_initial_equity` supplies its pre-observation anchor. This keeps
-technical warmup available to strategy state while excluding it from Sharpe,
-Sortino, Ulcer Index, and Consistency. Realized Max DD instead scans the complete
-finite `balance_curve`, including its final observation and flat warmup prefix;
-the flat prefix is mathematically neutral. It is balance-based, not MTM, and is
-not truncated or seeded by `metric_start_idx`, `metric_initial_equity`, or the
-optional Net Profit starting balance. Percentage DD is the maximum
-`(running_peak - balance) / running_peak * 100` for positive peaks; absolute DD
-is the independent maximum `running_peak - balance`. RoMaD uses corrected
-percentage DD. Slow, V1 Fast x3, the V2 reference, and V2 compiled x2 are
-aligned. Calendar-month ownership closes the old month on the bar before a
-transition and assigns the transition bar to the new month.
-
-Historical studies remain unchanged snapshots. Post Process, Stress Test, and
-Analytics comparisons can therefore mix pre-fix and current DD/RoMaD semantics;
-rerun an old study for exact like-for-like comparison. Future Strategy Lab
-mark-to-market drawdown is a separate metric and must use a distinct name.
-
-#### Strategy Lab (`tools/strategy_lab/`)
-
-Strategy Lab Phase 0 through Phase 1-B is a tracked, local research
-foundation for certified Backtester V2 strategies only. It owns strict
-portable run-spec validation,
-canonical JSON/SHA-256 identity, generic read-only V2 plan reconstruction, and
-a deterministic market-data inventory with frozen development/holdout cells.
-`data_quality.py` validates raw rows before loading and reuses the authoritative
-calendar/warmup helpers. `dataset.py` owns deterministic candidate projection,
-the float64 metric matrix, atomic artifacts, and checksum verification.
-`generate.py` owns registry-driven unranked V2 execution, subset labelling,
-identity-bound partial/final manifests, safe resume, and the CLI.
-`certify.py` owns opt-in real-pack validation, compiled/reference and selected
-typed-Slow parity, thread determinism, and deterministic smoke evidence.
-It reuses the existing strategy registry, execution profile, runtime versions,
-and Grid V2 planner; Backtester V1 and strategy-ID branches are rejected.
-
-Tracked run specs and inventories contain content-derived, cross-host facts.
-Resolved data roots, host/platform, source mtimes, and verification timestamps
-remain under ignored `tools/strategy_lab/output/`; `cache/` and `tmp/` are also
-local. External CSVs are read-only and are resolved only from an explicit root
-or `MERLIN_STRATEGY_LAB_DATA_ROOT`, never by filesystem search. Phase 1-B can
-generate bounded candidate-level smoke shards, run opt-in certification, and
-publish the configured full pre-MTM dataset, but it does not calculate rules,
-inspect development/holdout results, or add MTM drawdown. Its
-production WFA transport now honours the shared normalized worker count and
-stores each new Grid V2 window's actual compiled workers and exact plan
-fingerprint. Selected WFA trials retain authoritative Fast rank, semantic key,
-and candidate ID; direct Grid V2 stored Rank likewise means Fast rank while Slow
-Refinement keeps a separate rank. Older Grid V2 studies may instead contain the
-selected-list position in the same `grid_rank` / Rank field; historical studies
-remain unchanged and are not backfilled, so rerun an old study for exact
-like-for-like rank semantics. This is metadata and display history only; it does
-not imply changed metrics, winners, candidate identity, or trading behavior.
-The complete real-pack, eight-window HTTP tie-back, and canonical 944-group
-generation passed, so Phase 1-B is accepted. The immutable local dataset is
-`tools/strategy_lab/output/s06_bracket_mvp_pre_mtm_v1`; Phase 2 must regenerate
-under a new schema/output rather than append to it. Historical studies may lack
-the additive transport facts and are not rewritten.
-
-Phase 2 Stage 1 introduces `strategy_lab_dataset_v2`, whose group shape is
-`[480, 2, 21]`; the appended column is evaluation-only bar-close
-`max_drawdown_mtm_pct`. The request is private to Strategy Lab and generic V2
-position execution. It is not an objective, stored production result,
-realized drawdown, or TradingView intrabar drawdown. The fixed compiled output
-matrix remains 26 columns and MTM uses a request-gated float64 sidecar. The
-canonical 944-group v2 regeneration remains a separate clean Stage 2 action.
-
-#### Indicators (`src/indicators/`)
-
-| Module | Indicators |
-|--------|------------|
-| `ma.py` | SMA, EMA, WMA, DEMA, KAMA, HMA, ALMA, TMA, T3, VWMA, VWAP |
-| `volatility.py` | ATR, NATR |
-| `oscillators.py` | RSI, StochRSI |
-| `trend.py` | ADX |
-
-All indicators accessed via `get_ma()` facade for moving averages.
-
-#### Strategies (`src/strategies/`)
-
-Each strategy contains:
-- `config.json` - Parameter schema with types, defaults, min/max, optimization ranges
-- `strategy.py` - Params dataclass and strategy class with `run()` method
-
-Strategies auto-discovered by `strategies/__init__.py` if both files exist.
-
-#### UI (`src/ui/`)
-
-**Backend (Flask):**
-- `server.py` - Thin entrypoint: Flask app creation, route registration, test re-exports
-- `server_services.py` - Helpers/shared logic (no route decorators), safe logging via `_get_logger()`
-- `server_routes_data.py` - Pages + studies/tests/trades + presets + strategies + DB management + CSV browse + queue endpoints
-- `server_routes_run.py` - Optimization status/cancel + optimize/walkforward/backtest (run endpoints)
-- `server_routes_analytics.py` - Analytics page + WFA summary API endpoint
-
-**Frontend (JavaScript):**
-- `templates/index.html` - Start page: strategy configuration, V1 Optuna/Grid or V2 Grid-only optimizer selection, coverage mode, trials log toggle, Grid preview, fixed day/calendar-month WFA settings (with day-only adaptive cooldown), optimization launch, run queue
-- `templates/results.html` - Results page: studies browser, trials/windows display, trade downloads
-- `templates/analytics.html` - Analytics page: WFA research, multi-study comparison, filtering
-- `static/js/main.js` - Start page logic and form handling
-- `static/js/results-state.js` - Results page state management, localStorage/sessionStorage, URL helpers
-- `static/js/results-format.js` - Results page formatters, labels, stableStringify, MD5 hashing
-- `static/js/results-tables.js` - Results page table/chart renderers, row selection, parameter details
-- `static/js/results-controller.js` - Results page orchestration, API calls, event binding, modals
-- `static/js/queue.js` - Scheduled run queue management (add/remove/execute items)
-- `static/js/dataset-preview.js` - WFA window layout preview and validation
-- `static/js/analytics.js` - Analytics page logic, state management, study selection
-- `static/js/analytics-equity.js` - Analytics equity curve SVG rendering
-- `static/js/analytics-filters.js` - Analytics filter panel (strategy/symbol/TF/WFA/IS-OOS)
-- `static/js/analytics-table.js` - Analytics sortable study table with checkbox selection
-- `static/js/analytics-sets.js` - Analytics study sets management (CRUD + membership)
-- `static/js/analytics-sets-view.js` - Study sets view (sort/filter/bulk-color/bulk-delete)
-- `static/js/api.js` - API client functions for all pages
-- `static/css/style.css` - Light theme styling for all pages
-
-### Data Flow
-
-#### Optimization Flow (V1 Optuna/Grid; V2 Grid; WFA)
-```
-Start Page (index.html)
-  -> User submits optimization (direct or via queue)
-  -> server_routes_run.py builds OptimizationConfig (V1: optuna|grid|wfa; V2: grid|wfa)
-  -> optuna_engine | grid_engine | walkforward_engine (fixed or adaptive)
-       Grid path: grid_engine -> strategies/<id>/fast_grid.py (fast pass) -> backtest_engine (slow pass)
-  -> strategy (s01/s03/s04/...) + indicators
-  -> backtest_engine (per trial/window)
-  -> metrics.py
-  -> storage.py (save_optuna_study_to_db / save_grid_study_to_db / save_wfa_study_to_db)
-  -> active .db file (SQLite)
+```text
+config + market data
+        |
+        v
+strategy discovery and request validation
+        |
+        +--> V1 Optuna --------> V1 strategy execution
+        |
+        +--> V1 Grid ----------> strategy Fast backend -> selected Slow rerun
+        |
+        `--> V2 Grid plan -----> generic compiled screen -> reference rerun
+                                      |
+                                      `--> direct study or WFA windows
+                                                    |
+                                                    v
+                                             SQLite persistence
 ```
 
-Direct form actions and automatic Grid Preview require the selected strategy's
-configuration to have loaded and rendered for that exact selection. Starting a
-new load, or a current load failure, removes stale generated strategy fields,
-strategy information, and Preview state without resetting global data/runtime,
-database, budget, WFA, Queue, or Preset controls. Late responses for obsolete
-strategy selections are ignored. Persisted Queue execution remains independent
-of this editable-form readiness gate, and config failures display the concise
-backend error rather than duplicating backend validation in JavaScript.
+Backtester V1 supports Optuna and Grid. New V2 Optimize/WFA requests require
+explicit Grid. Historical V2 Optuna studies remain readable and supported
+replay/manual-test paths remain compatible; no stored or queued object is
+silently converted.
 
-#### Results Viewing Flow
-```
-Results Page (results.html)
-  -> GET /api/studies (from active database)
-  -> storage.py loads study + trials/windows
-  -> Display in UI
-     - Click trial -> Generate trades on-demand
-     - Delete study -> Remove from database
-     - Update CSV path -> Update file reference
-     - Switch database -> GET /api/databases + POST /api/databases/active
-```
+Grid selection uses shared objective, constraint, Pareto, diversity, DSR, and
+storage structures. V2 supports exact full plans and deterministic sampled
+plans. Selected Fast candidates are always rerun through authoritative Slow
+strategy/reference execution before final result use.
 
-#### Analytics Flow
-```
-Analytics Page (analytics.html)
-  -> GET /api/analytics/summary (filtered by strategy/symbol/TF/etc.)
-  -> storage.py loads WFA studies with aggregated metrics
-  -> Display summary table + equity curves
-  -> Filter/sort/compare studies
-```
+## Flask and UI ownership
 
-#### Trade Export (On-Demand)
-```
-User clicks "Download Trades"
-  -> Endpoint depends on context:
-     - Single Backtest: POST /api/backtest/trades
-     - IS: POST /api/studies/{id}/trials/{n}/trades
-     - Forward Test: POST /api/studies/{id}/trials/{n}/ft-trades
-     - OOS Test: POST /api/studies/{id}/trials/{n}/oos-trades
-     - Manual Test: POST /api/studies/{id}/tests/{test_id}/trials/{n}/mt-trades
-     - WFA Window: POST /api/studies/{id}/wfa/windows/{n}/trades
-     - WFA Stitched: POST /api/studies/{id}/wfa/trades
-  -> storage.py loads params/metadata (or backtest re-runs directly)
-  -> backtest_engine re-runs strategy
-  -> export.py outputs CSV
-```
+The Flask application is split by responsibility:
 
-#### Lancelot Bundle Export
-```
-Results page -> POST /api/studies/{id}/export/lancelot
-  body: trialNumber (Optuna/Grid) | windowNumber (WFA)
-  -> read-only identity lookup selects only study_id and strategy_id
-  -> endpoint accepts only strategy s03_reversal_v10
-     (all other strategies fail before full study/candidate loading,
-      stitched-OOS backfill, runtime, CSV, hash, or bundle work)
-  -> only the accepted S03 path loads the full study/trial/window data
-     and resolves the selected trial (or WFA window/module trial)
-  -> live runtime is applied last: dateFilter=false, start=null, end=null;
-     Warmup remains only in the existing top-level warmupBars field
-  -> bundle_export.build_lancelot_partial_bundle
-      (resolves Merlin version, strategy version, CSV-derived symbol/timeframe,
-       canonical params via param_identity)
-  -> JSON bundle returned to client
-```
+- `src/ui/server.py` creates the app and registers routes.
+- `server_services.py` contains shared helpers and validation without route
+  decorators.
+- `server_routes_run.py` owns optimize, WFA, backtest, status, and cancellation
+  operations.
+- `server_routes_data.py` owns pages, studies/tests/trades, strategies,
+  Presets, databases, CSV browsing, Queue, and export-facing data routes.
+- `server_routes_analytics.py` owns Analytics summary/equity/set routes.
 
-This is a narrow legacy integration, not a generic Backtester V2 import or
-certification surface. New V2 strategies need no Lancelot aliases or export
-certification. Any additional strategy requires a separate reviewed
-Merlin/Lancelot contract and implementation task after its live contract is
-defined.
+These modules are the exact route authority; documentation intentionally does
+not maintain a duplicate endpoint list.
 
-### Database Schema
+The browser UI has three pages:
 
-SQLite database stored in `src/storage/` directory. Multiple `.db` files supported with active DB switching. WAL (Write-Ahead Logging) mode enabled.
+- **Start** dynamically renders strategy config, market/date/Warmup settings,
+  V1 Optuna/Grid or V2 Grid controls, Grid Preview, WFA, and Queue management.
+- **Results** browses stored studies and trials/windows, renders metrics/equity,
+  and exposes supported tests and exports.
+- **Analytics** filters and compares WFA studies, aggregates equity, and
+  manages persisted study sets.
 
-#### Tables
+Frontend code is organized by page and concern under `src/ui/static/js/`.
+Strategy forms come from `config.json`; strategy parameters are not duplicated
+in JavaScript. Config readiness blocks direct launches while a selected config
+is loading or invalid, without making persisted Queue execution depend on the
+editable form.
 
-**studies** - Optimization study metadata
-- Primary key: `study_id` (UUID)
-- Unique constraint: `study_name`
-- Fields: strategy_id, strategy_version, optimization_mode (`'optuna'` / `'grid'` / `'wfa'`), status, trial counts, best value, filters applied, configuration JSON, CSV file path, timestamps
-- **Adaptive WFA fields:** adaptive_mode, max_oos_period_days, min_oos_trades, check_interval_trades, cusum_threshold, dd_threshold_multiplier, inactivity_multiplier, cooldown_enabled, cooldown_days
-- **Fixed WFA period contract:** missing unit means the unchanged day mode. Calendar-month mode stores `period_unit`, `is_period_months`, and `oos_period_months` in `config_json.wfa`, while the legacy `is_period_days` SQL column remains `NULL`; no approximate day value or schema migration is used.
-- **Stitched OOS fields:** stitched_oos_equity_curve, stitched_oos_timestamps_json, stitched_oos_window_ids_json, stitched_oos_net_profit_pct, stitched_oos_max_drawdown_pct, stitched_oos_total_trades, stitched_oos_winning_trades, stitched_oos_win_rate
-- **Window aggregate fields:** profitable_windows, total_windows, median_window_profit, median_window_wr, worst_window_profit, worst_window_dd
+## Persistence and compatibility
 
-**trials** - Individual Optuna or Grid trial results
-- Foreign key: `study_id` -> studies
-- Unique constraint: (study_id, trial_number)
-- Stores params (JSON) and computed metrics
-- **Multi-objective:** stores `objective_values_json` aligned with selected objectives
-- **Constraints:** stores `constraint_values_json`, `constraints_satisfied`, and `is_pareto_optimal` flags
-- **Grid-specific columns:** `grid_mode_name`, generation mode, diversity group, and validation status (for distinguishing fast/slow candidates per mode)
+SQLite stores study metadata, optimization trials, WFA windows/module trials,
+manual/forward/OOS results, study sets, and analytics caches. Multiple database
+files are supported. Production databases and Queue state under `src/storage/`
+are ignored operational data, not fixtures.
 
-**wfa_windows** - Walk-Forward Analysis window results (for WFA mode studies)
-- Foreign key: `study_id` -> studies
-- Unique constraint: (study_id, window_number)
-- Fields: best parameters (JSON), IS/OOS metrics, IS/OOS equity curves (JSON arrays), WFE, oos_winning_trades, adaptive trigger metadata, cooldown bookkeeping, status / no-trade reason
+Grid and Optuna share interoperable trial/result storage while retaining their
+mode metadata. New V2 studies add versioned runtime/identity diagnostics;
+historical rows may omit them and remain readable. No read path migrates or
+rewrites historical studies.
 
-**wfa_window_trials** - Per-module top-N trial retention for a window
-- Stores per-module (`optuna_is`, `dsr`, `forward_test`, `stress_test`) ranked trials with `is_selected` flag, params, and metrics
-- Grid module metadata retains authoritative Fast `grid_rank`, exact `semantic_key`, and `candidate_id`; `slow_refinement_rank` remains independent
-- Indexed by window, module, trial number, and selection
-- Backs the Results page module drill-down and the WFA Lancelot export resolution
+Queue is a generic persisted transport. Optimize/WFA launch boundaries own
+runtime validation; Queue reads preserve invalid or legacy state for explicit
+user handling. Presets configure editable UI state but do not override V2's
+effective Grid-only policy.
 
-**manual_tests** - User-initiated tests run on selected trials from a study (params/results JSON)
+Trade exports cover the supported IS, Forward Test, OOS, Manual, and WFA
+surfaces. Lancelot partial-bundle export is a narrow legacy integration for
+`s03_reversal_v10`, not a general V2 import requirement.
 
-**study_sets** - Named collections of WFA studies for Analytics page
-- Primary key: `id` (autoincrement)
-- Unique constraint: case-insensitive `name`
-- Fields: name, color (color token), sort_order, created_at
+## WFA and analytics
 
-**study_set_members** - Many-to-many link between study sets and studies
-- Unique constraint: (set_id, study_id)
-- Foreign keys: set_id -> study_sets (CASCADE), study_id -> studies (CASCADE)
+Fixed WFA supports day windows and complete calendar-month windows; Adaptive
+WFA remains day-only. Windows execute their selected optimizer under the
+engine policy, preserve per-window candidate identity where available, and
+produce stitched OOS results. Analytics reads persisted WFA results, creates
+focused or portfolio equity views, and caches group summaries in SQLite.
 
-**analytics_group_cache** - Cached aggregated WFA equity for the Analytics page
-- Keyed by set_id (or the all-studies pseudo-group) and a member-hash
-- Stores the aggregated curve and summary metrics; invalidated on study/set mutations
+Exact calendar, runtime, and V2 plan-reuse contracts are in
+[V2 architecture](engine_v2/ARCHITECTURE.md). Metric meanings are in
+[Metrics](METRICS.md).
 
-### API Endpoints
+## Strategy Lab integration
 
-#### Page Routes
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/` | GET | Serve Start page (optimization configuration) |
-| `/results` | GET | Serve Results page (studies browser) |
-| `/analytics` | GET | Serve Analytics page (WFA research) |
+Strategy Lab is local, research-only tooling for certified V2 strategies. It
+uses tracked run specs and read-only market inputs to generate deterministic,
+resumable datasets in explicit ignored output directories. Implemented
+capabilities include structural/real-pack certification, schema-v2 bar-close
+MTM data, development analysis, and fixed-capacity allocation. It does not
+change Merlin runtime behavior and has no CSV-level multiprocessing extension.
 
-#### Optimization
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/backtest` | POST | Run single backtest (no storage) |
-| `/api/backtest/trades` | POST | Download trades CSV for single backtest |
-| `/api/optimize` | POST | Run optimization selected by canonical request field `optimization_mode`; V1 accepts Optuna/Grid and V2 requires explicit Grid. `optimizer_mode` is stored metadata, not a request alias. |
-| `/api/grid/preview` | POST | Preview Grid parameter space, mode allocation and coverage without running |
-| `/api/walkforward` | POST | Run WFA (fixed or adaptive mode), save to database |
-| `/api/optimization/status` | GET | Get current optimization state |
-| `/api/optimization/cancel` | POST | Cancel running optimization |
+The complete usage, identity, schema, resume, analysis, allocation, and safety
+contracts are in the [Strategy Lab guide](../tools/strategy_lab/README.md).
 
-#### Studies Management
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/studies` | GET | List all saved studies with summary info |
-| `/api/studies/<study_id>` | GET | Load complete study (metadata + trials/windows) |
-| `/api/studies/<study_id>` | DELETE | Delete study from database |
-| `/api/studies/<study_id>/update-csv-path` | POST | Update CSV file path reference |
-| `/api/studies/<study_id>/test` | POST | Run manual test on selected trials |
-| `/api/studies/<study_id>/tests` | GET | List manual tests |
-| `/api/studies/<study_id>/tests/<test_id>` | GET | Load manual test results |
-| `/api/studies/<study_id>/tests/<test_id>` | DELETE | Delete manual test |
-| `/api/studies/<study_id>/trials/<trial_number>/trades` | POST | Generate and download IS trades CSV |
-| `/api/studies/<study_id>/trials/<trial_number>/ft-trades` | POST | Generate and download Forward Test trades CSV |
-| `/api/studies/<study_id>/trials/<trial_number>/oos-trades` | POST | Generate and download OOS Test trades CSV |
-| `/api/studies/<study_id>/tests/<test_id>/trials/<trial_number>/mt-trades` | POST | Generate and download Manual Test trades CSV |
-| `/api/studies/<study_id>/wfa/windows/<window_number>` | GET | Get WFA window details with module trials |
-| `/api/studies/<study_id>/wfa/windows/<window_number>/equity` | POST | Generate WFA window equity curve on-demand |
-| `/api/studies/<study_id>/wfa/windows/<window_number>/trades` | POST | Download WFA window trades CSV |
-| `/api/studies/<study_id>/wfa/trades` | POST | Generate and download stitched WFA OOS trades CSV |
-| `/api/studies/<study_id>/export/lancelot` | POST | Build the S03 v10 Lancelot partial bundle from a trial (Optuna/Grid) or window (WFA); reject all other strategies |
+## Current strategies
 
-#### Database Management
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/databases` | GET | List all `.db` files with active marker |
-| `/api/databases/active` | POST | Switch active database |
-| `/api/databases` | POST | Create new timestamped database |
+This matrix is derived from `src/strategies/*/config.json` and is the only
+complete current strategy matrix in general documentation.
 
-#### CSV Browse
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/csv/browse` | GET | Browse CSV directory (files + subdirectories) |
+| Strategy ID | Config name | Version | Engine | Concise purpose |
+| --- | --- | --- | --- | --- |
+| `s01_trailing_ma` | S01 Trailing MA | `v26` | V1 | MA crossover with trailing stops and ATR-based sizing |
+| `s03_reversal_v10` | S03 Reversal | `v10` | V1 | Close-count/T-Bands reversal strategy with V1 Fast Grid |
+| `s03_reversal_v11` | S03 Reversal | `v11` | V1 | v10 behavior plus optional Emergency SL and V1 Fast Grid |
+| `s03_reversal_v11_regime_er_b2` | S03 Reversal v11 Regime-ER B2 | `v11-regime-er-b2` | V2 | Regime-ER S03 signals on generic signal-reversal execution |
+| `s04_stochrsi` | S04 StochRSI | `v02` | V1 | StochRSI swing entries with swing-based stops |
+| `s06_r_trend_v02` | S06 R-Trend | `v02` | V1 | Williams %R trend/reversal entries with bracket or MA-trail risk management |
+| `s06_r_trend_v02_b2` | S06 R-Trend B2 | `v02-b2` | V2 | S06 v02 signals on generic position execution |
+| `s06_r_trend_v02_regime_trendlines_b2` | S06 R-Trend Regime-TL B2 | `v02-regime-tl-b2` | V2 | S06 plus optional trendline regime filtering |
+| `s06_r_trend_v06_4_a2_b2` | S06 R-Trend v06-4-A2 B2 | `v06-4-a2-b2` | V2 | Multi-mode bracket, R-distance, Chandelier, and Fixed-AF SAR strategy |
 
-#### Run Queue
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/queue` | GET | Load scheduled run queue state |
-| `/api/queue` | PUT | Save/update queue state |
-| `/api/queue` | DELETE | Clear queue state |
+## Procedures and evidence
 
-Queue transports both V1 and V2 run configuration and delegates runtime
-semantics to the normal Optimize/WFA launch boundary. GET never rewrites or
-deletes Queue storage; unreadable content is preserved and returned as a load
-error. Legacy item/source normalization remains lenient, and a missing legacy
-Warmup value uses the core default `1000`. Preset runtime support is separate,
-deferred work and is not certified by the Queue integration.
-
-#### Analytics
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/analytics/summary` | GET | WFA studies summary with filters and aggregated metrics |
-| `/api/analytics/equity` | POST | Aggregate equity curves for selected study IDs |
-| `/api/analytics/equity/batch` | POST | Batch aggregate equity curves for multiple groups |
-| `/api/analytics/studies/<study_id>/equity` | GET | Stitched OOS equity for a single WFA study (cached) |
-| `/api/analytics/studies/<study_id>/window-boundaries` | GET | Get WFA window boundary timestamps |
-| `/api/analytics/all-studies/equity` | GET | Aggregated equity across all WFA studies (cached) |
-
-#### Study Sets
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/analytics/sets` | GET | List all study sets (optionally hydrated with cached analytics summaries) |
-| `/api/analytics/sets` | POST | Create a new study set |
-| `/api/analytics/sets/<set_id>` | PUT | Update study set (name, color, study_ids, sort_order) |
-| `/api/analytics/sets/<set_id>` | DELETE | Delete a study set |
-| `/api/analytics/sets/<set_id>/equity` | GET | Aggregated equity curve for a study set (cached) |
-| `/api/analytics/sets/bulk-color` | PUT | Bulk-assign a color token to multiple sets |
-| `/api/analytics/sets/bulk-delete` | POST | Bulk-delete study sets |
-| `/api/analytics/sets/reorder` | PUT | Reorder study sets |
-
-#### Strategy Configuration
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/strategies` | GET | List all available strategies |
-| `/api/strategies/<strategy_id>` | GET | Get strategy metadata |
-| `/api/strategy/<strategy_id>/config` | GET | Get strategy parameter schema |
-
-#### Presets
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/presets` | GET | List all saved presets |
-| `/api/presets/<name>` | GET | Load preset values |
-| `/api/presets` | POST | Create new preset |
-| `/api/presets/<name>` | PUT | Update existing preset |
-| `/api/presets/defaults` | PUT | Update default preset values |
-| `/api/presets/<name>` | DELETE | Delete preset |
-| `/api/presets/import-csv` | POST | Import preset from CSV parameter block |
-
-## Running the Application
-
-### Web Server
-```bash
-cd src/ui
-python server.py
-```
-Opens at http://127.0.0.1:5000
-
-### CLI Backtest
-```bash
-cd src
-python run_backtest.py --csv ../data/raw/OKX_LINKUSDT.P,\ 15\ 2025.05.01-2025.11.20.csv
-```
-
-### Tests
-```bash
-pytest tests/ -v
-```
-
-## Key Files Reference
-
-| File | Purpose |
-|------|---------|
-| `CLAUDE.md` | Authoritative project instructions for all coding agents |
-| `AGENTS.md` | Codex bootstrap that requires reading `CLAUDE.md` |
-| `docs/ADDING_NEW_STRATEGY.md` | How to add new strategies |
-| `data/baseline/` | Regression test reference data |
-| `tools/generate_baseline_s01.py` | Regenerate S01 baseline |
-
-## Current Strategies
-
-| ID | Name | Description |
-|----|------|-------------|
-| `s01_trailing_ma` | S01 Trailing MA | Complex trailing MA strategy with 11 MA types, close counts, ATR stops |
-| `s03_reversal_v10` | S03 Reversal | Reversal strategy using close-count confirmation and T-Bands hysteresis |
-| `s03_reversal_v11` | S03 Reversal | Backtester V1 v10 variant with optional Emergency SL; V1 fast Grid enabled; Emergency SL exits set `TradeRecord.exit_reason="Emergency SL"` |
-| `s04_stochrsi` | S04 StochRSI | StochRSI swing strategy with swing-based stops |
-| `s06_r_trend_v02` | S06 R-Trend | Williams %R Reversal/Trend entries with Bracket or ratcheting MA-Trail execution; Backtest/Optuna/WFA plus deterministic full-enumeration Fast Grid |
-
-S03 v11 behavior note: Emergency SL same-bar re-entry is intentionally Pine-compatible. Normal signal exits preserve existing S03 V1 reversal timing. Do not restore older delayed Emergency SL re-entry text; that variant failed the TradingView parity gate.
-
-## Adding New Strategies
-
-See `docs/ADDING_NEW_STRATEGY.md` for complete instructions on converting PineScript strategies to Python and integrating them into the platform.
+- New strategy work normally follows the
+  [V2 import guide](ADDING_NEW_STRATEGY_V2.md).
+- Existing V1 strategy maintenance follows the
+  [legacy V1 guide](ADDING_NEW_STRATEGY.md).
+- Exact V2 parity/certification evidence is preserved in the
+  [certification registry](engine_v2/CERTIFICATION.md) and tracked
+  [baseline documents](README.md#baseline-evidence).
+- Benchmark methodology and historical measurements live in
+  [Performance](engine_v2/PERFORMANCE.md).

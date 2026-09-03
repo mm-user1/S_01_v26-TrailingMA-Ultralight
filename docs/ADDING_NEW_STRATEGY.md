@@ -1,520 +1,201 @@
-# Adding a New Strategy
+# Maintaining or Importing a Backtester V1 Strategy
 
-This guide explains how to convert a PineScript strategy to Python and integrate it into Merlin.
+This filename is retained for compatibility, but this is the legacy V1 guide.
+New strategy development should normally target Backtester V2 and follow the
+[V2 import procedure](ADDING_NEW_STRATEGY_V2.md). Use this document when a task
+explicitly maintains or imports a V1 strategy.
 
-## Overview: PineScript to Python Workflow
+V1 strategies own their Python execution loop and may optionally own a Fast
+Grid backend. That is not the V2 design: V2 strategies use generic core
+execution and Grid planning.
 
-1. **Receive PineScript file** with expected results at the end
-2. **Create strategy directory** with required files
-3. **Define config.json** with parameter schema (camelCase)
-4. **Create params dataclass** mapping PineScript inputs
-5. **Implement strategy logic** in Python
-6. **Run tests** and validate against expected PineScript results
-7. **Strategy auto-registers** - no manual edits needed
+## 1. Define the Pine/external contract
 
-## Step 1: Understand the PineScript File
+Before translating code, record:
 
-PineScript files should include expected results at the end:
+- strategy name/version and the exact source used;
+- inputs, types, defaults, groups, bounds, and option order;
+- indicator and signal rules, execution timing, sizing, fees, and exits;
+- date filtering, warmup requirements, chart timezone, and bar assumptions;
+- expected metrics and trades from a fixed dataset.
 
-```pine
-// Reference test results:
-// Test Configuration:
-// CSV File: ./data/raw/"OKX_LINKUSDT.P, 15 2025.05.01-2025.11.20.csv"
-// Date range: from 2025-06-01 to 2025-10-01
+The tracked [S03 Reversal v10 Pine source](S_03-Reversal_v10_for-import.pine)
+is useful provenance and a concrete V1 translation example. Preserve external
+reference files byte-for-byte and normalize only separate test fixtures.
 
-// Parameters:
-// RSI length = 16
-// Stoch length = 16
-// ...
+## 2. Create the package
 
-// Expected Results:
-// ├─ Net Profit:        113.26%
-// ├─ Max Drawdown:      10.99%
-// ├─ Total Trades:      52
+```text
+src/strategies/<strategy_id>/
+  __init__.py
+  config.json
+  strategy.py
+  fast_grid.py       # optional V1 Fast Grid backend
 ```
 
-**Key points:**
-- Blocks marked `// skip start` to `// skip end` contain Pine-specific code (date filtering, tables) - use project's built-in functionality instead
-- Parameter names in Pine (`rsiLen`, `stochLen`) become camelCase in Python
-- Expected results are your validation target (±5% tolerance is acceptable)
+Packages containing `config.json` and an importable strategy class are
+discovered through `src/strategies/__init__.py`; do not add a second registry.
 
-## Step 2: Create Strategy Directory
+## 3. Define `config.json`
 
-```bash
-mkdir -p src/strategies/s05_mystrategy
-touch src/strategies/s05_mystrategy/__init__.py
-touch src/strategies/s05_mystrategy/config.json
-touch src/strategies/s05_mystrategy/strategy.py
-```
-
-The `__init__.py` file should be empty or contain:
-```python
-from .strategy import S05MyStrategy
-```
-
-## Step 3: Define config.json
-
-Create parameter schema matching PineScript inputs:
+V1 is the default when `engine` is absent. Keep all public parameter names
+camelCase end to end.
 
 ```json
 {
-  "id": "s05_mystrategy",
-  "name": "S05 My Strategy",
+  "name": "S05 Example",
   "version": "v01",
-  "description": "Brief description of strategy logic",
+  "description": "Example legacy strategy",
   "parameters": {
-    "rsiLen": {
+    "maLength": {
       "type": "int",
-      "label": "RSI Length",
-      "default": 14,
+      "label": "MA Length",
+      "default": 50,
       "min": 2,
-      "max": 100,
-      "step": 1,
-      "group": "Indicators",
-      "optimize": { "enabled": true, "min": 5, "max": 50, "step": 2 }
-    },
-    "threshold": {
-      "type": "float",
-      "label": "Entry Threshold",
-      "default": 0.5,
-      "min": 0.0,
-      "max": 1.0,
-      "step": 0.1,
-      "group": "Entry",
-      "optimize": { "enabled": false }
+      "max": 500,
+      "group": "Signal",
+      "optimize": {
+        "enabled": true,
+        "min": 10,
+        "max": 100,
+        "step": 5
+      }
     }
   }
 }
 ```
 
-**Parameter types:** `int`, `float`, `bool`, `select` (with `options` array)
+Supported parameter types include `bool`, `int`, `float`, and `select`. Keep
+select option spelling/order stable when it participates in identities or
+baselines. Optimization metadata controls the UI search domain; disabled
+parameters remain fixed at their configured/requested values.
 
-An optimizable control can be visible but unchecked initially:
-
-```json
-"optimize": { "enabled": true, "default_enabled": false, "min": 20, "max": 40, "step": 10 }
-```
-
-Configs without `default_enabled` keep the historical behavior: `enabled: true`
-means checked by default.
-
-**Naming rules:**
-- Use camelCase: `rsiLen`, `closeCountLong`, `stopLongMaxPct`
-- Match PineScript input names exactly
-- Group related parameters for UI organization
-
-### Bool Parameters in Optimization
-
-Bool parameters are optimized as categorical values (`True` / `False`) in Start page.
-
-Use one of these patterns:
-
-1. **All bool combinations are valid**  
-Do nothing special. Define bool params normally in `parameters`.
-
-2. **Some bool combinations are invalid**  
-Declare rules in `config.json` under `optimization_rules.bool_groups`.
-
-Example (`at_least_one_true`):
+Use `depends_on` for a child whose optimization relevance depends on a parent
+boolean:
 
 ```json
-{
-  "optimization_rules": {
-    "bool_groups": [
-      {
-        "params": ["useCloseCount", "useTBands"],
-        "mode": "at_least_one_true"
-      }
-    ]
-  }
+"trailDistance": {
+  "type": "float",
+  "default": 2.0,
+  "depends_on": "useTrail",
+  "optimize": {"enabled": true, "min": 0.5, "max": 5.0, "step": 0.5}
 }
 ```
 
-What this does:
-- Invalid combo (`false`, `false`) is excluded from optimizer search space.
-- Valid combos remain available.
-- Coverage mode minimum/recommended trials are computed from the filtered search space.
+Small invalid boolean combinations can use the established
+`optimization_rules.bool_groups` declaration, such as
+`mode="at_least_one_true"`. Keep rule semantics declarative; do not hardcode
+the same restriction independently in UI, Optuna, and Grid.
 
-Important notes:
-- Rules apply to **optimized** bool params in the group.
-- If a bool in the group is fixed (not optimized), its fixed value is used when validating combinations.
-- If your strategy should allow all states (including all-off), do not add a bool group rule.
+## 4. Define the params dataclass
 
-### Parameter Dependencies (`depends_on`)
-
-Numeric (or other) parameters can declare a dependency on a bool parameter using `"depends_on"`. When the parent bool is `false`, the dependent parameter is **skipped entirely** during optimization — it is not suggested to Optuna and not stored in trial results. This reduces the effective search space and avoids wasting trials on meaningless values.
-
-Example from S03:
-
-```json
-{
-  "useCloseCount": {
-    "type": "bool",
-    "label": "Use Close Count",
-    "default": true,
-    "group": "Entry Filters",
-    "optimize": { "enabled": true }
-  },
-  "closeCountLong": {
-    "type": "int",
-    "label": "Close Count Long",
-    "default": 7,
-    "min": 1,
-    "max": 50,
-    "step": 1,
-    "group": "Entry Filters",
-    "depends_on": "useCloseCount",
-    "optimize": { "enabled": true, "min": 2, "max": 7, "step": 1 }
-  }
-}
-```
-
-What this does:
-- When `useCloseCount = true`: `closeCountLong` is suggested normally by Optuna.
-- When `useCloseCount = false`: `closeCountLong` is skipped (not suggested, not stored in trial params).
-- Reduces search space dimensionality for trials where the feature is disabled.
-- Works with both optimized and fixed parent bools.
-
-Rules:
-- `depends_on` must reference a **bool** parameter that exists in `parameters`.
-- Can be a single string (`"depends_on": "useTBands"`) or a list (`"depends_on": ["useBool1", "useBool2"]`). When a list is given, **all** parents must be `true` for the dependent to be active.
-- Combines naturally with `bool_groups`: the group rule controls which bool combos are valid, while `depends_on` controls which numeric params are active for each combo.
-
-## Step 4: Create Params Dataclass
+Use a dataclass whose field names and defaults match `config.json` exactly:
 
 ```python
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
-import pandas as pd
+
 
 @dataclass
 class S05Params:
-    """S05 strategy parameters - camelCase matching PineScript."""
-    rsiLen: int = 14
-    threshold: float = 0.5
-    riskPerTrade: float = 2.0
-    contractSize: float = 0.01
-    initialCapital: float = 100.0
-    commissionPct: float = 0.05
-    startDate: Optional[pd.Timestamp] = None
-    endDate: Optional[pd.Timestamp] = None
-
-    @staticmethod
-    def _parse_timestamp(value: Any) -> Optional[pd.Timestamp]:
-        if value in (None, ""):
-            return None
-        ts = pd.Timestamp(value)
-        if ts.tzinfo is None:
-            ts = ts.tz_localize("UTC")
-        else:
-            ts = ts.tz_convert("UTC")
-        return ts
-
-    @classmethod
-    def from_dict(cls, payload: Optional[Dict[str, Any]]) -> "S05Params":
-        payload = payload or {}
-        return cls(
-            rsiLen=int(payload.get("rsiLen", cls.rsiLen)),
-            threshold=float(payload.get("threshold", cls.threshold)),
-            riskPerTrade=float(payload.get("riskPerTrade", cls.riskPerTrade)),
-            contractSize=float(payload.get("contractSize", cls.contractSize)),
-            initialCapital=float(payload.get("initialCapital", cls.initialCapital)),
-            commissionPct=float(payload.get("commissionPct", cls.commissionPct)),
-            startDate=cls._parse_timestamp(payload.get("startDate")),
-            endDate=cls._parse_timestamp(payload.get("endDate")),
-        )
+    maLength: int = 50
+    useTrail: bool = True
+    trailDistance: float = 2.0
 ```
 
-**Rules:**
-- Field names stay camelCase
-- Do NOT add `to_dict()` - use `dataclasses.asdict(params)` instead
-- `from_dict()` maps directly without snake_case fallbacks
+Use `dataclasses.asdict()` when a mapping is needed. Do not add `to_dict()` or
+snake/camel conversion layers.
 
-## Step 5: Implement Strategy Class
+## 5. Implement the V1 strategy
+
+Subclass the established base where appropriate and expose stable identity:
 
 ```python
-from typing import Any, Dict, List, Optional
-import numpy as np
-import pandas as pd
-
-from core import metrics
-from core.backtest_engine import StrategyResult, TradeRecord, build_forced_close_trade
-from strategies.base import BaseStrategy
-
-class S05MyStrategy(BaseStrategy):
-    STRATEGY_ID = "s05_mystrategy"
-    STRATEGY_NAME = "S05 My Strategy"
+class S05Example:
+    STRATEGY_ID = "s05_example"
+    STRATEGY_NAME = "S05 Example"
     STRATEGY_VERSION = "v01"
 
     @staticmethod
-    def run(df: pd.DataFrame, params: Dict[str, Any], trade_start_idx: int = 0) -> StrategyResult:
-        p = S05Params.from_dict(params)
-
-        if df.empty:
-            return StrategyResult(
-                trades=[], equity_curve=[], balance_curve=[], timestamps=[],
-                metric_initial_equity=p.initialCapital,
-            )
-
-        # Get price data
-        close = df["Close"]
-        high = df["High"]
-        low = df["Low"]
-
-        # Calculate indicators (use indicators/ package)
-        from indicators.oscillators import rsi
-        rsi_values = rsi(close, p.rsiLen)
-
-        # Initialize state variables
-        balance = p.initialCapital
-        position = 0  # 1=long, -1=short, 0=flat
-        trades: List[TradeRecord] = []
-        equity_curve: List[float] = []
-        balance_curve: List[float] = []
-        timestamps: List[pd.Timestamp] = []
-
-        # Bar-by-bar simulation
-        for i in range(len(df)):
-            # Calculate/advance indicators on every prepared bar. Gate all
-            # order creation and trade mutation with i >= trade_start_idx.
-            if i >= trade_start_idx:
-                # Your entry/exit logic here
-                # ...
-
-            # Force-close any open position at the final bar (required for all modes).
-            if i == len(df) - 1 and position != 0:
-                trade, gross_pnl, exit_commission, _ = build_forced_close_trade(
-                    position=position,
-                    entry_time=entry_time,
-                    exit_time=df.index[i],
-                    entry_price=entry_price,
-                    exit_price=close.iat[i],
-                    size=position_size,
-                    entry_commission=entry_commission,
-                    commission_rate=p.commissionPct,
-                    commission_is_pct=True,
-                )
-                if trade:
-                    trades.append(trade)
-                    balance += gross_pnl - exit_commission - entry_commission
-                position = 0
-                position_size = 0.0
-                entry_price = np.nan
-                entry_commission = 0.0
-                entry_time = None
-
-            # Track equity
-            timestamps.append(df.index[i])
-            equity_curve.append(balance)
-            balance_curve.append(balance)
-
-        # Build result
-        result = StrategyResult(
-            trades=trades,
-            equity_curve=equity_curve,
-            balance_curve=balance_curve,
-            timestamps=timestamps,
-            metric_start_idx=trade_start_idx,
-            metric_initial_equity=p.initialCapital,
-        )
-
-        # Compute and attach all declared metrics to result
-        # This automatically handles the intersection of calculated metrics
-        # with StrategyResult's declared fields (no manual assignment needed)
-        metrics.enrich_strategy_result(result, initial_balance=p.initialCapital)
-        return result
+    def run(df, params, trade_start_idx=0):
+        ...
 ```
 
-**Note on metrics:** `enrich_strategy_result()` calculates BasicMetrics and
-AdvancedMetrics, then attaches only the metrics that StrategyResult declares
-as fields. Additional metrics (like `win_rate`, `sortino_ratio`) are available
-in Optuna optimization results but are not exposed in single-backtest output
-by design. Every producer that returns prepared warmup observations must set
-`metric_start_idx` to the first evaluation observation and
-`metric_initial_equity` to the capital immediately before it. Advanced metrics
-use only that evaluation interval. Realized Max DD/RoMaD do not: they scan the
-complete finite `balance_curve`, including flat warmup and the final
-observation. Flat warmup cannot change the maximum. Percentage DD and absolute
-currency DD are independent running-peak maxima, and RoMaD uses percentage DD.
-Do not substitute `equity_curve`, `metric_initial_equity`, or a mark-to-market
-drawdown. The first bar of a new calendar month belongs to the new month, while
-the preceding bar closes the prior month.
+Implementation rules:
 
-**Key patterns from existing strategies:**
-- Pre-extract NumPy arrays from DataFrame columns before the loop (e.g., `close_arr = df["Close"].to_numpy()`) for faster element access
-- Use `trade_start_idx` to prevent warmup trades while still retaining the
-  prepared observation curves and boundary metadata
-- Create `TradeRecord` for each closed trade
-- Track `equity_curve`, `balance_curve`, `timestamps`
-- Calculate metrics at the end using `core.metrics`
+- pre-extract numeric NumPy arrays and normalize floating working arrays;
+- calculate indicators once, outside the bar loop;
+- preserve Pine bar timing and avoid lookahead/repainting;
+- use `trade_start_idx` to exclude technical warmup from trading;
+- keep position sizing, commission, stop/target/trail behavior, and date
+  boundaries explicit;
+- return the standard `StrategyResult` with aligned balance/equity/timestamps
+  and complete trades;
+- set `metric_start_idx` and `metric_initial_equity` when warmup precedes the
+  evaluation interval, per [Metrics](METRICS.md).
 
-## Step 6: Test and Validate
+Do not change shared engines merely to hide a strategy translation mismatch.
+First establish whether the Pine contract, input data, or V1 implementation is
+responsible.
 
-Create a test file:
+## 6. Preserve V1 optimizer behavior
 
-```python
-# tests/test_s05_mystrategy.py
-import pytest
-from pathlib import Path
-import sys
+V1 supports Optuna and Grid. Optuna objectives, constraints, coverage,
+deduplication, multiprocessing, storage, and result semantics are shared
+infrastructure; strategy code supplies only correct parameters and execution.
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+If no Fast Grid backend exists, Grid is unavailable for that strategy and the
+UI retains its V1 fallback to Optuna. Do not claim generic V2 Grid capability
+for a V1 package.
 
-from core.backtest_engine import load_data, prepare_dataset_with_warmup
-from strategies.s05_mystrategy.strategy import S05MyStrategy, S05Params
+### Optional V1 Fast Grid backend
 
-def test_s05_matches_pine_expected():
-    """Validate against PineScript expected results."""
-    data_path = Path(__file__).parent.parent / "data" / "raw" / "OKX_LINKUSDT.P, 15 2025.05.01-2025.11.20.csv"
-    df = load_data(str(data_path))
+Add `fast_grid.py` only when the task explicitly requires a certified V1 Fast
+path. Follow an existing V1 backend with the appropriate profile:
 
-    params = {
-        "rsiLen": 14,
-        "threshold": 0.5,
-        # ... match PineScript parameters
-        "startDate": "2025-06-01",
-        "endDate": "2025-10-01",
-    }
+- `sampled_by_mode` for ordered logical modes with seeded allocation/LHS;
+- `full_enumeration` for deterministic complete enumeration.
 
-    df_prepared, trade_start_idx = prepare_dataset_with_warmup(
-        df,
-        pd.Timestamp("2025-06-01", tz="UTC"),
-        pd.Timestamp("2025-10-01", tz="UTC"),
-        warmup_bars=1000
-    )
+The backend exposes metadata, parameter-space construction, candidate
+generation, data preparation, evaluation, and selected-candidate validation
+through the interfaces consumed by `src/core/grid_engine.py`. It must:
 
-    result = S05MyStrategy.run(df_prepared, params, trade_start_idx)
+- preserve config domain and option order;
+- produce deterministic candidate/identity order;
+- evaluate supported Fast objectives and guardrail facts correctly;
+- match Slow strategy execution on selected candidates;
+- declare diversity fields in the established JSON-safe shape;
+- avoid file I/O and strategy-global mutable caches in candidate loops.
 
-    # Expected from PineScript (±5% tolerance)
-    assert abs(result.net_profit_pct - 113.26) < 113.26 * 0.05
-    assert abs(result.max_drawdown_pct - 10.99) < 10.99 * 0.05
-    assert result.total_trades == 52  # Exact match for trade count
-```
+Fast objective and metric rules are centralized in [Metrics](METRICS.md).
+Adding a V1 Fast backend does not create a V2 profile or satisfy the V2 import
+contract.
 
-Run tests:
-```bash
-pytest tests/test_s05_mystrategy.py -v
-```
+## 7. Test and certify
 
-## Step 7: Auto-Registration
+Add focused coverage for:
 
-Strategies are auto-discovered. Ensure:
-- `config.json` exists with valid `id` field
-- `strategy.py` defines class with `STRATEGY_ID`, `STRATEGY_NAME`, `STRATEGY_VERSION`, and static `run()` method
+- config discovery, defaults, types, and camelCase names;
+- deterministic execution on a bounded fixture;
+- signal/indicator edge cases and warmup behavior;
+- external/Pine baseline metrics and trade signatures where parity is claimed;
+- date filtering, fills, stops, targets, trails, fees, and exit reasons;
+- Optuna configuration/execution when the strategy supports V1 Optuna;
+- Fast Grid count/order/determinism and Fast-vs-Slow parity when a backend is
+  present;
+- storage/UI transport affected by strategy-specific fields.
 
-The strategy will appear in UI dropdown after server restart.
+Use isolated pytest paths and never overwrite a baseline to make a failure
+pass. Baseline regeneration requires an explicit reviewed task. See the
+[test guide](../tests/README.md) for suite selection.
 
-## Optional: Add a Fast Grid Backend
+## Common V1 pitfalls
 
-Merlin's Grid optimizer (`core/grid_engine.py`) supports deterministic, mode-aware
-parameter sweeps with optional Numba-accelerated fast screening. Optuna mode
-works for any strategy out of the box; Grid mode only becomes available for a
-strategy once it ships a dedicated fast backend module.
-
-See `src/strategies/s03_reversal_v10/fast_grid.py` for budgeted sampled Grid
-and `src/strategies/s06_r_trend_v02/fast_grid.py` for deterministic full
-enumeration. A fast backend typically provides:
-
-- `build_parameter_space(config)` — derive a `GridParameterSpace` from the
-  strategy's `config.json` (per-mode axes, bool group rules, fixed values).
-- `build_preview(space, allocation)` — describe the parameter space size, mode
-  allocation and coverage for the Start page Grid preview.
-- `generate_candidates(...)` — emit deterministic `GridCandidate` objects via
-  LHS-by-mode or full enumeration.
-- `evaluate_candidates(fast_data, candidates, *, n_workers=1, needs_dsr=False,
-  compute_sharpe=False, compute_sharpe_daily=False, compute_sqn=False)` —
-  evaluate the population. These keyword arguments are part of the V1 Fast Grid
-  backend contract and must be
-  accepted even when the backend can use their default behavior. Monthly
-  Sharpe, Daily Sharpe, and SQN may be requested conditionally as public Fast
-  Objectives; Monthly Sharpe may also be requested internally for DSR.
-- Conditional Fast Sharpe must stream only observations at or after
-  `trade_start_idx`, anchor the first real month at initial capital, close a
-  month with the preceding bar, retain the final partial month, and remain
-  undefined when there are no completed trades or fewer than two usable real
-  calendar-month returns.
-- Optional `get_backend_metadata()` and `build_allocation(...)` hooks for
-  strategy-specific mode labels and generation profiles. Full-enumeration
-  backends can declare that budget, seed, and allocation controls do not apply.
-  `get_backend_metadata()` also drives generic behavior with no shared-code edits:
-  ordered `modes` with `default_enabled` flags supply the default
-  `grid_enabled_modes` (via `default_grid_enabled_modes`), and
-  `diversity_group_fields` (a `list[str]` or a `dict[str, list[str]]` mode map) is
-  preserved as-is through summaries and storage by
-  `normalize_diversity_group_fields`.
-- A Numba inner loop that evaluates the restricted fast objective set
-  (`net_profit_pct`, `max_drawdown_pct`, `romad`, `profit_factor`, `win_rate`,
-  `sharpe_ratio`, `sharpe_daily`, `sqn`) cheaply per candidate. Daily Sharpe is
-  an explicit Fast-only Grid objective and a maximize Optuna objective; all
-  three conditional metrics remain gated so unrequested metrics add no
-  per-candidate calculation.
-- A slow-path validator that re-runs the top-N candidates through the regular
-  Python strategy using `core.optuna_engine._run_single_combination` to keep
-  scoring/constraints consistent with Optuna.
-
-Keep trade kernels strategy-specific. Shared Grid core discovers, ranks,
-validates, stores, and dispatches; it must not absorb one strategy's execution
-semantics. WFA final OOS should remain on the slow strategy unless a separate
-reviewed contract changes that authority.
-
-If you only need Optuna optimization, you can skip this step.
-
-## Reference: S04 StochRSI Example
-
-See `src/strategies/s04_stochrsi/` for a complete working example:
-- `config.json` - Parameter schema with optimization ranges
-- `strategy.py` - Full implementation with StochRSI calculation
-
-## Common Pitfalls
-
-| Problem | Solution |
-|---------|----------|
-| Results don't match Pine | Check warmup bars, date filtering, commission calculation |
-| Parameters not showing in UI | Verify config.json syntax, check browser console |
-| Strategy not discovered | Ensure both config.json and strategy.py exist |
-| snake_case parameters | Use camelCase everywhere: `rsiLen` not `rsi_len` |
-| Missing trades | Check `trade_start_idx` usage, verify entry conditions |
-| Wasted trials from invalid bool states | Add `optimization_rules.bool_groups` (e.g., `at_least_one_true`) |
-| Numeric params explored when feature is off | Add `"depends_on": "boolParamName"` to skip dependent params when parent bool is false |
-
-## Architecture Guarantees
-
-- Frontend renders parameters automatically from `config.json`
-- Optimization includes parameters via config-driven schemas
-- Core layers stay strategy-agnostic
-- Adding new strategies requires only config + strategy module (no UI/core edits)
-
-## Conditional Fast Grid metrics
-
-V1 `fast_grid.py` evaluators accept keyword-only `compute_sharpe=False`,
-`compute_sharpe_daily=False`, and `compute_sqn=False` flags. Implementations
-must leave the corresponding result fields `None` when disabled. Monthly Sharpe
-uses Merlin's calendar-month mark-to-market
-returns, a fixed 2% annual risk-free rate divided by 12, population variance,
-and no `sqrt(12)`. SQN uses exact net trade PnL, sample variance, and is
-undefined below 30 completed trades or for non-finite/near-zero dispersion.
-Both accumulators use stable Welford updates and constant per-candidate memory.
-
-Monthly Sharpe, Daily Sharpe, and SQN are Fast Objectives, but not Fast
-Constraints. The Start page shows eight common Fast controls and accepts at
-most six simultaneously; Optuna retains its separate six-objective cap.
-Sortino, Ulcer Index, and Consistency remain Slow-only. Non-finite selected
-objectives remove the candidate from ranking rather than falling back to zero
-or Net Profit.
-
-Daily Sharpe is a maximize Optuna objective and an explicit Fast-only Grid
-objective. Public requests set `compute_sharpe_daily=True` only when selected;
-final WFA reporting separately requests it for real IS and real undelayed OOS
-series. Delayed/no-trade OOS facts are absent rather than calculated from a
-synthetic sparse prefix. Each backend builds canonical
-contiguous `int32` UTC day IDs once per dataset/window and streams Welford state
-without daily arrays per candidate. Its fractional-return, `rf/365`, population-
-variance, and `sqrt(365)` scale is not interchangeable with Merlin's
-unannualized percentage-return Monthly Sharpe. The observation/active-day
-diagnostics are factual integers for structurally valid series, including zero,
-with no minimum-active-days rule. A non-finite equity observation or invalid
-opening denominator invalidates all three fields. The compounded-return
-self-check remains reference-only; selected Fast rows are validated against
-that canonical reference. Nullable SQL fields preserve historical absence
-without backfill. Existing metrics, DSR, stitched OOS, and exports remain
-unchanged.
+- mismatched config/dataclass defaults or snake_case public names;
+- centered rolling windows, negative shifts, or other lookahead;
+- applying date filters before required technical warmup;
+- off-by-one Pine fill/exit timing;
+- converting option labels differently in UI and Python;
+- calculating indicators or constructing objects inside the hot bar loop;
+- treating a strategy-owned Fast approximation as the Slow execution
+  authority;
+- copying V2 profile concepts into a V1 package without a migration contract.

@@ -4,6 +4,12 @@ This document records the benchmark protocol for Grid V2 performance work. It
 is a measurement log and template, not a claim that Phase 2.6.0 improves
 runtime.
 
+For current engine ownership and runtime contracts, read the
+[V2 architecture](ARCHITECTURE.md). Paths under `docs/_work/` in this log name
+local historical benchmark artifacts. They may be absent from a fresh clone,
+are not operational dependencies, and do not supersede the measurements and
+protocol recorded here.
+
 Benchmark numbers are machine-dependent. Always record the machine, CPU, Python
 version, Numba version, thread environment, command, worker count, candidate
 count, and the full Grid V2 timings dict before comparing runs.

@@ -42,6 +42,13 @@ delay.
 
 ## Accepted references
 
+- [A — Reversal / R Trail](reference_a_reversal_r_trail/README.md)
+- [B — Trend / R Trail](reference_b_trend_r_trail/README.md)
+- [C — Reversal / Chandelier](reference_c_reversal_chandelier/README.md)
+- [D — Trend / Chandelier](reference_d_trend_chandelier/README.md)
+- [E — Reversal / Fixed-AF SAR](reference_e_reversal_fixed_af_sar/README.md)
+- [F — Trend / Fixed-AF SAR](reference_f_trend_fixed_af_sar/README.md)
+
 | Reference | Entry / trail | Stop X / LP / Max % / Days | Active trail parameters | Trades | Profitable method exits |
 |---|---|---:|---|---:|---:|
 | A | Reversal / R Trail | `2 / 2 / 4 / 6` | activation `1R`, distance `2R` | 52 | 8 (4 long, 4 short) |

@@ -1,126 +1,101 @@
 # Merlin
 
-Config-driven backtesting and optimization platform for cryptocurrency trading strategies with SQLite database persistence and web-based studies management.
+Merlin is a config-driven cryptocurrency strategy backtesting and
+optimization platform with SQLite persistence and a Flask single-page web UI.
 
-## Features
+## Capabilities
 
-- **Database persistence** - All optimization results automatically saved to SQLite database
-- **Multi-database support** - Multiple `.db` files with active DB switching
-- **Studies browser** - Web UI for browsing, opening, and managing historical optimization studies
-- **Multi-strategy support** - S01 Trailing MA, S03 Reversal, S04 StochRSI, and S06 R-Trend included, easily extensible
-- **Optuna optimization (Backtester V1)** - Single- and multi-objective optimization (1-6 objectives) with Pareto front results, primary-objective sorting, and multiple samplers (Random, TPE/MOTPE, NSGA-II/NSGA-III). Backtester V2 is Grid-only for new optimization and WFA requests; historical V2 Optuna studies remain readable and replayable.
-- **Grid optimization** - Legacy V1 backends retain strategy-owned generation;
-  Backtester V2 supports exact full enumeration or generic deterministic
-  budgeted planning across ordered logical blocks
-- **Initial Search Coverage** - Optional systematic parameter space exploration during Optuna startup with configurable coverage block sizes
-- **Soft constraints** - Configure feasibility rules (e.g., Total Trades >= 30). Results show feasible/infeasible indicators; infeasible trials are deprioritized, not discarded. Shared by Optuna and Grid.
-- **Bool group rules** - Declare invalid boolean parameter combinations (e.g., `at_least_one_true`) in strategy `config.json` to reduce wasted trials
-- **Parameter dependencies** - `depends_on` lets numeric params be skipped when a parent bool is false
-- **Trial deduplication** - Automatic detection and skipping of duplicate parameter sets with search space exhaustion early stopping
-- **In-memory backend** - RAM-based Optuna storage (InMemoryJournalBackend) for faster multiprocess optimization
-- **Robust trial handling** - If an objective returns NaN, the trial is marked FAIL (study continues) and failed trials are ignored by samplers.
-- **Trial log switch** - Toggle Optuna trial-level logging on/off from the UI
-- **Walk-forward analysis** - IS/OOS validation with stitched equity curves and WFE metrics, fixed and adaptive modes
-- **Adaptive WFA** - Re-optimization triggers based on CUSUM, drawdown degradation, and inactivity detection, with optional cooldown to skip re-optimization for N days after a trigger
-- **WFA Analytics** - Research-focused analytics page with multi-study comparison, filtering, equity visualization, and aggregated portfolio curves backed by an analytics group cache
-- **Study sets** - Save named collections of WFA studies (with colors, sort order, bulk actions) for quick recall and comparison on Analytics page
-- **Scheduled run queue** - Queue multiple optimization runs for sequential execution
-- **Three-page UI** - Start page for configuration, Results page for studies management, Analytics page for WFA research
-- **On-demand trade export** - Generate TradingView-compatible CSV for IS, Forward Test, OOS Test, Manual Test, and WFA exports
-- **Lancelot bundle export** - Export a trial (Optuna/Grid) or WFA window as a Lancelot partial bundle for downstream execution
-- **Config-driven architecture** - Add new strategies via `config.json` + `strategy.py` only
+- Single-strategy backtests with dynamic config-driven parameter forms.
+- Backtester V1 optimization through Optuna or deterministic Fast Grid.
+- Backtester V2 optimization through deterministic core-owned Grid V2,
+  including full and budgeted sampled planning.
+- Fixed and Adaptive walk-forward analysis with stitched OOS results.
+- SQLite study history, multiple databases, manual/forward/OOS testing, and
+  trade export.
+- Start, Results, and Analytics pages, saved study sets, and a scheduled run
+  Queue.
+- Local V2 Strategy Lab workflows for certified dataset generation,
+  certification, analysis, and fixed-capacity allocation.
 
-## Quick Start
+## Optimizer compatibility
+
+Backtester V1 supports Optuna and Grid. New Backtester V2 Optimize and WFA
+requests must explicitly use Grid. Optuna has not been removed: historical V2
+Optuna studies remain readable, supported replay/manual-test paths remain
+compatible, and V1 Optuna remains fully supported. Merlin never silently
+converts old Optuna requests, Queue items, Presets, or studies to Grid.
+
+## Quick start
+
+Install the pinned dependencies:
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
+```
 
-# Start web server
+Start the web server:
+
+```bash
 cd src/ui
 python server.py
 ```
 
-Open http://127.0.0.1:5000 in your browser.
+Open <http://127.0.0.1:5000>.
 
-The Backtester V1 S06 R-Trend v02 strategy supports Backtest, Optuna,
-fixed/adaptive WFA, and Fast Grid. Its V1 Grid profile enumerates every selected
-Bracket/Trail combination: 48,480
-by default, or up to 436,320 when both optional Threshold OS/OB axes are
-enabled (`20, 30, 40`). Entry Mode and Long/Short controls remain fixed per
-run. Selected IS candidates are always slow-validated, and WFA OOS remains
-authoritative slow execution. Disable `stopRR` optimization manually for
-Trail-only Optuna/WFA studies because it is inactive in Trail mode.
+On this Windows checkout, repository development and tests use:
 
-Imported Backtester V2 strategies use the core-owned Grid V2 planner. Its
-`full` policy preserves the certified historical candidate population and
-order; its `sampled` policy uses deterministic balanced discrete LHS when the
-requested budget is smaller than the valid space. New V2 optimization and WFA
-requests must carry explicit `optimization_mode="grid"`; Optuna remains
-available for Backtester V1.
-
-## Project Structure
-
+```text
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe
 ```
-project-root/
-|-- src/
-|   |-- core/           # Backtest, Optuna, Grid, WFA engines + metrics + analytics + storage + export + bundle_export + param_identity + post-process + testing
-|   |-- indicators/     # MA (11 types), ATR, RSI, StochRSI
-|   |-- strategies/     # S01, S03/S06 (+ strategy-owned fast_grid.py), and S04 packages
-|   |-- storage/        # SQLite databases (multiple .db files) + queue state
-|   `-- ui/             # Flask server + three-page frontend (Start/Results/Analytics)
-|-- data/               # OHLCV CSVs and regression baselines
-|-- tests/              # Pytest test suite
-|-- tools/              # Development utilities
-`-- docs/               # Documentation
+
+Linux/VPS hosts use their configured project environment.
+
+## UI workflow
+
+- **Start** — select market data and a strategy, configure parameters,
+  preview/run optimization or WFA, and manage queued runs. V1 exposes
+  Optuna/Grid; V2 is Grid-only.
+- **Results** — browse stored studies and trials/windows, run supported tests,
+  view equity/parameter details, export trades, and manage database paths.
+- **Analytics** — compare WFA studies and sets, filter research views, and
+  inspect aggregated and focused equity results.
+
+## Project layout
+
+```text
+src/       application, engines, strategies, storage, and Flask UI
+data/      market inputs and tracked regression/certification baselines
+tests/     core/server, V2, JavaScript, and Strategy Lab tests
+tools/     maintenance, benchmark, and Strategy Lab commands
+docs/      architecture, procedures, evidence, and documentation index
 ```
+
+New strategy development should normally target Backtester V2. A V2 import
+requires a strategy package, execution profile, signals/dataprep, Grid
+planning compatibility, parity/certification evidence, and focused tests; it
+is not only a `config.json` plus `strategy.py` change.
 
 ## Documentation
 
-- [Project Overview](docs/PROJECT_OVERVIEW.md) - Architecture and module details
-- [Adding New Strategy](docs/ADDING_NEW_STRATEGY.md) - PineScript to Python conversion guide
-
-## Usage
-
-### Start Page (Configuration)
-1. Browse and select OHLCV CSV data (or use included `data/raw/OKX_LINKUSDT.P, 15 2025.05.01-2025.11.20.csv`)
-2. Select strategy from dropdown
-3. Configure parameters via dynamic form
-4. For Backtester V1, pick Optuna or Grid; Backtester V2 selects Grid automatically. Configure strategy-appropriate Grid modes or sampling controls.
-5. For Backtester V1 Optuna, optionally enable Initial Search Coverage for systematic parameter space exploration
-6. Preview Grid parameter space (mode allocation, coverage) before running
-7. Toggle trial-level logging on/off
-8. Preview WFA window layout and configure adaptive triggers + cooldown
-9. Run Backtester V1 Optuna/Grid or Backtester V2 Grid, or Walk-Forward Analysis (fixed or adaptive)
-10. Queue multiple runs for sequential execution
-11. Results automatically saved to database
-
-### Results Page (Studies Browser)
-1. View all historical optimization studies
-2. Switch between databases
-3. Select and open any study to view trials/windows
-4. Analyze equity curves and performance metrics
-5. Download trades CSV for IS/FT/OOS/Manual/WFA results (TradingView format)
-6. Export the selected trial or WFA window as a Lancelot partial bundle
-7. Delete old studies or update CSV file paths
-
-### Analytics Page (WFA Research)
-1. Filter WFA studies by strategy, symbol, timeframe, WFA mode, IS/OOS periods
-2. Compare multi-study equity curves
-3. View aggregated (portfolio) equity curve with annualized profit and max drawdown
-4. Focus on a single study to see WFA window boundary overlays
-5. Save and load study sets for quick recall
-6. Sort and analyze aggregated metrics (profit, drawdown, WFE, win rate)
-
-## CLI Backtest
-
-```bash
-cd src
-python run_backtest.py --csv ../data/raw/OKX_LINKUSDT.P,\ 15\ 2025.05.01-2025.11.20.csv
-```
+- [Complete documentation index and ownership map](docs/README.md)
+- [Current project architecture and strategy matrix](docs/PROJECT_OVERVIEW.md)
+- [Cross-engine metrics](docs/METRICS.md)
+- [New V2 strategy import guide](docs/ADDING_NEW_STRATEGY_V2.md)
+- [Legacy V1 strategy guide](docs/ADDING_NEW_STRATEGY.md)
+- [V2 architecture](docs/engine_v2/ARCHITECTURE.md)
+- [V2 certification evidence](docs/engine_v2/CERTIFICATION.md)
+- [V2 performance history](docs/engine_v2/PERFORMANCE.md)
+- [Testing guide](tests/README.md)
+- [Tool catalog](tools/README.md)
+- [Strategy Lab guide](tools/strategy_lab/README.md)
 
 ## Tests
 
+Run from the repository root with the configured interpreter:
+
 ```bash
-pytest tests/ -v
+python -m pytest -q
 ```
+
+Use focused suites and isolated temporary paths as described in
+[tests/README.md](tests/README.md).

@@ -1,121 +1,81 @@
 # Tools
 
-Development and debugging utilities for the Merlin platform.
+Run repository tools from the project root. On Windows, use the configured
+project interpreter:
 
-## Available Tools
-
-### generate_baseline_s01.py
-
-Generates regression test baseline for S01 strategy.
-
-**When to use:** After intentional changes to S01 that affect results.
-
-```bash
-python tools/generate_baseline_s01.py
+```powershell
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe <command>
 ```
 
-**Output:**
-- `data/baseline/s01_baseline_metrics.json` - Metrics snapshot
-- `data/baseline/s01_baseline_trades.csv` - Trade list
+Linux/VPS environments use their configured project Python and native paths.
 
-### benchmark_indicators.py
+## Baselines and checks
 
-Performance benchmark for indicator calculations.
+`generate_baseline_s01.py` regenerates the S01 regression evidence after an
+explicitly reviewed behavioral change:
 
-**When to use:** After modifying indicator implementations to verify performance.
-
-```bash
-python tools/benchmark_indicators.py
+```powershell
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe tools\generate_baseline_s01.py
 ```
 
-**Output:** Timing results for each MA type and ATR (100 iterations on 10,000 bars).
+It writes `data/baseline/s01_metrics.json` and
+`data/baseline/s01_trades.csv`. Do not refresh these files merely to make a
+regression failure pass.
 
-### benchmark_metrics.py
+`test_all_ma_types.py` exercises all supported S01 moving-average types.
+`benchmark_indicators.py` and `benchmark_metrics.py` provide focused timing
+checks for their respective subsystems.
 
-Performance benchmark for metrics calculations.
+## Grid V2 diagnostics
 
-**When to use:** After modifying metrics module to verify performance.
+`benchmark_grid_v2.py` measures direct Grid V2 runs and inspects saved WFA
+diagnostics:
 
-```bash
-python tools/benchmark_metrics.py
+```powershell
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe tools\benchmark_grid_v2.py --help
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe tools\benchmark_grid_v2.py inspect-wfa-db --db <snapshot.db>
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe tools\benchmark_grid_v2.py direct-grid --config tools\benchmark_configs\s06_b2_sui_baseline_grid.json --workers 1,6 --warmup-runs 1 --runs 2
 ```
 
-### benchmark_grid_v2.py
+Candidate domains come from strategy `config.json` optimization metadata,
+`enabled_params`, and selected `{param}_options`. Numeric `param_ranges` in a
+benchmark payload do not independently redefine V2 grid granularity.
+`inspect-wfa-db` uses SQLite read-only immutable mode and is for frozen
+snapshots, not a live database with possible WAL frames.
 
-Grid V2 diagnostics and benchmark helper.
+## Pytest wrapper
 
-**When to use:** Before and after Grid V2 performance work to collect comparable
-direct-grid timings, or to inspect saved WFA Grid metadata without rerunning WFA.
-
-```bash
-python tools/benchmark_grid_v2.py --help
-python tools/benchmark_grid_v2.py inspect-wfa-db --db src/storage/2026-07-06_233217_backtester-v2-test.db
-python tools/benchmark_grid_v2.py direct-grid --config tools/benchmark_configs/s06_b2_sui_baseline_grid.json --workers 1,6 --warmup-runs 1 --runs 2
-```
-
-Grid V2 candidate domains come from the strategy `config.json` optimize
-metadata, `enabled_params`, and select `{param}_options` subsets. Numeric
-`param_ranges` in the benchmark payload are kept for compatibility with the
-canonical UI config builder; editing only those ranges does not independently
-redefine V2 grid granularity.
-
-`inspect-wfa-db` opens frozen benchmark DB snapshots with SQLite
-`mode=ro&immutable=1`, which avoids read sidecars. Do not use that mode for a
-live DB that may still have uncheckpointed WAL frames. Newer WFA Grid V2 rows
-may include optional Phase 2.6.4 timing buckets and plan-reuse counters; older
-rows without those fields still inspect as valid, and the stable diagnostics
-status is based only on the original required timing keys.
-
-### run_pytest.ps1
-
-Windows pytest wrapper that uses the required Merlin Python by default and
-redirects pytest temp directories into a repo-local `.pytest_tmp/run_<pid>`
-directory.
+`run_pytest.ps1` selects the required Merlin interpreter and places pytest
+temporary files in an isolated `.pytest_tmp/run_<pid>` directory:
 
 ```powershell
 .\tools\run_pytest.ps1 -q tests\test_benchmark_grid_v2.py
 .\tools\run_pytest.ps1 -q tests\v2
 ```
 
-Set `MERLIN_PYTHON` to override the interpreter. Pass `-KeepTemp` before pytest
-arguments to preserve the per-run temp directory for debugging.
+Set `MERLIN_PYTHON` only when an alternate project interpreter is intentional.
+Use `-KeepTemp` before pytest arguments to retain a run directory for debugging.
 
-### strategy_lab
+## Strategy Lab
 
-Phase 0 through Phase 1-B Stage 1 tooling for the local, Backtester-V2-only
-Strategy Lab. It validates portable run specifications, rebuilds deterministic
-Grid V2 plan identity without market data, and creates a read-only source
-inventory with frozen development/holdout ownership. It also provides strict
-raw source/window/warmup validation, atomic checksummed resumable smoke dataset
-generation, and opt-in real-pack parity/thread/smoke certification.
+Strategy Lab is a local, read-only-input research pipeline for certified V2
+strategies. Its current commands cover run-spec validation, inventory,
+resumable dataset generation, real-pack certification, deterministic analysis,
+and fixed-capacity allocation:
 
-```bash
-python -m tools.strategy_lab.config tools/strategy_lab/runspecs/s06_bracket_mvp.json
-python -m tools.strategy_lab.generate RUN_SPEC --data-root DATA_ROOT --output-dir OUTPUT --ticker SYMBOL --window 1
-python -m tools.strategy_lab.certify RUN_SPEC --data-root DATA_ROOT --work-dir WORK_DIR
-python -m pytest tests/strategy_lab -q
+```powershell
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.config tools\strategy_lab\runspecs\s06_bracket_mvp.json
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.generate --help
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.certify --help
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.analysis.cli --help
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m tools.strategy_lab.analysis.allocation_certify --help
 ```
 
-See `tools/strategy_lab/README.md` for data-root precedence, dataset schema,
-resume semantics, the accepted production WFA tie-back, and the still-separate
-Stage 2 review gate. Strategy Lab follows the established tools bootstrap: derive the
-repository root from `__file__`, add its `src/` directory once, and import
-existing Merlin V2 contracts rather than copying core code.
+See the [Strategy Lab manual](strategy_lab/README.md) for identity, isolation,
+schema, resume, scope-unlock, analysis, allocation, and certification contracts.
 
-### test_all_ma_types.py
+## Related documentation
 
-Tests S01 strategy with all 11 MA types to ensure indicators work correctly.
-
-**When to use:** After modifying MA indicators or S01 strategy logic.
-
-```bash
-python tools/test_all_ma_types.py
-```
-
-**Output:** Summary table showing profit/drawdown/trades for each MA type.
-
-## Usage Notes
-
-- All tools should be run from project root: `python tools/<script>.py`
-- Tools add `src/` to Python path automatically
-- Tools use the standard test data: `data/raw/OKX_LINKUSDT.P, 15 2025.05.01-2025.11.20.csv`
+- [Test workflow](../tests/README.md)
+- [V2 architecture](../docs/engine_v2/ARCHITECTURE.md)
+- [Performance evidence](../docs/engine_v2/PERFORMANCE.md)
