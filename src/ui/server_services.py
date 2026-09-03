@@ -1293,8 +1293,6 @@ def _normalize_v2_optimizer_payload(
                 "only; set optimization_mode='grid'."
             ),
         )
-    payload = deepcopy(payload)
-    payload["optimization_mode"] = normalized_mode
     _validate_v2_optimizer_runtime_paths(context, payload)
     fixed_params = payload.get("fixed_params")
     runtime_members = _runtime_members_from_mapping(fixed_params, prefix="fixed_params")
@@ -1305,6 +1303,7 @@ def _normalize_v2_optimizer_payload(
         missing_date_filter=missing_date_filter,
     )
     normalized = deepcopy(payload)
+    normalized["optimization_mode"] = normalized_mode
     normalized_fixed = deepcopy(fixed_params) if isinstance(fixed_params, dict) else fixed_params
     if isinstance(normalized_fixed, dict):
         normalized_fixed.update(runtime.execution_projection)

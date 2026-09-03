@@ -61,7 +61,7 @@ floating dtype.
 
 ## Project: Merlin
 
-Cryptocurrency trading strategy backtesting and Optuna optimization platform with a Flask SPA frontend.
+Cryptocurrency trading strategy backtesting and optimization platform with a Flask SPA frontend.
 
 ## Running the Application
 
@@ -455,10 +455,10 @@ backend advertises capability via `get_backend_metadata()` (normalized by
     and `warmupBars`. They are normalized by the core, excluded from candidate
     domains and semantic/plan identity, and cannot be Grid axes or option
     overrides. Only the three date fields are rebased for WFA windows.
-   - New V2 Grid and WFA studies persist one exact request-level
-     `v2_runtime_metadata_v1` envelope in `config_json.v2_runtime`; V1 omits the
-     key and no migration is performed. Historical V2 Optuna studies remain
-     readable and replayable. Stored execution resolves the current
+  - New V2 Grid and WFA studies persist one exact request-level
+    `v2_runtime_metadata_v1` envelope in `config_json.v2_runtime`; V1 omits the
+    key and no migration is performed. Historical V2 Optuna studies remain
+    readable and replayable. Stored execution resolves the current
     registry/profile first, uses the shared current/legacy/defaulted runtime
     reader, ignores candidate runtime authority, applies operation dates last,
     and keeps Warmup separate behind the `dateFilter` preparation gate.

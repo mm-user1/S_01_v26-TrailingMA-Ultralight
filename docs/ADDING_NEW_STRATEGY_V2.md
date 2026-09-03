@@ -530,7 +530,7 @@ not a rebase field.
 The WFA HTTP boundary passes raw `worker_processes` (including the accepted
 camel-case compatibility field) to the shared optimization-config builder; do
 not add a strategy-specific worker policy. The builder's normalized value is
-    the common Grid, legacy Optuna, Forward Test, and replay resource. New Grid V2 WFA
+the common Grid, legacy Optuna, Forward Test, and replay resource. New Grid V2 WFA
 window diagnostics store that run's actual compiled workers and the exact
 top-level `grid_v2_plan_fingerprint`. Selected WFA Grid trials retain Fast
 `grid_rank`, `semantic_key`, and `candidate_id`; direct Grid V2 storage uses the

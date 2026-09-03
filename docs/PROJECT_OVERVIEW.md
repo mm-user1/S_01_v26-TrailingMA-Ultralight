@@ -1,6 +1,6 @@
 # Merlin - Project Overview
 
-Config-driven backtesting and Optuna optimization platform for cryptocurrency trading strategies with SQLite database persistence and web-based studies management.
+Config-driven backtesting and optimization platform for cryptocurrency trading strategies with SQLite database persistence and web-based studies management.
 
 ## Project Structure
 

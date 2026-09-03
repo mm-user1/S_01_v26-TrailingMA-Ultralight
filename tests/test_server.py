@@ -1397,12 +1397,20 @@ def test_v2_grid_mode_normalization_and_optimizer_error_precedence():
     context = server_services._resolve_strategy_context(
         [("strategy_id", True, "s06_r_trend_v02_b2")]
     )
+    payload = {
+        "optimization_mode": " GrId ",
+        "fixed_params": {"dateFilter": False},
+    }
     normalized, _runtime = server_services._normalize_v2_optimizer_payload(
         context,
-        {"optimization_mode": " GrId ", "fixed_params": {"dateFilter": False}},
+        payload,
         warmup_members=[],
     )
     assert normalized["optimization_mode"] == "grid"
+    assert payload == {
+        "optimization_mode": " GrId ",
+        "fixed_params": {"dateFilter": False},
+    }
 
     with pytest.raises(Exception) as excinfo:
         server_services._normalize_v2_optimizer_payload(

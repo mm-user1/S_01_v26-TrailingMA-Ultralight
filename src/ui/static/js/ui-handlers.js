@@ -2449,19 +2449,24 @@ function syncOptimizerModeUI() {
   const optunaRadio = document.getElementById('optimizerModeOptuna');
   const optunaLabel = document.getElementById('optimizerModeOptunaLabel');
   const gridHelp = document.getElementById('gridModeHelp');
+  // Only the V2 Grid policy disables this radio. Capture the previous lock
+  // before resetting the current presentation.
+  const wasV2Locked = Boolean(optunaRadio?.disabled);
 
   if (optunaLabel) optunaLabel.style.display = isV2 ? 'none' : '';
   if (optunaRadio) optunaRadio.disabled = isV2;
 
   if (!strategyConfig) {
-    if (optunaRadio) {
-      optunaRadio.disabled = false;
-      optunaRadio.checked = true;
+    if (optunaRadio) optunaRadio.disabled = false;
+    if (gridRadio) gridRadio.disabled = false;
+    if (wasV2Locked) {
+      if (optunaRadio) optunaRadio.checked = true;
+      if (gridRadio) gridRadio.checked = false;
     }
-    if (gridRadio) gridRadio.checked = false;
+    const effectiveGrid = Boolean(gridRadio?.checked);
     if (gridHelp) gridHelp.textContent = '';
-    if (gridSettings) gridSettings.style.display = 'none';
-    if (optunaSettings) optunaSettings.style.display = 'block';
+    if (gridSettings) gridSettings.style.display = effectiveGrid ? 'block' : 'none';
+    if (optunaSettings) optunaSettings.style.display = effectiveGrid ? 'none' : 'block';
     return;
   }
 
@@ -2475,6 +2480,7 @@ function syncOptimizerModeUI() {
   if (gridRadio) {
     gridRadio.disabled = !gridMeta.available;
     if (!isV2 && !gridMeta.available && gridRadio.checked && optunaRadio) {
+      gridRadio.checked = false;
       optunaRadio.checked = true;
     }
   }
