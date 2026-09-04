@@ -37,10 +37,15 @@ trade statistics, and maximum consecutive losses are derived from completed
 trades. Percentage Net Profit uses the supplied initial balance where the
 calling surface provides it.
 
-Realized Max DD is balance-based. It scans every finite value in the complete
-realized `balance_curve`, including its final observation and any flat
-technical-warmup prefix. At each observation the running realized-balance peak
-is updated. Percentage drawdown is the maximum
+Realized Max DD is balance-based; non-finite balance observations do not create
+drawdown points. The Slow/Python calculation converts the realized
+`balance_curve` to floating values, forward-fills missing interior observations,
+then filters values that remain non-finite. The V2 metrics kernel skips
+non-finite observations directly. These produce the same effective realized
+drawdown path because repeating the preceding balance cannot create a deeper
+drawdown. Both scan the full path, including technical warmup and the final
+unrecovered tail. At each observation the running realized-balance peak is
+updated. Percentage drawdown is the maximum
 `(peak - balance) / peak * 100` for positive peaks; absolute drawdown is the
 independent maximum `peak - balance`. Neither `metric_start_idx`,
 `metric_initial_equity`, nor a Net Profit starting-balance argument seeds or
@@ -150,11 +155,13 @@ initial capital. An empty interval or any non-finite observation returns NaN;
 a present flat interval returns `0.0`; negative equity can produce drawdown
 above 100%. Signal-reversal requests fail explicitly.
 
-This metric is not realized Max DD and does not alter the compiled result ABI;
-compiled execution transports it in an optional sidecar. It is also not
-TradingView intrabar/open-excursion drawdown, which can use within-bar High/Low
-behavior unavailable to this bar-close series. A future `romad_mtm` would use
-NaN when MTM drawdown is zero, unlike established realized RoMaD.
+This metric is not realized Max DD. As defined by the
+[V2 architecture ABI](engine_v2/ARCHITECTURE.md#compiled-execution-and-resources),
+compiled execution transports it in an optional sidecar without changing the
+compiled result ABI. It is also not TradingView intrabar/open-excursion
+drawdown, which can use within-bar High/Low behavior unavailable to this
+bar-close series. A future `romad_mtm` would use NaN when MTM drawdown is zero,
+unlike established realized RoMaD.
 
 The Strategy Lab schema-v2 metric axis is authoritative in
 `tools/strategy_lab/dataset.py`; its analysis and allocation interpretation is

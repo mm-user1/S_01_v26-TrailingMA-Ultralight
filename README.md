@@ -40,7 +40,7 @@ cd src/ui
 python server.py
 ```
 
-Open <http://127.0.0.1:5000>.
+Open <http://127.0.0.1:5001>.
 
 On this Windows checkout, repository development and tests use:
 
@@ -49,6 +49,18 @@ C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe
 ```
 
 Linux/VPS hosts use their configured project environment.
+
+The existing command-line backtest entry point has S01-specific defaults. Run
+its help from `src/` rather than treating it as a generic V2 workflow:
+
+```powershell
+cd src
+C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe run_backtest.py --help
+```
+
+Its current default `--csv` path is repository-root-relative and does not
+resolve from `src/`; for an actual run, pass an explicit path such as
+`--csv ../data/raw/<file>`.
 
 ## UI workflow
 
@@ -80,6 +92,7 @@ is not only a `config.json` plus `strategy.py` change.
 - [Complete documentation index and ownership map](docs/README.md)
 - [Current project architecture and strategy matrix](docs/PROJECT_OVERVIEW.md)
 - [Cross-engine metrics](docs/METRICS.md)
+- [V1 optimizer contracts](docs/OPTIMIZERS.md)
 - [New V2 strategy import guide](docs/ADDING_NEW_STRATEGY_V2.md)
 - [Legacy V1 strategy guide](docs/ADDING_NEW_STRATEGY.md)
 - [V2 architecture](docs/engine_v2/ARCHITECTURE.md)

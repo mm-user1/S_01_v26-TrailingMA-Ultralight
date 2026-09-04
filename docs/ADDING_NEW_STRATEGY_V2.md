@@ -62,6 +62,13 @@ src/strategies/<strategy_id>_b2/
 aliases, build `ExecutionData`, call `run_v2_strategy`, and return the standard
 `StrategyResult`.
 
+Repository convention is a `BaseStrategy` subclass defined in `strategy.py`,
+declaring `STRATEGY_ID`, `STRATEGY_NAME`, and `STRATEGY_VERSION`, with the
+standard static `run(df, params, trade_start_idx) -> StrategyResult` adapter.
+The registry mechanically discovers a class defined in that module when it has
+`STRATEGY_ID` and `run`; it does not itself validate the full convention. A
+package without such a discoverable class is skipped with a warning.
+
 Expose:
 
 ```python
@@ -83,7 +90,9 @@ guaranteed to have floating OHLC dtypes.
 
 ## 4. Declare config roles and execution variants
 
-Set top-level `"engine": "v2"`. Public parameter names remain camelCase.
+Set top-level `"engine": "v2"`. Declare the execution profile in the
+top-level `"execution"` object of `config.json`; the current design has no
+separate profile file. Public parameter names remain camelCase.
 Every optimized parameter declares exactly one role:
 
 - `signal` — changes signals or signal-dependent dataprep;

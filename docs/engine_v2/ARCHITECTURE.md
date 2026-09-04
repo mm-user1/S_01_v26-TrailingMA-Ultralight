@@ -30,8 +30,10 @@ Numba Grid loop when the required generic modes are already certified.
 
 ### Position family
 
-The position/bracket family requires `entryOrder=market_next_open`,
-`stop=atr_swing`, and `sizing=risk_per_trade`. It supports:
+Position-family profiles represent topology by leaving `topology` absent;
+`topology="position"` is not supported. The position/bracket family requires
+`entryOrder=market_next_open`, `stop=atr_swing`, and
+`sizing=risk_per_trade`. It supports:
 
 - `target=rr`, `trail=none`, `trailActivation=none`; or
 - `target=none`, `trail=ma|r_distance|chandelier|fixed_af_sar`,
@@ -170,8 +172,9 @@ IDs are local to the resulting plan. Semantic keys include strategy,
 execution, and active parameter semantics but exclude policy, budget, seed,
 allocation, workers, and runtime fields. Ordered semantic keys are streamed
 into the plan fingerprint without materializing a duplicate key collection.
-Current plans identify their semantic, plan, and runtime contract versions;
-mode changes invalidate reuse.
+Current plans publish
+`grid_v2_plan_identity_v3`, `grid_v2_semantic_identity_v2`, and
+`v2_runtime_contract_v1`; mode changes invalidate reuse.
 
 `{param}_options` can restrict select/options axes to a non-empty subset in
 declared config order. It does not rewrite config metadata. Numeric request
@@ -182,6 +185,9 @@ ranges do not independently redefine V2 granularity.
 Compiled Grid uses core-owned config packing and population batching. Full
 table-compatible plans use the typed table packer; sampled and other mapping
 cases use core mapping packing. Strategies do not add packing hooks.
+
+The compiled result ABI remains 26 columns. Optional sidecars, including the
+request-gated bar-close MTM drawdown sidecar, do not change that ABI.
 
 `grid_v2_max_cache_mb` is a finite positive signal/dataprep estimate limit,
 default 512 MB. The estimate includes planned stacks, outputs, and shared
@@ -251,8 +257,10 @@ Non-delayed stitched output is unchanged.
 ## Persistence and historical compatibility
 
 New V2 Grid/WFA studies persist one request-level `config_json.v2_runtime`
-envelope with the complete ordered runtime values and diagnostics. Per-window
-configs do not duplicate it. V1 writers omit the envelope.
+envelope with schema `v2_runtime_metadata_v1`. The envelope separately records
+contract version `v2_runtime_contract_v1` and contains the complete ordered
+runtime values and diagnostics. Per-window configs do not duplicate it. V1
+writers omit the envelope.
 
 Stored execution resolves current registry/profile authority first. It then
 uses valid current runtime metadata, compatible legacy facts, and defaults in

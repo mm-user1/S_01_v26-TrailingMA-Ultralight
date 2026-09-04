@@ -27,6 +27,7 @@ tracked repository.
 | [Agent bootstrap](../AGENTS.md) | Minimal tool-neutral pointer to repository guidance |
 | [Project overview](PROJECT_OVERVIEW.md) | Current components, ownership, data flow, persistence/UI summary, and the sole complete strategy matrix |
 | [Metrics](METRICS.md) | Complete cross-engine metric behavior and availability |
+| [V1 optimizers](OPTIMIZERS.md) | Current V1 Optuna and strategy-owned Fast Grid contracts |
 
 ## Strategy work
 
@@ -72,11 +73,19 @@ are evidence records; current architecture and procedure documents do not.
 
 ## Task-based reading routes
 
-- Application, UI, routes, Queue, storage, WFA, or export: read the
+- Application, UI, routes, Queue, storage, or export: read the
   [project overview](PROJECT_OVERVIEW.md), then inspect the named source module.
+- WFA windowing or WFE semantics: read
+  [WFA and analytics](PROJECT_OVERVIEW.md#wfa-and-analytics); for V2 runtime
+  rebasing, worker transport, delayed OOS, or plan reuse, continue to
+  [V2 architecture](engine_v2/ARCHITECTURE.md#wfa).
 - Metric formulas or availability: read [Metrics](METRICS.md).
 - New strategy: use the [V2 import guide](ADDING_NEW_STRATEGY_V2.md). Use the
   [V1 guide](ADDING_NEW_STRATEGY.md) only for legacy V1 work.
+- V1 Optuna or V1 Fast Grid: read [V1 optimizers](OPTIMIZERS.md), then the
+  relevant strategy guide when package behavior is involved.
+- Strategy-specific preservation: read the relevant V1/V2 strategy guide,
+  then its certification or baseline evidence.
 - V2 core or Grid change: read [V2 architecture](engine_v2/ARCHITECTURE.md),
   then certification and performance evidence if parity or speed is affected.
 - Strategy Lab work: read its [full guide](../tools/strategy_lab/README.md).

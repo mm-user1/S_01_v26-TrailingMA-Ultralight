@@ -11,6 +11,8 @@ and routes task-specific work to its tracked authority.
 - Keep the established light-theme UI unless a task explicitly changes it.
 - Public strategy parameters use camelCase from Pine/config through Python,
   requests, storage, and exports. Do not add snake/camel conversion helpers.
+- Serialize parameter dataclasses with `dataclasses.asdict()`; do not give
+  those parameter dataclasses custom `to_dict()` methods.
 - Strategy data-preparation boundaries must normalize arrays that require a
   floating dtype even when called with caller-created DataFrames.
 - Update the authoritative tracked document whenever a current contract
@@ -74,11 +76,14 @@ Read the destination for the surface being changed before editing it.
 | --- | --- |
 | Full documentation index and ownership | [docs/README.md](docs/README.md) |
 | Current components, UI, API ownership, storage, data flow, strategy matrix | [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md) |
+| WFA windowing and WFE semantics | [docs/PROJECT_OVERVIEW.md#wfa-and-analytics](docs/PROJECT_OVERVIEW.md#wfa-and-analytics) |
 | Cross-engine metrics and availability | [docs/METRICS.md](docs/METRICS.md) |
 | Legacy Backtester V1 strategy work | [docs/ADDING_NEW_STRATEGY.md](docs/ADDING_NEW_STRATEGY.md) |
+| V1 Optuna and V1 Fast Grid contracts | [docs/OPTIMIZERS.md](docs/OPTIMIZERS.md) |
 | New Backtester V2 strategy import | [docs/ADDING_NEW_STRATEGY_V2.md](docs/ADDING_NEW_STRATEGY_V2.md) |
 | V2 engine, Grid, runtime, WFA, and persistence contracts | [docs/engine_v2/ARCHITECTURE.md](docs/engine_v2/ARCHITECTURE.md) |
 | Certified profiles, parity evidence, tolerances, and preservation | [docs/engine_v2/CERTIFICATION.md](docs/engine_v2/CERTIFICATION.md) |
+| Strategy-specific preservation guards | Relevant [V1](docs/ADDING_NEW_STRATEGY.md) or [V2](docs/ADDING_NEW_STRATEGY_V2.md) guide, then certification/baseline evidence |
 | Benchmark protocol and historical timing results | [docs/engine_v2/PERFORMANCE.md](docs/engine_v2/PERFORMANCE.md) |
 | Tool catalog | [tools/README.md](tools/README.md) |
 | Strategy Lab usage, schemas, safety, analysis, and allocation | [tools/strategy_lab/README.md](tools/strategy_lab/README.md) |

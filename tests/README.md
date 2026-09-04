@@ -1,9 +1,9 @@
 # Tests
 
-Merlin uses pytest for Python tests and direct Node execution for browser-side
-JavaScript tests. Tests must use isolated temporary storage and synthetic or
-explicitly authorized read-only inputs; they must not modify protected market
-data, baselines, or a live database.
+Merlin uses pytest for Python tests and Python wrappers that invoke Node for
+browser-side JavaScript tests. Tests must use isolated temporary storage and
+synthetic or explicitly authorized read-only inputs; they must not modify
+protected market data, baselines, or a live database.
 
 On Windows, run Python gates with the configured interpreter:
 
@@ -32,11 +32,27 @@ C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest tests\v
 
 # Strategy Lab
 C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest tests\strategy_lab -q
+```
 
-# Browser-side JavaScript
-Get-ChildItem tests\js\*.test.js | ForEach-Object { node $_.FullName }
+Run every browser-side JavaScript wrapper in deterministic order:
 
-# Complete Python suite when the change warrants it
+```powershell
+$jsTests = @(Get-ChildItem -LiteralPath tests -Filter 'test_js_*.py' -File |
+    Sort-Object Name | Select-Object -ExpandProperty FullName)
+if ($jsTests.Count -eq 0) { throw 'No JavaScript pytest wrappers found.' }
+& C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest @jsTests -q
+if ($LASTEXITCODE -ne 0) {
+    throw "JavaScript wrapper tests failed with exit code $LASTEXITCODE."
+}
+```
+
+These wrappers invoke Node, provide script-specific inputs where required, and
+skip explicitly when Node is unavailable. The scripts are not all safely
+runnable through one uniform direct-Node command.
+
+Run the complete Python suite only when the change warrants it:
+
+```powershell
 C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe -m pytest tests -q
 ```
 

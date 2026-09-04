@@ -21,6 +21,7 @@ tests/                core/server, V2, JavaScript, and Strategy Lab suites
 
 For detailed V2 guarantees see [V2 architecture](engine_v2/ARCHITECTURE.md).
 For formulas and surface availability see [Metrics](METRICS.md).
+For V1 Optuna and Fast Grid contracts see [V1 optimizers](OPTIMIZERS.md).
 
 ## Core ownership
 
@@ -43,6 +44,21 @@ cache identities, and thin adapters. Generic V2 core owns fills, sizing,
 stops, targets, trails, guardrails, metrics transport, and compiled Grid
 evaluation. New V2 strategies do not add strategy-specific execution/Grid
 kernels for already-supported modes.
+
+### Shared data-structure ownership
+
+| Structure or operation | Owning module |
+| --- | --- |
+| `TradeRecord`, `StrategyResult` | `src/core/backtest_engine.py` |
+| `WFConfig`, `WindowSplit`, `OOSStitchedResult`, `WFResult` | `src/core/walkforward_engine.py` |
+| `GridSelectionConfig`, `GridAllocation` | `src/core/grid_engine.py` |
+| V1 `GridParameterSpace`, `GridCandidate`, `FastGridData` | Each strategy's `fast_grid.py` backend |
+| WFA equity aggregation | `src/core/analytics.py` |
+| WFA display parameter identity | `src/core/param_identity.py` |
+
+Optimizer duplicate identity and Grid plan/semantic identities are separate;
+they live in `src/core/optuna_engine.py`, `src/core/grid_v2.py`, and the V1
+strategy-owned `fast_grid.py` backends.
 
 ## Optimizer and execution flow
 
@@ -101,9 +117,12 @@ The browser UI has three pages:
 
 Frontend code is organized by page and concern under `src/ui/static/js/`.
 Strategy forms come from `config.json`; strategy parameters are not duplicated
-in JavaScript. Config readiness blocks direct launches while a selected config
-is loading or invalid, without making persisted Queue execution depend on the
-editable form.
+in JavaScript. Starting a new config load, or failing the current load, clears
+strategy-generated form, strategy-info, and Grid Preview state while preserving
+CSV selection, date/Warmup, database, budget, WFA, Queue, and Preset controls.
+Obsolete asynchronous successes and failures are ignored. Config readiness
+blocks direct launches while the selected config is loading or invalid;
+persisted Queue execution remains independent of editable-form readiness.
 
 ## Persistence and compatibility
 
@@ -128,15 +147,29 @@ surfaces. Lancelot partial-bundle export is a narrow legacy integration for
 
 ## WFA and analytics
 
-Fixed WFA supports day windows and complete calendar-month windows; Adaptive
-WFA remains day-only. Windows execute their selected optimizer under the
-engine policy, preserve per-window candidate identity where available, and
-produce stitched OOS results. Analytics reads persisted WFA results, creates
-focused or portfolio equity views, and caches group summaries in SQLite.
+Fixed WFA supports legacy/default day units and `period_unit="months"`. Month
+mode uses authoritative month counts with `is_period_days=None` and
+`oos_period_days=None`. Calendar Months requires Date Filter and a requested
+UTC Start whose day is 1 through 28; that requested anchor day is preserved
+across month boundaries. Bars are selected inside half-open logical calendar
+boundaries, while persisted and displayed end timestamps retain Merlin's
+inclusive bar representation. Requested End and available data first clamp the
+effective range, and only complete OOS calendar periods are emitted, so an
+incomplete tail is ignored.
 
-Exact calendar, runtime, and V2 plan-reuse contracts are in
-[V2 architecture](engine_v2/ARCHITECTURE.md). Metric meanings are in
-[Metrics](METRICS.md).
+Adaptive WFA remains day-only. WFE annualization uses `12 / months` in month
+mode and `365 / days` in day mode. Queue uses compact month labels such as
+`2m/1m` and may include that form in its generated WFA label. Results and
+Analytics show separate unit-labelled `IS (months)` and `OOS (months)` values.
+Windows execute their selected optimizer under the engine policy, preserve
+per-window candidate identity where available, and produce stitched OOS
+results. Analytics reads persisted WFA results, creates focused or portfolio
+equity views, and caches group summaries in SQLite.
+
+This section owns shared day/calendar WFA and WFE semantics. The
+[V2 architecture WFA section](engine_v2/ARCHITECTURE.md#wfa) owns only V2
+runtime rebasing, worker transport, delayed-OOS handling, and plan reuse.
+Metric meanings are in [Metrics](METRICS.md).
 
 ## Strategy Lab integration
 
@@ -162,7 +195,7 @@ complete current strategy matrix in general documentation.
 | `s03_reversal_v11` | S03 Reversal | `v11` | V1 | v10 behavior plus optional Emergency SL and V1 Fast Grid |
 | `s03_reversal_v11_regime_er_b2` | S03 Reversal v11 Regime-ER B2 | `v11-regime-er-b2` | V2 | Regime-ER S03 signals on generic signal-reversal execution |
 | `s04_stochrsi` | S04 StochRSI | `v02` | V1 | StochRSI swing entries with swing-based stops |
-| `s06_r_trend_v02` | S06 R-Trend | `v02` | V1 | Williams %R trend/reversal entries with bracket or MA-trail risk management |
+| `s06_r_trend_v02` | S06 R-Trend | `v02` | V1 | Williams %R trend/reversal entries with bracket or MA-trail risk management and V1 Fast Grid |
 | `s06_r_trend_v02_b2` | S06 R-Trend B2 | `v02-b2` | V2 | S06 v02 signals on generic position execution |
 | `s06_r_trend_v02_regime_trendlines_b2` | S06 R-Trend Regime-TL B2 | `v02-regime-tl-b2` | V2 | S06 plus optional trendline regime filtering |
 | `s06_r_trend_v06_4_a2_b2` | S06 R-Trend v06-4-A2 B2 | `v06-4-a2-b2` | V2 | Multi-mode bracket, R-distance, Chandelier, and Fixed-AF SAR strategy |
@@ -173,6 +206,8 @@ complete current strategy matrix in general documentation.
   [V2 import guide](ADDING_NEW_STRATEGY_V2.md).
 - Existing V1 strategy maintenance follows the
   [legacy V1 guide](ADDING_NEW_STRATEGY.md).
+- V1 Optuna and Fast Grid contracts live in
+  [V1 optimizers](OPTIMIZERS.md).
 - Exact V2 parity/certification evidence is preserved in the
   [certification registry](engine_v2/CERTIFICATION.md) and tracked
   [baseline documents](README.md#baseline-evidence).

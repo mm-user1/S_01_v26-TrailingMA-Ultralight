@@ -102,8 +102,8 @@ class S05Params:
     trailDistance: float = 2.0
 ```
 
-Use `dataclasses.asdict()` when a mapping is needed. Do not add `to_dict()` or
-snake/camel conversion layers.
+Follow the repository-wide serialization and public-name conventions in
+[`CLAUDE.md`](../CLAUDE.md).
 
 ## 5. Implement the V1 strategy
 
@@ -142,6 +142,7 @@ responsible.
 V1 supports Optuna and Grid. Optuna objectives, constraints, coverage,
 deduplication, multiprocessing, storage, and result semantics are shared
 infrastructure; strategy code supplies only correct parameters and execution.
+The live contracts are in [V1 optimizers](OPTIMIZERS.md).
 
 If no Fast Grid backend exists, Grid is unavailable for that strategy and the
 UI retains its V1 fallback to Optuna. Do not claim generic V2 Grid capability
@@ -169,6 +170,14 @@ through the interfaces consumed by `src/core/grid_engine.py`. It must:
 Fast objective and metric rules are centralized in [Metrics](METRICS.md).
 Adding a V1 Fast backend does not create a V2 profile or satisfy the V2 import
 contract.
+
+### S03 v11 preservation guard
+
+For the existing `s03_reversal_v11` strategy, Emergency SL exits retain the
+established `Emergency SL` reason and intentionally permit Pine-compatible
+same-bar re-entry. Normal signal exits retain the current V1 reversal timing.
+Do not restore the older delayed Emergency-SL re-entry variant; it failed
+TradingView parity.
 
 ## 7. Test and certify
 
