@@ -1,13 +1,10 @@
-import sys
 import time
 import queue
 from collections import Counter
-from pathlib import Path
 
 import optuna
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core.optuna_engine import (  # noqa: E402
     NSGAIIISampler,

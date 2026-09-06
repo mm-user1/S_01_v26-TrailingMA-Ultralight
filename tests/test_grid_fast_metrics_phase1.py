@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +8,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core.backtest_engine import load_data, prepare_dataset_with_warmup  # noqa: E402
 from core.grid_engine import rank_grid_results  # noqa: E402

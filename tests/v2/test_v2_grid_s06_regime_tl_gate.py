@@ -87,6 +87,7 @@ def test_use_regime_cannot_be_enabled_as_a_grid_axis():
         )
 
 
+@pytest.mark.slow
 def test_candidate_identity_is_deterministic_across_plan_builds():
     base_params = merged_reference_params(REFERENCE_B)
     first = build_grid_v2_plan(load_config(), base_params=base_params)
@@ -167,12 +168,11 @@ def _assert_rows_equal(compiled_row, reference_row):
 
 @pytest.mark.skipif(JIT_DISABLED, reason="compiled Grid V2 parity requires Numba JIT")
 @pytest.mark.parametrize("reference_id", [REFERENCE_A, REFERENCE_B])
+@pytest.mark.slow
 def test_compiled_grid_v2_subset_matches_reference_backend(prepared_data, hooks, reference_id):
-    if os.environ.get("NUMBA_DISABLE_JIT", "").strip().lower() in {"1", "true", "yes"}:
-        # Known JIT process-isolation rule: an earlier V1-oracle test module
-        # sets NUMBA_DISABLE_JIT process-globally. This certification test is
-        # meaningless without JIT; run it in a fresh JIT-on process.
-        pytest.skip("NUMBA_DISABLE_JIT poisoned process-globally; rerun in a fresh JIT-on process")
+    import numba
+
+    assert not numba.config.DISABLE_JIT
     df, trade_start_idx = prepared_data
     base_params = merged_reference_params(reference_id)
     config = load_config()

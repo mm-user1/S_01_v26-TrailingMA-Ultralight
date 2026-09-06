@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .backtest_engine import TradeRecord
+from .csv_metadata import csv_basename
 import logging
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ def _extract_symbol_from_csv_filename(csv_filename: str) -> str:
     Returns:
         Symbol in format "EXCHANGE:TICKER" (e.g., "OKX:LINKUSDT.P")
     """
-    name = Path(csv_filename).name
+    name = csv_basename(csv_filename)
 
     if "_" not in name:
         return "UNKNOWN:UNKNOWN"

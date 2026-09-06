@@ -26,6 +26,7 @@ from core.backtest_engine import (
     prepare_dataset_with_warmup,
 )
 from core.export import export_trades_csv
+from core.csv_metadata import csv_basename
 from core.engine_v2.diagnostics import V2Diagnostic, V2ValidationError
 from core.engine_v2.profile import ExecutionProfile, ProfileValidationError, parse_execution_profile
 from core.engine_v2.runtime_contract import (
@@ -2605,9 +2606,9 @@ def _validate_csv_for_study(csv_path: str, study: Dict[str, Any]) -> Tuple[bool,
         except Exception:
             warnings.append("Could not validate dataset end date.")
 
-    original_name = study.get("csv_file_name")
+    original_name = csv_basename(study.get("csv_file_name"))
     if original_name:
-        selected_name = Path(csv_path).name
+        selected_name = csv_basename(csv_path)
         if selected_name != original_name:
             warnings.append(
                 f"Filename differs from original ({original_name} vs {selected_name})."

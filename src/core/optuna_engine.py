@@ -24,6 +24,7 @@ from optuna.trial import TrialState
 import pandas as pd
 
 from . import metrics
+from .csv_metadata import csv_basename
 from .backtest_engine import load_data
 from .storage import save_optuna_study_to_db
 
@@ -2637,13 +2638,11 @@ class OptunaOptimizer:
         return f"{mode_label} {sampler_label}"
 
     def _get_dataset_label(self) -> str:
-        csv_name = getattr(self.base_config, "csv_original_name", None)
+        csv_name = csv_basename(getattr(self.base_config, "csv_original_name", None))
         if csv_name:
-            return str(Path(str(csv_name)).name)
+            return csv_name
         csv_path = _resolve_csv_path_for_study(getattr(self.base_config, "csv_file", ""))
-        if csv_path:
-            return str(Path(csv_path).name)
-        return "upload"
+        return csv_basename(csv_path) or "upload"
 
     def _log_study_start(self, execution_label: str, workers: int) -> None:
         coverage_label = "off"

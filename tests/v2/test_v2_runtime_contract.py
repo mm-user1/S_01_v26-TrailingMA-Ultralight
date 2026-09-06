@@ -16,7 +16,7 @@ from core.engine_v2.runtime_contract import (
     runtime_contract_payload,
     validate_v2_runtime_declarations,
 )
-from strategies import get_strategy_config
+from strategies import get_strategy_config, list_strategies
 
 from runtime_test_helpers import canonical_v2_runtime_declarations
 
@@ -412,9 +412,8 @@ def test_v1_declarations_bypass_v2_runtime_validation():
 
 
 def test_all_production_v2_configs_validate_runtime_declarations():
-    for strategy_id in (
-        "s06_r_trend_v02_b2",
-        "s06_r_trend_v02_regime_trendlines_b2",
-        "s03_reversal_v11_regime_er_b2",
-    ):
-        validate_v2_runtime_declarations(copy.deepcopy(get_strategy_config(strategy_id)))
+    configs = [get_strategy_config(strategy["id"]) for strategy in list_strategies()]
+    v2_configs = [config for config in configs if config.get("engine") == "v2"]
+    assert v2_configs, "Strategy discovery must include V2 configurations"
+    for config in v2_configs:
+        validate_v2_runtime_declarations(copy.deepcopy(config))

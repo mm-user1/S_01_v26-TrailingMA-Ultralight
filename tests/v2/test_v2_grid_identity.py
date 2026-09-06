@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
+
+import pytest
 
 from core.grid_v2 import GRID_V2_ENGINE_VERSION, GridV2Settings, build_grid_v2_plan
 from core.optuna_engine import OptimizationConfig
@@ -28,17 +29,6 @@ GRID_PARAMS = (
 
 
 def _fast_grid():
-    # The V1 fast-grid oracle is imported lazily with JIT disabled. Identity
-    # mapping does not need compiled V1 execution, and V1 has separate
-    # compiled-vs-interpreted tests. This setting is process-global, so this
-    # helper is called only by V1-oracle tests.
-    os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-    try:
-        import numba
-
-        numba.config.DISABLE_JIT = True
-    except Exception:
-        pass
     from strategies.s06_r_trend_v02 import fast_grid
 
     return fast_grid
@@ -130,6 +120,7 @@ def _canonical_from_v2(candidate) -> tuple:
     )
 
 
+@pytest.mark.slow
 def test_full_s06_default_identity_space_maps_one_to_one_with_v1_fast_grid():
     v1 = _v1_candidates()
     v2 = build_grid_v2_plan(load_config(), base_params=_v2_base_params())
@@ -149,6 +140,7 @@ def test_full_s06_default_identity_space_maps_one_to_one_with_v1_fast_grid():
     ]
 
 
+@pytest.mark.slow
 def test_v2_semantic_keys_exclude_runtime_and_inactive_variant_params():
     plan = build_grid_v2_plan(load_config(), base_params=_v2_base_params())
 
@@ -211,6 +203,7 @@ def test_candidate_table_lazy_params_match_legacy_values_for_deterministic_rows(
     assert table.params_materialized_count == 5
 
 
+@pytest.mark.slow
 def test_candidate_table_compatibility_candidates_materialize_on_explicit_access():
     plan = build_grid_v2_plan(load_config(), base_params=_v2_base_params())
 
@@ -224,6 +217,7 @@ def test_candidate_table_compatibility_candidates_materialize_on_explicit_access
     assert json.loads(candidates[0].semantic_key)["engine"] == GRID_V2_ENGINE_VERSION
 
 
+@pytest.mark.slow
 def test_select_subset_helper_does_not_affect_identity_or_candidate_order():
     base_params = _v2_base_params()
     first = build_grid_v2_plan(

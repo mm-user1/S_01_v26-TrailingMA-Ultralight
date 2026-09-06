@@ -1,12 +1,9 @@
 """
 Unit tests for composite score normalization methods.
 """
-import sys
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core.optuna_engine import (  # noqa: E402
     DEFAULT_SCORE_CONFIG,

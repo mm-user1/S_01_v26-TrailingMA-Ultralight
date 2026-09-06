@@ -1,5 +1,4 @@
 import json
-import sys
 from pathlib import Path
 
 import pandas as pd
@@ -7,8 +6,6 @@ from dataclasses import asdict
 
 import pytest
 
-SRC_PATH = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(SRC_PATH))
 
 from core.backtest_engine import load_data, prepare_dataset_with_warmup
 from strategies.s01_trailing_ma.strategy import S01Params, S01TrailingMA

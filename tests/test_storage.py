@@ -1,6 +1,5 @@
 import json
 import sqlite3
-import sys
 import time
 import uuid
 from copy import deepcopy
@@ -11,7 +10,6 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core import storage
 from core.storage import (

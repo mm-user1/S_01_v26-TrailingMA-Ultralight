@@ -1,14 +1,11 @@
 """Parity tests for extracted indicators (Phase 5)."""
 
-import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core import backtest_engine
 from indicators import ma, volatility

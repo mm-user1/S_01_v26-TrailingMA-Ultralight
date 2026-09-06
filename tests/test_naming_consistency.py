@@ -4,14 +4,11 @@ Ensures all parameters use camelCase throughout the system,
 preventing regression to snake_case naming.
 """
 import inspect
-import sys
 from dataclasses import fields
-from pathlib import Path
 from typing import Any, Dict
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from strategies import get_strategy_config
 from strategies.s01_trailing_ma.strategy import S01Params

@@ -576,11 +576,16 @@ fixed per-study parameter for this certification target. Later strategies may
 use same-role boolean `depends_on` axes, but they need explicit count,
 identity, and cache tests.
 
-Tests that import the V1 fast-grid oracle set `NUMBA_DISABLE_JIT=1` before any
-Numba-importing modules are loaded. This keeps the V1 oracle practical in this
-Windows environment, where normal-JIT V1 fast-grid import has previously timed
-out. V1 compiled-vs-interpreted behavior remains covered by existing V1 tests,
-and the V2 compiled Grid test is intentionally separate.
+Historical Windows verification used `NUMBA_DISABLE_JIT=1` before oracle imports
+because normal-JIT V1 import had previously timed out. That workaround is not
+the current test procedure. Ordinary V1 oracle imports now leave JIT enabled
+and reuse an external Numba cache. The deterministic 240-candidate V1/V2 metric
+comparison and selected-candidate V1 Slow trade comparison retain their cases,
+order, and tolerances. Existing V1 numerical protection compares Fast execution
+against Slow metrics/trades; it does not independently assert a compiled-versus-
+interpreted Fast pair. Current compiled evidence additionally checks actual
+dispatchers in fresh processes and runs with JIT enabled; historical measurements
+above are unchanged.
 
 No slippage, Bar Magnifier, lower-timeframe reconstruction, Scout WFA,
 Grid-WFA integration, V2 population DSR, or V1 runtime migration is certified

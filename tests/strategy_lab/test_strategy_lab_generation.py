@@ -850,6 +850,7 @@ def test_cli_forwards_repeatable_smoke_selectors_and_reports_completion(tmp_path
     assert "smoke complete" in capsys.readouterr().out
 
 
+@pytest.mark.slow  # Hashes the complete local Lab tree twice to prove preservation.
 def test_module_cli_help_bootstraps_without_pythonpath_and_writes_nothing():
     package_root = REPO_ROOT / "tools" / "strategy_lab"
     before = _file_snapshot(package_root)
@@ -998,7 +999,7 @@ def test_two_fresh_processes_produce_identical_real_smoke_outcomes(synthetic_pac
     )
     outputs = [tmp_path / "process_one", tmp_path / "process_two"]
     environment = os.environ.copy()
-    environment["NUMBA_CACHE_DIR"] = str(tmp_path / "numba_cache")
+    environment["NUMBA_CACHE_DIR"] = environment.get("NUMBA_CACHE_DIR") or str(tmp_path / "numba_cache")
     existing_pythonpath = environment.get("PYTHONPATH")
     environment["PYTHONPATH"] = os.pathsep.join(
         [str(REPO_ROOT / "src"), str(REPO_ROOT)]

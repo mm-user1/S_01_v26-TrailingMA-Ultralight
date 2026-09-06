@@ -126,9 +126,12 @@ On Windows, prefer the repo-local pytest wrapper for validation:
 .\tools\run_pytest.ps1 -q tests\v2
 ```
 
-The wrapper uses the required Merlin Python by default, passes
-`.pytest_tmp/run_<pid>` as pytest `--basetemp`, and removes the per-run
-directory unless `-KeepTemp` is supplied.
+The wrapper uses the required Merlin Python by default and forwards to
+`tools/run_tests.py` in focused mode. Artifacts use external per-run directories
+and reusable versioned caches; set `MERLIN_TEST_ROOT` outside all Git worktrees
+when the default sibling root is inside an enclosing checkout. Successful runs
+remove only their own run directory unless `-KeepTemp` is supplied. Failures and
+interruptions retain it. See [test isolation](../../tests/README.md).
 
 `inspect-wfa-db` opens benchmark databases with SQLite
 `mode=ro&immutable=1`. This is intended for frozen/checkpointed benchmark DB

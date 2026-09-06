@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import os
 from pathlib import Path
 
 import pytest
@@ -39,42 +38,7 @@ GRID_PARAMS = (
 T1_SUBSET_LIMIT = 240
 
 
-@pytest.fixture(autouse=True)
-def _restore_numba_disable_jit_state():
-    original_env = os.environ.get("NUMBA_DISABLE_JIT")
-    numba_module = None
-    original_config_disable_jit = None
-    try:
-        import numba
-
-        numba_module = numba
-        original_config_disable_jit = bool(numba.config.DISABLE_JIT)
-    except Exception:
-        numba_module = None
-
-    try:
-        yield
-    finally:
-        if original_env is None:
-            os.environ.pop("NUMBA_DISABLE_JIT", None)
-        else:
-            os.environ["NUMBA_DISABLE_JIT"] = original_env
-        if numba_module is not None and original_config_disable_jit is not None:
-            numba_module.config.DISABLE_JIT = original_config_disable_jit
-
-
 def _fast_grid():
-    # The V1 fast-grid oracle is imported lazily with JIT disabled. This test
-    # compares V1/V2 semantics, while V1 owns separate compiled-vs-interpreted
-    # tests. The setting is process-global, so this helper is called only by
-    # V1-oracle tests and after the V2 compiled Grid test has run.
-    os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-    try:
-        import numba
-
-        numba.config.DISABLE_JIT = True
-    except Exception:
-        pass
     from strategies.s06_r_trend_v02 import fast_grid
 
     return fast_grid
@@ -194,10 +158,17 @@ def _default_like_indices(plan) -> tuple[int, ...]:
     return tuple(indices)
 
 
+@pytest.mark.slow
 def test_s06_t1_reference_subset_metrics_match_v1_fast_grid(prepared_data, hooks):
     fast_grid = _fast_grid()
     if not fast_grid.NUMBA_AVAILABLE:
         pytest.skip("Numba is required by the V1 fast-grid oracle")
+    import numba
+    from numba.core.registry import CPUDispatcher
+
+    assert not numba.config.DISABLE_JIT
+    assert isinstance(fast_grid._S06_FAST_LOOP, CPUDispatcher)
+    assert isinstance(fast_grid._S06_FAST_BATCH_LOOP, CPUDispatcher)
     df, trade_start_idx = prepared_data
     v1_config, v1_source = _v1_candidates()
     v2_plan = build_grid_v2_plan(load_config(), base_params=_v2_base_params())
@@ -255,6 +226,7 @@ def _assert_trade_sequences_match(v2_trades, v1_trades):
         assert v2_trade.net_pnl == pytest.approx(v1_trade.net_pnl, abs=1e-9)
 
 
+@pytest.mark.slow
 def test_s06_t2_selected_candidates_match_v1_slow_strategy(prepared_data, hooks):
     df, trade_start_idx = prepared_data
     plan = build_grid_v2_plan(

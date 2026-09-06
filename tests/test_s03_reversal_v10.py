@@ -1,11 +1,8 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
-import sys
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core import backtest_engine, metrics
 from strategies.s03_reversal_v10.strategy import S03ReversalV10

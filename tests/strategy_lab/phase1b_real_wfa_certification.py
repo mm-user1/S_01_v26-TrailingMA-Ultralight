@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 from pathlib import Path
 
@@ -30,6 +29,7 @@ from tools.strategy_lab.dataset import METRIC_AXIS
 from tools.strategy_lab.inventory import resolve_data_root
 from ui import server_services
 from ui.server import app
+from tests.strategy_lab.certification_helpers import _normalized_params
 
 
 PLAN_FINGERPRINT = "c0e40ede6521a1cc02063ef2c9245f58c0093ca97aeb4bd858b75b5d09c7f434"
@@ -164,90 +164,6 @@ def _recursive_values(value, key):
         for child in value:
             found.extend(_recursive_values(child, key))
     return found
-
-
-def _normalized_params(params):
-    normalized = {
-        key: value
-        for key, value in params.items()
-        if key not in {"dateFilter", "start", "end"}
-    }
-    if "commissionRate" not in normalized:
-        return normalized
-    if "commissionPct" not in normalized:
-        raise ValueError(
-            "WFA best_params contains commissionRate without authoritative commissionPct."
-        )
-    commission_rate = normalized["commissionRate"]
-    commission_pct = normalized["commissionPct"]
-    if isinstance(commission_rate, bool) or isinstance(commission_pct, bool):
-        raise ValueError(
-            "WFA best_params commissionRate and commissionPct must be finite numeric values."
-        )
-    try:
-        commission_rate_value = float(commission_rate)
-        commission_pct_value = float(commission_pct)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "WFA best_params commissionRate and commissionPct must be finite numeric values."
-        ) from exc
-    if not math.isfinite(commission_rate_value) or not math.isfinite(
-        commission_pct_value
-    ):
-        raise ValueError(
-            "WFA best_params commissionRate and commissionPct must be finite numeric values."
-        )
-    if not semantic_float_equal(commission_rate_value, commission_pct_value):
-        raise ValueError(
-            "WFA best_params commissionRate conflicts with authoritative commissionPct."
-        )
-    normalized.pop("commissionRate")
-    return normalized
-
-
-def test_normalized_params_removes_only_equal_commission_alias_and_dates():
-    assert _normalized_params(
-        {
-            "commissionPct": 0.05,
-            "commissionRate": "0.05",
-            "dateFilter": True,
-            "start": "2025-10-01T00:00:00Z",
-            "end": "2026-08-01T00:00:00Z",
-            "stopX": 2.0,
-        }
-    ) == {"commissionPct": 0.05, "stopX": 2.0}
-
-
-def test_normalized_params_rejects_commission_alias_without_authoritative_value():
-    with pytest.raises(ValueError, match="without authoritative commissionPct"):
-        _normalized_params({"commissionRate": 0.05})
-
-
-def test_normalized_params_rejects_conflicting_commission_alias():
-    with pytest.raises(ValueError, match="conflicts with authoritative commissionPct"):
-        _normalized_params({"commissionPct": 0.05, "commissionRate": 0.0005})
-
-
-@pytest.mark.parametrize("value", [None, "not-a-number", float("nan"), float("inf"), True])
-def test_normalized_params_rejects_nonfinite_or_nonnumeric_commission_alias(value):
-    with pytest.raises(ValueError, match="must be finite numeric values"):
-        _normalized_params({"commissionPct": 0.05, "commissionRate": value})
-
-
-@pytest.mark.parametrize(
-    ("field", "left", "right"),
-    [
-        ("commissionPct", 0.05, 0.04),
-        ("riskPerTrade", 2.0, 1.0),
-        ("contractSize", 0.0001, 0.001),
-        ("warmupBars", 1000, 500),
-        ("stopX", 2.0, 2.5),
-    ],
-)
-def test_normalized_params_keeps_economics_runtime_and_strategy_values_strict(
-    field, left, right
-):
-    assert _normalized_params({field: left}) != _normalized_params({field: right})
 
 
 def test_real_crvusdt_http_wfa_matches_existing_lab_smoke(

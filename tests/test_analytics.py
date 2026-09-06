@@ -1,10 +1,7 @@
 import math
-import sys
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core.analytics import (  # noqa: E402
     RETURN_PROFILE_STEM_LIMIT,

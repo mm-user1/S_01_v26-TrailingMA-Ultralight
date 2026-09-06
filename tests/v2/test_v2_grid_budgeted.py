@@ -698,6 +698,7 @@ def test_sampled_planning_scales_with_delivered_population_not_full_space():
     assert diagnostics["delivered_count"] == 50_000
 
 
+@pytest.mark.slow
 def test_full_s06_population_order_and_semantic_identity_v2_digest_are_pinned():
     plan = build_grid_v2_plan(load_config())
     assert plan.deduped_candidate_count == 48_480

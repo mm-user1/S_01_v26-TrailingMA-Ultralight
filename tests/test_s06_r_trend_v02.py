@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 import json
-import sys
 from dataclasses import fields
 from pathlib import Path
 
@@ -10,7 +9,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core import metrics
 from core.backtest_engine import load_data, prepare_dataset_with_warmup

@@ -1,7 +1,6 @@
 import hashlib
 import json
 import logging
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,7 +8,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core import metrics, storage
 from core.walkforward_engine import (

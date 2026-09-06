@@ -43,10 +43,23 @@ benchmark payload do not independently redefine V2 grid granularity.
 `inspect-wfa-db` uses SQLite read-only immutable mode and is for frozen
 snapshots, not a live database with possible WAL frames.
 
-## Pytest wrapper
+## Isolated tests
 
-`run_pytest.ps1` selects the required Merlin interpreter and places pytest
-temporary files in an isolated `.pytest_tmp/run_<pid>` directory:
+`run_tests.py` is the canonical standard-library launcher. It uses the current
+interpreter in a child process, external per-run pytest/temp directories, and
+persistent Python/Numba caches. The default root is `../merlin-tests`;
+`MERLIN_TEST_ROOT` can override it, but the root must be outside every Git
+worktree (including an enclosing checkout). See the [test guide](../tests/README.md)
+for selection, preflight rules, prepared raw commands, and cold checks.
+
+```powershell
+& C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe tools/run_tests.py fast
+& C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe tools/run_tests.py full
+& C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe tools/run_tests.py -- tests/test_metrics.py
+```
+
+`run_pytest.ps1` selects the required Merlin interpreter and forwards ordinary
+pytest arguments to the Python launcher's focused mode:
 
 ```powershell
 .\tools\run_pytest.ps1 -q tests\test_benchmark_grid_v2.py
@@ -54,7 +67,9 @@ temporary files in an isolated `.pytest_tmp/run_<pid>` directory:
 ```
 
 Set `MERLIN_PYTHON` only when an alternate project interpreter is intentional.
-Use `-KeepTemp` before pytest arguments to retain a run directory for debugging.
+Use `-KeepTemp` before pytest arguments to retain a successful run directory for
+debugging. Failures and interruptions retain their run automatically. Successful
+runs otherwise remove only their own run directory; shared caches persist.
 
 ## Strategy Lab
 

@@ -107,8 +107,10 @@ is not only a `config.json` plus `strategy.py` change.
 Run from the repository root with the configured interpreter:
 
 ```bash
-python -m pytest -q
+python tools/run_tests.py fast
+python tools/run_tests.py full
 ```
 
-Use focused suites and isolated temporary paths as described in
+If this checkout is nested inside another Git worktree, set `MERLIN_TEST_ROOT`
+to an external location first. Use focused suites and prepared raw pytest as described in
 [tests/README.md](tests/README.md).

@@ -18,6 +18,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
 
+from .csv_metadata import csv_basename
+
 OBJECTIVE_DIRECTIONS: Dict[str, str] = {
     # Keep in sync with core.optuna_engine.OBJECTIVE_DIRECTIONS. Storage keeps a
     # local copy to avoid import cycles during DB initialization.
@@ -2221,15 +2223,11 @@ def _extract_file_prefix(csv_filename: str) -> str:
 
 def _get_csv_display_name(config: Any, csv_file_path: str) -> str:
     if isinstance(config, dict):
-        name = config.get("csv_original_name") or config.get("csv_file_name") or ""
-        if name:
-            return str(Path(name).name)
-    name = getattr(config, "csv_original_name", None)
-    if name:
-        return str(Path(name).name)
-    if csv_file_path:
-        return str(Path(csv_file_path).name)
-    return "upload"
+        return (csv_basename(config.get("csv_original_name"))
+                or csv_basename(config.get("csv_file_name"))
+                or csv_basename(csv_file_path) or "upload")
+    return (csv_basename(getattr(config, "csv_original_name", None))
+            or csv_basename(csv_file_path) or "upload")
 
 
 def save_optuna_study_to_db(
@@ -3583,6 +3581,8 @@ def list_studies() -> List[Dict]:
         rows = []
         for row in cursor.fetchall():
             study = dict(row)
+            if study.get("csv_file_name") is not None:
+                study["csv_file_name"] = csv_basename(study["csv_file_name"])
             if "status" not in study:
                 study["status"] = "completed" if study.get("completed_at") else "unknown"
             rows.append(study)
@@ -3624,6 +3624,8 @@ def load_study_from_db(study_id: str) -> Optional[Dict]:
             return None
 
         study = dict(study_row)
+        if study.get("csv_file_name") is not None:
+            study["csv_file_name"] = csv_basename(study["csv_file_name"])
         for key in (
             "config_json",
             "score_config_json",

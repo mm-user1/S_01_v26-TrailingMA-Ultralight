@@ -1,9 +1,5 @@
-from pathlib import Path
-import sys
-
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core.metrics import calculate_higher_moments_from_monthly_returns
 from core.post_process import calculate_dsr, calculate_expected_max_sharpe

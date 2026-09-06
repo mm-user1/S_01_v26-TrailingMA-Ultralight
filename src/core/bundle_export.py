@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from . import __version__ as MERLIN_VERSION
+from .csv_metadata import csv_basename
 
 __all__ = ["build_lancelot_partial_bundle"]
 
@@ -34,7 +35,7 @@ def _normalize_timeframe(value: str) -> str:
 
 
 def _parse_csv_symbol_and_timeframe(csv_file_name: str) -> tuple[str, str]:
-    name = Path(str(csv_file_name or "")).name
+    name = csv_basename(csv_file_name)
     if not name:
         raise ValueError("Study is missing csv_file_name; cannot export Bundle.")
 
@@ -129,7 +130,7 @@ def build_lancelot_partial_bundle(
     if not strategy_id:
         raise ValueError("Study is missing strategy_id; cannot export Bundle.")
 
-    csv_name = str(study.get("csv_file_name") or Path(csv_path).name).strip()
+    csv_name = (csv_basename(study.get("csv_file_name")) or csv_basename(csv_path)).strip()
     raw_symbol, timeframe = _parse_csv_symbol_and_timeframe(csv_name)
     symbol = _normalize_swap_symbol(raw_symbol)
 

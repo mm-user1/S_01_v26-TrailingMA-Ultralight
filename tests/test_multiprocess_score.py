@@ -3,12 +3,10 @@ Integration test for multi-process composite score optimization.
 """
 import io
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core import storage  # noqa: E402
 from core.optuna_engine import (  # noqa: E402

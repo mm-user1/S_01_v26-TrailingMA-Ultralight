@@ -85,6 +85,13 @@ explicit Grid. Historical V2 Optuna studies remain readable and supported
 replay/manual-test paths remain compatible; no stored or queued object is
 silently converted.
 
+CSV display metadata uses one lexical `core.csv_metadata.csv_basename` helper:
+both slashes are separators, including a literal backslash in a POSIX filename.
+Save/log labels normalize each supported source before trying the next fallback.
+Historical full-path CSV names are normalized only in derived read/display and
+export values. Stored CSV metadata, configuration payloads, actual filesystem
+paths, and opaque Queue/Preset values are not migrated or rewritten by this rule.
+
 Grid selection uses shared objective, constraint, Pareto, diversity, DSR, and
 storage structures. V2 supports exact full plans and deterministic sampled
 plans. Selected Fast candidates are always rerun through authoritative Slow

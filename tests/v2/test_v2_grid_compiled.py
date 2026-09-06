@@ -472,6 +472,7 @@ def test_table_config_packer_matches_mapping_packer_for_certified_topologies(pri
 
 
 @pytest.mark.parametrize("price_rounding", ["none", "tick_outward"])
+@pytest.mark.slow
 def test_compiled_grid_v2_batch_matches_reference_batch_for_certification_subset(
     prepared_data,
     hooks,
@@ -766,6 +767,7 @@ def test_sampled_position_grid_compiled_rows_match_reference(prepared_data, hook
         _assert_rows_equal(compiled_row, reference_row)
 
 
+@pytest.mark.slow
 def test_compiled_grid_v2_stacked_batch_matches_grouped_batch(prepared_data, hooks):
     df, trade_start_idx = prepared_data
     base_params = merged_reference_params("reference_b_trend_bracket")

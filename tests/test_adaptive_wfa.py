@@ -1,11 +1,8 @@
-import sys
 from types import SimpleNamespace
-from pathlib import Path
 
 import pandas as pd
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core.backtest_engine import StrategyResult, TradeRecord
 from core.post_process import PostProcessConfig

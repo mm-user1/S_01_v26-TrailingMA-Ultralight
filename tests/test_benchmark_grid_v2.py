@@ -12,7 +12,6 @@ from tools import benchmark_grid_v2 as benchmark
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_CONFIG = REPO_ROOT / "tools/benchmark_configs/s06_b2_sui_baseline_grid.json"
-CORRECTED_DB = REPO_ROOT / "src/storage/2026-07-06_233217_backtester-v2-test.db"
 
 
 def _minimal_payload():
@@ -478,17 +477,17 @@ def test_inspect_wfa_db_readonly_immutable_does_not_create_sidecars_or_mutate(tm
         assert conn.execute("SELECT COUNT(*) FROM studies").fetchone()[0] == 3
 
 
-def test_real_corrected_db_inspection_reports_absent_diagnostics():
-    if not CORRECTED_DB.exists():
-        pytest.skip("Corrected WFA comparison DB is not present in this checkout.")
-
+def test_filtered_legacy_db_inspection_reports_absent_diagnostics(tmp_path):
+    db_path = tmp_path / "legacy_wfa.db"
+    _create_wfa_fixture_db(db_path)
     report = benchmark.inspect_wfa_db(
-        CORRECTED_DB,
-        study_ids=["c4662e90-4afc-451e-9964-0e1456efb20f"],
+        db_path,
+        study_ids=["old-study"],
     )
 
     assert len(report["studies"]) == 1
     study = report["studies"][0]
+    assert study["study_id"] == "old-study"
     assert study["strategy_id"] == "s06_r_trend_v02_b2"
     assert study["diagnostics"]["status"] == "absent"
     assert study["window_counts"]["valid_min"] == 48_480

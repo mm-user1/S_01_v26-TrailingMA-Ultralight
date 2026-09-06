@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import csv
-import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core import backtest_engine
 from core.grid_engine import _load_backend, supports_fast_grid

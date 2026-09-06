@@ -186,8 +186,13 @@ Use layered evidence:
 8. storage/reload/manual replay compatibility;
 9. Strategy Lab compatibility when the strategy is certified for that tool.
 
-Pin process-global settings such as `NUMBA_DISABLE_JIT` before imports and run
-JIT-off oracles separately from JIT-on compiled gates. Do not modify core when
+Ordinary oracle imports leave JIT enabled. Test helpers must not mutate
+process-global JIT settings: restoring flags cannot repair modules already
+imported as ordinary Python functions. If an oracle requires interpreted
+execution, configure `NUMBA_DISABLE_JIT` in a separate process before imports
+and keep compiled gates independent. Assert actual dispatcher/backend use in
+compiled evidence, and include fresh-import and targeted cold-cache checks
+when changing compiled paths (see the [test guide](../tests/README.md)). Do not modify core when
 an external export merely rounds displayed prices, sizes, or PnL; document a
 bounded residual in certification evidence.
 

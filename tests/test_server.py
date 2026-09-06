@@ -1,5 +1,4 @@
 import io
-import sys
 import csv
 import hashlib
 import json
@@ -14,7 +13,6 @@ from types import SimpleNamespace
 import pytest
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from ui.server import app
 from core.backtest_engine import TradeRecord
@@ -2830,6 +2828,7 @@ def test_v1_backtest_branch_uses_explicit_runtime_locals(monkeypatch, client, tm
     assert response.status_code == 200
 
 
+@pytest.mark.slow
 def test_tz64a_request_runtime_row_digests_and_identity_pins():
     from core.grid_v2 import build_grid_v2_plan
     from ui import server_services
@@ -5588,7 +5587,8 @@ def test_analytics_summary_optuna_only_returns_expected_message(client):
         )
 
 
-def test_analytics_summary_wfa_phase1_contract(client):
+@pytest.mark.parametrize("csv_prefix", ["", "C:\\data_dir\\", "/data_dir/", "C:\\data_dir/mixed\\"])
+def test_analytics_summary_wfa_phase1_contract(client, csv_prefix):
     with _temporary_active_db(f"analytics_wfa_{uuid.uuid4().hex[:8]}"):
         _insert_analytics_study(
             study_id="wfa_a1",
@@ -5596,7 +5596,7 @@ def test_analytics_summary_wfa_phase1_contract(client):
             strategy_id="s01_trailing_ma",
             strategy_version="2.1",
             optimization_mode="wfa",
-            csv_file_name="OKX_LINKUSDT.P, 15 2025.05.01-2025.11.20.csv",
+            csv_file_name=csv_prefix + "OKX_LINKUSDT.P, 15 2025.05.01-2025.11.20.csv",
             adaptive_mode=1,
             is_period_days=60,
             config_json={"wfa": {"oos_period_days": 30}},

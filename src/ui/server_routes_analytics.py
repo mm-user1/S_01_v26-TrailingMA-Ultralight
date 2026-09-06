@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from flask import jsonify, render_template, request
 
 from core.analytics import aggregate_equity_curves
+from core.csv_metadata import csv_basename
 from core.storage import (
     backfill_stitched_oos_metadata,
     create_study_set,
@@ -207,10 +208,9 @@ def register_routes(app):
 
     def _parse_csv_filename(csv_file_name: Any) -> Tuple[Optional[str], Optional[str]]:
         """Strict Merlin parser for symbol/timeframe from csv_file_name."""
-        value = str(csv_file_name or "").strip()
-        if not value:
+        name = csv_basename(csv_file_name).strip()
+        if not name:
             return None, None
-        name = Path(value).name
 
         # Numeric TF: "OKX_LINKUSDT.P, 15 2025.05.01-2025.11.20.csv"
         match = re.match(r"^[^_]*_([^,]+),\s*(\d+)\s", name)

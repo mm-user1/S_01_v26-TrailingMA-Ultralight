@@ -1,13 +1,11 @@
 from pathlib import Path
 from copy import deepcopy
 import json
-import sys
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core.post_process import (
     PostProcessConfig,

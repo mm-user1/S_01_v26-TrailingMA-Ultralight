@@ -98,9 +98,16 @@ pytest discovery:
 ```powershell
 $env:MERLIN_STRATEGY_LAB_DATA_ROOT = '<read-only-data-root>'
 $env:MERLIN_STRATEGY_LAB_CERT_WORK_DIR = '<absolute-certification-dir>'
-& $py -m pytest tests\strategy_lab\phase1b_real_wfa_certification.py -q `
-  --basetemp=tools\strategy_lab\tmp\real-wfa-pytest
+& $py tools/run_tests.py -- tests\strategy_lab\phase1b_real_wfa_certification.py
 ```
+
+The explicit WFA command requires an existing real pack and the completed
+`smoke_one` certification output; missing prerequisites fail. It remains outside
+normal discovery. Ordinary normalization cases live in `test_strategy_lab_certify.py`
+and share `certification_helpers.py` with the explicit WFA module. The ordinary
+two-process smoke test reuses the configured external Numba cache, or a contained
+temporary cache when unset. See [test isolation](../../tests/README.md), including
+`MERLIN_TEST_ROOT` for nested checkouts.
 
 ### Analyze development data
 

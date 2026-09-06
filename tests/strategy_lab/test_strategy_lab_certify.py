@@ -44,6 +44,7 @@ from tools.strategy_lab.dataset import (
 )
 from ui import server_services
 
+from tests.strategy_lab.certification_helpers import _normalized_params
 from tests.strategy_lab.phase1a_helpers import REPO_ROOT, fake_execute, fake_rows
 
 
@@ -650,3 +651,48 @@ def test_protected_snapshot_diagnostic_names_changed_paths():
         "storage:journal.db",
         "storage:queue.json",
     ]
+
+
+def test_normalized_params_removes_only_equal_commission_alias_and_dates():
+    assert _normalized_params(
+        {
+            "commissionPct": 0.05,
+            "commissionRate": "0.05",
+            "dateFilter": True,
+            "start": "2025-10-01T00:00:00Z",
+            "end": "2026-08-01T00:00:00Z",
+            "stopX": 2.0,
+        }
+    ) == {"commissionPct": 0.05, "stopX": 2.0}
+
+
+def test_normalized_params_rejects_commission_alias_without_authoritative_value():
+    with pytest.raises(ValueError, match="without authoritative commissionPct"):
+        _normalized_params({"commissionRate": 0.05})
+
+
+def test_normalized_params_rejects_conflicting_commission_alias():
+    with pytest.raises(ValueError, match="conflicts with authoritative commissionPct"):
+        _normalized_params({"commissionPct": 0.05, "commissionRate": 0.0005})
+
+
+@pytest.mark.parametrize("value", [None, "not-a-number", float("nan"), float("inf"), True])
+def test_normalized_params_rejects_nonfinite_or_nonnumeric_commission_alias(value):
+    with pytest.raises(ValueError, match="must be finite numeric values"):
+        _normalized_params({"commissionPct": 0.05, "commissionRate": value})
+
+
+@pytest.mark.parametrize(
+    ("field", "left", "right"),
+    [
+        ("commissionPct", 0.05, 0.04),
+        ("riskPerTrade", 2.0, 1.0),
+        ("contractSize", 0.0001, 0.001),
+        ("warmupBars", 1000, 500),
+        ("stopX", 2.0, 2.5),
+    ],
+)
+def test_normalized_params_keeps_economics_runtime_and_strategy_values_strict(
+    field, left, right
+):
+    assert _normalized_params({field: left}) != _normalized_params({field: right})

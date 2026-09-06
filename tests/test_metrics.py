@@ -9,14 +9,11 @@ from dataclasses import asdict
 from pathlib import Path
 import math
 import json
-import sys
 
 import numpy as np
 import pandas as pd
 import pytest
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from core.backtest_engine import (  # noqa: E402
     StrategyResult,

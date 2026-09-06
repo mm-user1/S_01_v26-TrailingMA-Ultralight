@@ -365,8 +365,9 @@ def test_compiled_grid_v2_subset_matches_reference_backend(
     reference_id,
     enabled_axes,
 ):
-    if not compiled_batch_available():
-        pytest.skip("Compiled Grid V2 unavailable in this process; rerun in a fresh JIT-on process")
+    numba = pytest.importorskip("numba")
+    assert not numba.config.DISABLE_JIT
+    assert compiled_batch_available(), "Compiled Grid V2 became unavailable after collection"
     df, trade_start_idx = prepared_data
     base_params = merged_reference_params(reference_id)
     config = load_config()
