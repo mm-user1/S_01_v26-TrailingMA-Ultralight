@@ -1,0 +1,724 @@
+// S_03 Reversal_v16-4 T Bands + Emergency SL + UTC Performance Table
+// UTC Table Time + Date Filter End Close Update:
+// - Keeps the existing Year / Jan-Dec / TOTAL layout.
+// - Rebuilds monthly and yearly realized returns from closed-trade equity.
+// - Uses compounded period returns instead of adding individual trade percentages.
+// - Calculates realized MaxDD and MFE from the closed-trade equity path.
+// - Restricts displayed months to the selected Date Filter window.
+// - Removes unused debug, pagination, CAGR, MAR and commission-drag calculations.
+// - Uses an absolute nonlinear monthly color scale: neutral within +/-1%, full intensity at +/-20%.
+// - Keeps annual TOTAL colors unchanged.
+// - Uses UTC calendar boundaries for all Performance Table month/year grouping.
+// - Date Filter always blocks entries at the End Date boundary and force-closes any open position exactly on that boundary.
+// - The former End Close checkbox has been removed; Date Filter now owns this behavior.
+//@version=5
+strategy(title="S_03 Reversal v16-4-A Adaptive MA",
+	 overlay=true,
+	 initial_capital=100,
+	 currency="USDT",
+     pyramiding=0,
+	 calc_on_order_fills=false,
+	 calc_on_every_tick=false,
+	 use_bar_magnifier=false,
+	 fill_orders_on_standard_ohlc=true,
+	 process_orders_on_close=false,
+	 default_qty_type=strategy.percent_of_equity,
+	 default_qty_value=100,
+	 commission_type=strategy.commission.percent,
+	 commission_value=0.05)
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███ INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Date Filter & Display Settings
+// ──────────────────────────────────────────────────────────────────────────────
+useDateFilter   = input.bool(true, "Date Filter", inline="Use Date Filter")
+drawTester      = input.bool(title="Backtester", defval=true, inline="Use Date Filter")
+bool mptable_on = input.bool(title="Table", defval=true, display=display.none, inline="Use Date Filter")
+comments        = input.string(title="", defval="", inline="Use Date Filter")
+
+
+startDate       = input.time(timestamp('2025-02-01'), title="Start Date")
+endDate         = input.time(timestamp('2026-02-01'), title="End Date")
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Moving Average Settings
+// ──────────────────────────────────────────────────────────────────────────────
+var g_ma   = "Moving Averages"
+maType3    = input.string(title="T MA", defval="KAMA", options=["KAMA", "SuperSmoother", "FRAMA", "DSMA"], inline="MA №3", group=g_ma)
+maLength3  = input.int(title="", defval=75, minval=25, maxval=250, step=25, inline="MA №3", group=g_ma)
+maColor3   = input.color(defval=color.rgb(166, 109, 176, 40), title="", inline="MA №3", group=g_ma)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Entry Conditions: Close Count & T Bands
+// ──────────────────────────────────────────────────────────────────────────────
+closeCountLong    = input.int(title="Close Count Long", defval=7, minval=1, maxval=7, step=1, inline="Close Count", group=g_ma)
+closeCountShort   = input.int(title="Short", defval=5, minval=1, maxval=7, step=1, inline="Close Count", group=g_ma)
+
+tBandLongPct      = input.float(title="T Bands % Long", defval=1.0, minval=0.2, maxval=2.0, step=0.2, inline="T bands", group=g_ma)
+tBandShortPct     = input.float(title="Short", defval=1.0, minval=0.2, maxval=2.0, step=0.2, inline="T bands", group=g_ma)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Position Sizing
+// ──────────────────────────────────────────────────────────────────────────────
+contractSize     = input.float(title="Contract Size", defval=0.01, options=[0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000], group=g_ma)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Stops, Rewards, Risks
+// ──────────────────────────────────────────────────────────────────────────────
+var g_rrs   = "Stops, Rewards, Risks"
+
+useEmergencySL        = input.bool(defval=false, title="Use Emergency SL", group=g_rrs)
+emergencySlPct        = input.float(title="Emergency SL %", defval=20.0, minval=10.0, maxval=20.0, step=10.0, inline="Emergency SL", group=g_rrs)
+emergencySlUpdateBars = input.int(title="Update Bars", defval=16, minval=1, step=1, inline="Emergency SL", group=g_rrs)
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███ CONSTANTS & FUNCTIONS (Trading Logic)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// KAMA parameters (unchanged from v14)
+float fastKama = 2
+float slowKama = 30
+float PI = 3.141592653589793
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Adaptive Moving Average selector
+// ──────────────────────────────────────────────────────────────────────────────
+getMA(_maSource, _maType, _maLength) =>
+    if _maLength == 0
+        na
+    else
+        switch _maType
+            "KAMA" =>
+                // Existing v14 KAMA implementation, unchanged.
+                mom = math.abs(ta.change(_maSource, _maLength))
+                volatility = math.sum(math.abs(ta.change(_maSource)), _maLength)
+                er = volatility != 0 ? mom / volatility : 0
+                fastAlpha = 2 / (fastKama + 1)
+                slowAlpha = 2 / (slowKama + 1)
+                alpha = math.pow(er * (fastAlpha - slowAlpha) + slowAlpha, 2)
+                kama = 0.0
+                kama := alpha * _maSource + (1 - alpha) * nz(kama[1], _maSource)
+                kama
+
+            "SuperSmoother" =>
+                // John Ehlers' two-pole SuperSmoother filter.
+                a1 = math.exp(-math.sqrt(2.0) * PI / _maLength)
+                b1 = 2.0 * a1 * math.cos(math.sqrt(2.0) * PI / _maLength)
+                c2 = b1
+                c3 = -a1 * a1
+                c1 = 1.0 - c2 - c3
+                superSmoother = 0.0
+                superSmoother := bar_index < 3 ? _maSource : c1 * (_maSource + _maSource[1]) / 2.0 + c2 * nz(superSmoother[1], _maSource) + c3 * nz(superSmoother[2], _maSource)
+                superSmoother
+
+            "FRAMA" =>
+                // John Ehlers' Fractal Adaptive Moving Average.
+                // The original calculation requires an even window, so odd
+                // input lengths are rounded up to the next even number.
+                int n = math.max(2, _maLength + _maLength % 2)
+                int half = int(n / 2)
+                n1 = (ta.highest(high, half) - ta.lowest(low, half)) / half
+                n2 = (ta.highest(high[half], half) - ta.lowest(low[half], half)) / half
+                n3 = (ta.highest(high, n) - ta.lowest(low, n)) / n
+                dimension = n1 > 0 and n2 > 0 and n3 > 0 ? (math.log(n1 + n2) - math.log(n3)) / math.log(2.0) : 1.0
+                alphaRaw = math.exp(-4.6 * (dimension - 1.0))
+                alpha = math.max(0.01, math.min(1.0, alphaRaw))
+                frama = 0.0
+                frama := bar_index < n ? _maSource : alpha * _maSource + (1.0 - alpha) * nz(frama[1], _maSource)
+                frama
+
+            "DSMA" =>
+                // John Ehlers' Deviation-Scaled Moving Average.
+                halfPeriod = 0.5 * _maLength
+                a1 = math.exp(-math.sqrt(2.0) * PI / halfPeriod)
+                b1 = 2.0 * a1 * math.cos(math.sqrt(2.0) * PI / halfPeriod)
+                c2 = b1
+                c3 = -a1 * a1
+                c1 = 1.0 - c2 - c3
+                zeros = _maSource - _maSource[2]
+                filt = 0.0
+                filt := bar_index < 2 ? 0.0 : c1 * (nz(zeros) + nz(zeros[1])) / 2.0 + c2 * nz(filt[1]) + c3 * nz(filt[2])
+                rms = math.sqrt(math.sum(filt * filt, _maLength) / _maLength)
+                scaledFilt = not na(rms) and rms != 0 ? filt / rms : 0.0
+                alpha = math.abs(scaledFilt) * 5.0 / _maLength
+                dsma = 0.0
+                dsma := bar_index < _maLength + 4 ? _maSource : alpha * _maSource + (1.0 - alpha) * nz(dsma[1], _maSource)
+                dsma
+
+            => na
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███ INDICATORS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ATR (reserved for future use)
+atr = ta.atr(14)
+
+// Main Moving Average
+ma3 = getMA(close, maType3, maLength3)
+
+// Trend Bands (percentage offset from MA)
+ma3UpBand   = ma3 * (1 + tBandLongPct/100)
+ma3DownBand = ma3 * (1 - tBandShortPct/100)
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███ SIGNAL LOGIC
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Date Range Filter
+// ──────────────────────────────────────────────────────────────────────────────
+// Date Filter uses an inclusive Start Date and an exclusive End Date.
+timeInRange = not useDateFilter or (time >= startDate and time < endDate)
+
+// New entries are blocked on the bar whose closing timestamp reaches End Date.
+// This prevents an entry order from being created at or after the test boundary.
+entryTimeInRange = not useDateFilter or (time >= startDate and not na(time_close) and time_close < endDate)
+
+// The one bar whose closing timestamp first reaches/passes End Date.
+// If End Date aligns with the chart timeframe, this bar closes exactly at End Date.
+endDateBar = useDateFilter and not na(time_close) and time_close >= endDate and (na(time_close[1]) or time_close[1] < endDate)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// T Bands Signals (Hysteresis Logic)
+// tBandState: 1 = LONG allowed, -1 = SHORT allowed, 0 = neutral (no position)
+// ──────────────────────────────────────────────────────────────────────────────
+
+// Combined breakout conditions (high/low pierces band AND close confirms beyond band)
+breakUpBand   = high > ma3UpBand and close > ma3UpBand
+breakDownBand = low < ma3DownBand and close < ma3DownBand
+
+// Fail condition: single bar pierces both bands (extreme volatility)
+crossTbandFail = (high >= ma3UpBand) and (low <= ma3DownBand)
+
+// T Bands state machine with memory
+var int tBandState = 0  // Start neutral, wait for first clean breakout
+
+// Update state only on confirmed bars to prevent false signals on realtime ticks
+if barstate.isconfirmed
+    if crossTbandFail
+        // F2 logic: determine direction by close relative to MA
+        tBandState := close > ma3 ? 1 : -1
+    else
+        // Normal breakout logic
+        if breakUpBand
+            tBandState := 1
+        else if breakDownBand
+            tBandState := -1
+        // else: keep previous state (hysteresis - no change between bands)
+
+// Generate signals based on T Bands state
+crossTBandLong  = tBandState == 1
+crossTBandShort = tBandState == -1
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Close Count Signals
+// Counts consecutive closes above/below MA
+// ──────────────────────────────────────────────────────────────────────────────
+var int countCloseLong = 0
+var int countCloseShort = 0
+
+// Update counters only on confirmed bars to prevent miscounting on realtime ticks
+if barstate.isconfirmed
+    if close > ma3
+        countCloseLong := countCloseLong + 1
+        countCloseShort := 0
+    else if close < ma3
+        countCloseShort := countCloseShort + 1
+        countCloseLong := 0
+    else
+        countCloseLong := 0
+        countCloseShort := 0
+
+countLong  = countCloseLong >= closeCountLong
+countShort = countCloseShort >= closeCountShort
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███ ENTRY CONDITIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+longConditions  = entryTimeInRange and countLong and crossTBandLong and barstate.isconfirmed
+shortConditions = entryTimeInRange and countShort and crossTBandShort and barstate.isconfirmed
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███ EXECUTION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Close opposite position before entry (webhook safe: 1 bar delay)
+if longConditions and strategy.position_size < 0
+    strategy.close("Short", comment="Close Short")
+
+if shortConditions and strategy.position_size > 0
+    strategy.close("Long", comment="Close Long")
+
+// Entry orders (only when flat)
+if longConditions and strategy.position_size == 0
+    positionSize = math.floor((strategy.equity / close) / contractSize)* contractSize
+    strategy.entry("Long", strategy.long, qty=positionSize)
+
+if shortConditions and strategy.position_size == 0
+    positionSize = math.floor((strategy.equity / close) / contractSize)* contractSize
+    strategy.entry("Short", strategy.short, qty=positionSize)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Emergency SL (mirrors Lancelot's exchange-side protective algo order)
+//
+// Lancelot places the initial exchange-side Emergency SL immediately after the
+// entry order is filled, seeding it at fill_price ∓ emergencySlPct
+// (OrderExecutor.execute_entry -> _submit_entry_intent_attempt).
+// Maintenance then runs through _update_emergency_sl: every emergencySlUpdateBars
+// closed bars it re-derives a candidate from that bar's close and accepts it only
+// when it ratchets in the profitable direction. The counter resets on every
+// update attempt, accepted or not.
+//
+// This Pine version approximates that behavior with strategy.exit(stop=...).
+// Two limitations are accepted for now:
+//   - the stop becomes active per Pine/TV broker-emulator order processing
+//     rules, so exact live Lancelot placement timing is not guaranteed;
+//   - it triggers on chart OHLC rather than on OKX mark price.
+// ──────────────────────────────────────────────────────────────────────────────
+var float emergencySlPrice = na
+var int   emergencySlDir   = 0  // 1 = long, -1 = short, 0 = flat / no state
+var int   emergencySlBars  = 0  // confirmed bars since the last update attempt
+
+// Position side as of this bar's fills (entries above fill on the next bar)
+emergencySlPosDir = strategy.position_size > 0 ? 1 : strategy.position_size < 0 ? -1 : 0
+
+if barstate.isconfirmed
+    if not useEmergencySL or emergencySlPosDir == 0
+        // Flat (or feature off): drop state so it cannot leak into the next position
+        emergencySlPrice := na
+        emergencySlDir   := 0
+        emergencySlBars  := 0
+    else if emergencySlPosDir != emergencySlDir
+        // New position or direction change: seed from the actual fill price
+        emergencySlPrice := emergencySlPosDir == 1 ? strategy.position_avg_price * (1 - emergencySlPct/100) : strategy.position_avg_price * (1 + emergencySlPct/100)
+        emergencySlDir   := emergencySlPosDir
+        emergencySlBars  := 0
+    else
+        // Same position: ratchet once the update interval is reached
+        emergencySlBars := emergencySlBars + 1
+        if emergencySlBars >= emergencySlUpdateBars
+            candidateSl = emergencySlDir == 1 ? close * (1 - emergencySlPct/100) : close * (1 + emergencySlPct/100)
+            isProfitableRatchet = emergencySlDir == 1 ? candidateSl > emergencySlPrice : candidateSl < emergencySlPrice
+            if isProfitableRatchet
+                emergencySlPrice := candidateSl
+            // Counter resets on every attempt, even a rejected one (Lancelot parity)
+            emergencySlBars := 0
+
+// Maintain the protective stop attached to the live entry ID
+if useEmergencySL and not na(emergencySlPrice)
+    if emergencySlDir == 1
+        strategy.exit("Emergency SL Long", from_entry="Long", stop=emergencySlPrice, comment="Emergency SL")
+    else if emergencySlDir == -1
+        strategy.exit("Emergency SL Short", from_entry="Short", stop=emergencySlPrice, comment="Emergency SL")
+
+plot(useEmergencySL and emergencySlDir != 0 ? emergencySlPrice : na, title="Emergency SL", color=color.new(color.red, 40), style=plot.style_linebr)
+
+// Date-filter expiry handling.
+// With Date Filter enabled, any open position is always force-closed once on the
+// boundary bar. immediately=true fills the market close on that bar's closing tick.
+if endDateBar and strategy.position_size != 0
+    strategy.close_all("End Close", immediately=true)
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███ STATISTICS, COUNTERS & VISUALIZATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Stop counters
+var consecutiveStops = 0
+var maxConsecutiveStops = 0
+var maxStopLossPct = 0.0
+
+// Emergency SL exits (closed trades whose exit came from the Emergency SL stop)
+var emergencySlCount = 0
+
+// Keep this counter independent from the optional Performance Table.
+int newlyClosedTrades = strategy.closedtrades - nz(strategy.closedtrades[1], 0)
+if newlyClosedTrades > 0
+    for closedOffset = 0 to newlyClosedTrades - 1
+        int closedTradeIndex = strategy.closedtrades - 1 - closedOffset
+        if strategy.closedtrades.exit_comment(closedTradeIndex) == "Emergency SL"
+            emergencySlCount := emergencySlCount + 1
+
+// Leverage counter
+var leverageSize = 1
+
+
+entryBarLong = strategy.position_size[1] <= 0 and strategy.position_size > 0
+entryBarShort = strategy.position_size[1] >= 0 and strategy.position_size < 0
+
+// Calculate stop percent
+calcStopPct(entryPrice, stopPrice, isLong) =>
+    math.abs(entryPrice - stopPrice) / entryPrice * 100
+
+
+// Days counters
+var int entryTime = na
+var float maxDaysInTrade = 0.0
+
+if strategy.opentrades > 0 and na(entryTime)
+    entryTime := time
+
+if strategy.opentrades > 0 and not na(entryTime)
+    daysInTrade = (time - entryTime) / (1000 * 60 * 60 * 24)
+    if daysInTrade > maxDaysInTrade
+        maxDaysInTrade := daysInTrade
+
+if strategy.opentrades == 0 and not na(entryTime)
+    entryTime := na
+
+// Draw MAs
+plot(ma3, color=maColor3, linewidth=2, title="MA №3")
+plot(ma3UpBand, color=color.rgb(166,109,176, 50), linewidth=1, title="Trend Up Band")
+plot(ma3DownBand, color=color.rgb(166,109,176, 50), linewidth=1, title="Trend Down Band")
+
+// Draw entries
+plotshape(entryBarLong, style=shape.circle, location=location.top, color=color.new(color.gray, 80), size=size.tiny)
+plotshape(entryBarShort, style=shape.circle, location=location.top, color=color.new(color.gray, 80), size=size.tiny)
+
+// Debug plot for T Bands state
+plot(tBandState, title="T Band State", display=display.data_window)
+
+
+// Sharpe Ratio Calculations v4 - перенесенный из Python скрипта S_03_Light+Grid_v03 Sharpe+Filter Netprofit.py
+var float   _sr_monthStartEq = na
+var array<float> _sr_mR      = array.new_float()
+var bool    _sr_prevInRange  = false
+var bool    _sr_dirty        = false
+
+_sr_entered = not _sr_prevInRange and timeInRange
+_sr_left    = _sr_prevInRange and not timeInRange
+_sr_prevInRange := timeInRange
+
+if _sr_entered
+    _sr_monthStartEq := strategy.initial_capital
+    array.clear(_sr_mR)
+    _sr_dirty := true
+
+if timeInRange and bar_index > 0 and month(time) != month(time[1])
+    float _sr_lastEqPrevMonth = strategy.equity[1]  // equity at last bar of previous month
+    if _sr_monthStartEq > 0
+        array.push(_sr_mR, ((_sr_lastEqPrevMonth / _sr_monthStartEq) - 1.0) * 100.0)
+        _sr_dirty := true
+    _sr_monthStartEq := _sr_lastEqPrevMonth
+
+f_pop_stdev(arr) =>
+    int _n = array.size(arr)
+    if _n == 0
+        na
+    else
+        float _mean = array.avg(arr)
+        float _s = 0.0
+        for i = 0 to _n - 1
+            float _d = array.get(arr, i) - _mean
+            _s += _d * _d
+        math.sqrt(_s / _n)
+
+var float _sharpe = na
+if _sr_dirty
+    int _sr_n = array.size(_sr_mR)
+    if _sr_n >= 2
+        float _avg  = array.avg(_sr_mR)
+        float _sd   = f_pop_stdev(_sr_mR)                 // population stdev (ddof=0)
+        float _rfrm = (0.02 * 100.0) / 12.0              // 2% annual -> monthly percent
+        if not na(_sd) and _sd != 0
+            _sharpe := (_avg - _rfrm) / _sd
+        else
+            _sharpe := na
+    else
+        _sharpe := na
+    _sr_dirty := false
+
+
+// Prepare stats table
+var table testTable = table.new(position.bottom_left, 2, 5, border_width=1, border_color=color.black, frame_color=color.black, frame_width=1)
+f_fillCell(_table, _column, _row, _title, _value, _bgcolor, _txtcolor) =>
+    _cellText = _title + "\n" + _value
+    table.cell(_table, _column, _row, _cellText, bgcolor=_bgcolor, text_color=_txtcolor)
+
+// Draw stats table
+var bgcolor = #f3f3f3
+if drawTester
+    f_fillCell(testTable, 0, 0, "WR:", str.tostring(math.floor(strategy.wintrades / strategy.closedtrades * 100)) + "%", bgcolor, (math.floor(strategy.wintrades / strategy.closedtrades * 100)) > 45 ? #6caf5d : color.black)
+    f_fillCell(testTable, 1, 0, "PnL:", str.tostring(math.floor(strategy.netprofit_percent)) + "%", bgcolor, (math.floor(strategy.netprofit_percent)) <= 0 ? #a73302 : color.black)
+    f_fillCell(testTable, 0, 1, "DD:", str.tostring(math.ceil(strategy.max_drawdown_percent)) + "%", bgcolor, (math.ceil(strategy.max_drawdown_percent)) > 20 ? #a73302 : color.black)
+    f_fillCell(testTable, 1, 1, "Trades:", str.tostring(strategy.closedtrades), bgcolor, color.black)
+    f_fillCell(testTable, 1, 2, "SL:", str.tostring(emergencySlCount), bgcolor, emergencySlCount >= 3 ? #a73302 : color.black)
+    f_fillCell(testTable, 0, 2, "Max SL:", str.tostring(maxConsecutiveStops), bgcolor, maxConsecutiveStops > 5 ? #a73302 : color.black)
+    f_fillCell(testTable, 0, 3, "Max SL:", str.tostring(math.ceil(maxStopLossPct)) + "%", bgcolor, maxStopLossPct >= 10 ? #a73302 : color.black)
+    f_fillCell(testTable, 1, 3, "Lev:", str.tostring(leverageSize), bgcolor, leverageSize >= 10 ? #a73302 : color.black)
+    f_fillCell(testTable, 0, 4, "Max D:", str.tostring(math.ceil(maxDaysInTrade)), bgcolor, color.black)
+    f_fillCell(testTable, 1, 4, "Sharpe:", na(_sharpe) ? "" : str.tostring(math.floor(_sharpe * 100) / 100.0), bgcolor, color.black)
+
+
+
+
+/////////// START OF PERFORMANCE TABLE CODE. ///////////
+
+// The table is intentionally based on realized equity only:
+// initial capital + the net P&L of closed trades.
+// Open P&L is not included.
+// Calendar grouping is fixed to UTC and is independent of the chart display timezone.
+const string PERFORMANCE_TZ      = "Etc/UTC"
+int   mptable_precision          = 2
+color mptable_titleColor         = #e7e7e7
+color mptable_titleTextColor     = #000000
+color mptable_ProfitColor        = color.rgb(142, 182, 120, 25)
+color mptable_LossColor          = color.rgb(201, 150, 134, 25)
+color mptable_BreakEvenColor     = color.rgb(225, 225, 225, 0)
+string mptable_tableTextSize     = size.large
+
+// Fixed absolute monthly color scale. It does not rank months against one another.
+// +/-1% is neutral. Color intensity reaches its maximum at +/-20%.
+float mptable_neutralZonePct     = 1.0
+float mptable_fullColorPct       = 20.0
+float mptable_gradientPower      = 1.5
+float mptable_lightTextThreshold = 0.55
+color mptable_PaleProfitColor    = color.rgb(218, 235, 211, 0)
+color mptable_StrongProfitColor  = color.rgb(55, 145, 65, 0)
+color mptable_PaleLossColor      = color.rgb(239, 218, 212, 0)
+color mptable_StrongLossColor    = color.rgb(185, 55, 45, 0)
+color mptable_DarkCellTextColor  = color.rgb(55, 55, 55, 0)
+
+// Increase precision for small non-zero values so they are not displayed as zero.
+getRoundingPrecision(float num) =>
+    if (num > 0 and num < 0.05) or (num < 0 and num > -0.05)
+        3
+    else
+        mptable_precision
+
+periodReturnPct(float endEquity, float startEquity) =>
+    startEquity != 0 ? ((endEquity / startEquity) - 1.0) * 100.0 : na
+
+periodDrawdownPct(float equity, float peakEquity) =>
+    peakEquity != 0 ? ((equity / peakEquity) - 1.0) * 100.0 : 0.0
+
+formatReturn(float value, bool showPlus, bool showPercentSign) =>
+    if na(value)
+        ""
+    else
+        string prefix = showPlus and value > 0 ? "+" : ""
+        string suffix = showPercentSign ? "%" : ""
+        prefix + str.tostring(math.round(value, getRoundingPrecision(value))) + suffix
+
+monthlyColorStrength(float monthlyProfit) =>
+    if na(monthlyProfit) or math.abs(monthlyProfit) <= mptable_neutralZonePct
+        0.0
+    else
+        float normalized = (math.abs(monthlyProfit) - mptable_neutralZonePct) / (mptable_fullColorPct - mptable_neutralZonePct)
+        float clamped = math.max(0.0, math.min(normalized, 1.0))
+        math.pow(clamped, mptable_gradientPower)
+
+monthlyCellColor(float monthlyProfit) =>
+    float strength = monthlyColorStrength(monthlyProfit)
+    if na(monthlyProfit) or math.abs(monthlyProfit) <= mptable_neutralZonePct
+        mptable_BreakEvenColor
+    else if monthlyProfit > 0
+        color.from_gradient(strength, 0.0, 1.0, mptable_PaleProfitColor, mptable_StrongProfitColor)
+    else
+        color.from_gradient(strength, 0.0, 1.0, mptable_PaleLossColor, mptable_StrongLossColor)
+
+monthlyCellTextColor(float monthlyProfit) =>
+    float strength = monthlyColorStrength(monthlyProfit)
+    strength >= mptable_lightTextThreshold ? color.white : mptable_DarkCellTextColor
+
+type StrategyReturn
+    float profit
+    float drawdown
+    float peak
+    int timestamp
+
+var array<StrategyReturn> monthlyReturns = array.new<StrategyReturn>(0)
+var array<StrategyReturn> yearlyReturns  = array.new<StrategyReturn>(0)
+var table performance_table = na
+
+// Remember the first loaded chart timestamp so the table does not fabricate
+// empty months before the available chart history.
+var int firstChartTime = na
+if barstate.isfirst
+    firstChartTime := time
+
+// Rebuild the complete table only on the last confirmed historical bar.
+// This keeps all table calculations out of the normal per-bar strategy path.
+if barstate.islastconfirmedhistory
+    if not na(performance_table)
+        table.delete(performance_table)
+        performance_table := na
+
+    array.clear(monthlyReturns)
+    array.clear(yearlyReturns)
+
+    if mptable_on
+        int closedTradeCount = strategy.closedtrades
+        int chartEndBoundary = na(time_close) ? time : time_close
+
+        // Date Filter uses [Start Date, End Date). A trade force-closed exactly
+        // at End Date is included in the period that has just ended.
+        int rangeStartTs = na
+        int rangeEndBoundary = na
+        int rangeTradeEndInclusive = na
+        int displayEndTs = na
+
+        if useDateFilter
+            rangeStartTs := math.max(startDate, firstChartTime)
+            rangeEndBoundary := math.min(endDate, chartEndBoundary)
+            rangeTradeEndInclusive := rangeEndBoundary
+            displayEndTs := rangeEndBoundary - 1
+
+            // If End Date falls between chart-bar closes, the forced exit can
+            // have an exit timestamp slightly after End Date. Include that one
+            // date-bound close in the final displayed month.
+            if closedTradeCount > 0 and endDate <= chartEndBoundary
+                for closeSearchIndex = 0 to closedTradeCount - 1
+                    int searchedExitTime = strategy.closedtrades.exit_time(closeSearchIndex)
+                    if searchedExitTime >= endDate and strategy.closedtrades.exit_comment(closeSearchIndex) == "End Close"
+                        rangeTradeEndInclusive := math.max(rangeTradeEndInclusive, searchedExitTime)
+        else if closedTradeCount > 0
+            rangeStartTs := strategy.closedtrades.entry_time(0)
+            rangeEndBoundary := strategy.closedtrades.exit_time(closedTradeCount - 1)
+            rangeTradeEndInclusive := rangeEndBoundary
+            displayEndTs := rangeEndBoundary
+
+        bool validRange = not na(rangeStartTs) and not na(rangeEndBoundary) and rangeEndBoundary > rangeStartTs
+
+        if validRange
+            // Reconstruct realized equity before the selected range.
+            float runningEquity = strategy.initial_capital
+            int tradeIndex = 0
+
+            while tradeIndex < closedTradeCount and strategy.closedtrades.exit_time(tradeIndex) < rangeStartTs
+                runningEquity += strategy.closedtrades.profit(tradeIndex)
+                tradeIndex += 1
+
+            int currentYear = year(rangeStartTs, PERFORMANCE_TZ)
+            int currentMonth = month(rangeStartTs, PERFORMANCE_TZ)
+            int currentMonthStart = timestamp(PERFORMANCE_TZ, currentYear, currentMonth, 1, 0, 0)
+
+            bool yearActive = false
+            int yearTimestamp = na
+            float yearStartEquity = na
+            float yearPeakEquity = na
+            float yearMaxDrawdown = 0.0
+
+            bool finishedMonths = false
+            while not finishedMonths
+                int nextYear = currentMonth == 12 ? currentYear + 1 : currentYear
+                int nextMonth = currentMonth == 12 ? 1 : currentMonth + 1
+                int nextMonthStart = timestamp(PERFORMANCE_TZ, nextYear, nextMonth, 1, 0, 0)
+                bool lastMonth = nextMonthStart > displayEndTs
+
+                float monthStartEquity = runningEquity
+                float monthPeakEquity = runningEquity
+                float monthMaxDrawdown = 0.0
+
+                if not yearActive
+                    yearActive := true
+                    yearTimestamp := currentMonthStart
+                    yearStartEquity := runningEquity
+                    yearPeakEquity := runningEquity
+                    yearMaxDrawdown := 0.0
+
+                // Apply all trades whose exit belongs to the current period.
+                // For the final Date Filter month, an End Close fill exactly at
+                // End Date is included even though End Date is the range boundary.
+                bool monthTradesDone = false
+                while tradeIndex < closedTradeCount and not monthTradesDone
+                    int tradeExitTime = strategy.closedtrades.exit_time(tradeIndex)
+                    bool tradeInsideMonth = lastMonth ? tradeExitTime <= rangeTradeEndInclusive : tradeExitTime < nextMonthStart
+
+                    if not tradeInsideMonth
+                        monthTradesDone := true
+                    else
+                        // tradeIndex is already positioned at the first trade on/after rangeStartTs.
+                        runningEquity += strategy.closedtrades.profit(tradeIndex)
+
+                        monthPeakEquity := math.max(monthPeakEquity, runningEquity)
+                        float monthCurrentDD = periodDrawdownPct(runningEquity, monthPeakEquity)
+                        monthMaxDrawdown := math.min(monthMaxDrawdown, monthCurrentDD)
+
+                        yearPeakEquity := math.max(yearPeakEquity, runningEquity)
+                        float yearCurrentDD = periodDrawdownPct(runningEquity, yearPeakEquity)
+                        yearMaxDrawdown := math.min(yearMaxDrawdown, yearCurrentDD)
+
+                        tradeIndex += 1
+
+                float monthProfit = periodReturnPct(runningEquity, monthStartEquity)
+                float monthMfe = periodReturnPct(monthPeakEquity, monthStartEquity)
+                array.push(monthlyReturns, StrategyReturn.new(monthProfit, monthMaxDrawdown, monthMfe, currentMonthStart))
+
+                bool yearEndsHere = currentMonth == 12 or lastMonth
+                if yearEndsHere
+                    float yearProfit = periodReturnPct(runningEquity, yearStartEquity)
+                    float yearMfe = periodReturnPct(yearPeakEquity, yearStartEquity)
+                    array.push(yearlyReturns, StrategyReturn.new(yearProfit, yearMaxDrawdown, yearMfe, yearTimestamp))
+                    yearActive := false
+
+                if lastMonth
+                    finishedMonths := true
+                else
+                    currentYear := nextYear
+                    currentMonth := nextMonth
+                    currentMonthStart := nextMonthStart
+
+        if array.size(yearlyReturns) > 0
+            performance_table := table.new(position.bottom_right, columns=14, rows=array.size(yearlyReturns) + 1, border_width=1)
+
+            // Column headers.
+            table.cell(performance_table, 0, 0, "Year",  bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 1, 0, "Jan",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 2, 0, "Feb",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 3, 0, "Mar",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 4, 0, "Apr",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 5, 0, "May",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 6, 0, "Jun",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 7, 0, "Jul",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 8, 0, "Aug",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 9, 0, "Sep",   bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 10, 0, "Oct",  bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 11, 0, "Nov",  bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 12, 0, "Dec",  bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+            table.cell(performance_table, 13, 0, "TOTAL", bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+
+            // Year rows and TOTAL values.
+            for yearIndex = 0 to array.size(yearlyReturns) - 1
+                StrategyReturn yearlyReturn = array.get(yearlyReturns, yearIndex)
+                int tableRow = yearIndex + 1
+                table.cell(performance_table, 0, tableRow, str.tostring(year(yearlyReturn.timestamp, PERFORMANCE_TZ)), bgcolor=mptable_titleColor, text_color=mptable_titleTextColor, text_size=mptable_tableTextSize)
+
+                color yearlyColor = yearlyReturn.profit > 0 ? mptable_ProfitColor : yearlyReturn.profit < 0 ? mptable_LossColor : mptable_BreakEvenColor
+                string yearlyTip = "Realized MaxDD: " + formatReturn(yearlyReturn.drawdown, false, true) +
+                     "\nRealized MFE: " + formatReturn(yearlyReturn.peak, false, true)
+
+                table.cell(performance_table, 13, tableRow, formatReturn(yearlyReturn.profit, true, true), bgcolor=yearlyColor, text_color=color.white, text_size=mptable_tableTextSize, tooltip=yearlyTip)
+
+            // Monthly cells.
+            for monthIndex = 0 to array.size(monthlyReturns) - 1
+                StrategyReturn monthlyReturn = array.get(monthlyReturns, monthIndex)
+                int monthYear = year(monthlyReturn.timestamp, PERFORMANCE_TZ)
+                int monthColumn = month(monthlyReturn.timestamp, PERFORMANCE_TZ)
+
+                for yearIndex = 0 to array.size(yearlyReturns) - 1
+                    StrategyReturn yearlyReturn = array.get(yearlyReturns, yearIndex)
+                    if year(yearlyReturn.timestamp, PERFORMANCE_TZ) == monthYear
+                        int tableRow = yearIndex + 1
+                        color monthlyColor = monthlyCellColor(monthlyReturn.profit)
+                        color monthlyTextColor = monthlyCellTextColor(monthlyReturn.profit)
+
+                        string monthlyTip = "Realized MaxDD: " + formatReturn(monthlyReturn.drawdown, false, true) +
+                             "\nRealized MFE: " + formatReturn(monthlyReturn.peak, false, true)
+
+                        table.cell(performance_table, monthColumn, tableRow, formatReturn(monthlyReturn.profit, false, false), bgcolor=monthlyColor, text_color=monthlyTextColor, text_size=mptable_tableTextSize, tooltip=monthlyTip)
+                        break
+
+/////////// END OF PERFORMANCE TABLE CODE. ///////////

@@ -1,0 +1,226 @@
+{
+  "schema_version": 1,
+  "strategy_id": "s03_reversal_v16_4_a_adaptive_ma_b2",
+  "strategy_name": "S03 Reversal v16-4-A Adaptive MA B2",
+  "purpose": "Merlin Backtester V2 TradingView parity baselines for four adaptive moving-average signal variants and optional Emergency SL integration.",
+  "market_data": {
+    "symbol": "SUIUSDT.P",
+    "exchange": "OKX",
+    "instrument": "perpetual_swap_contract",
+    "quote_currency": "USDT",
+    "timeframe": "30m",
+    "path": "data/raw/OKX_SUIUSDT.P, 30 2025.01.01-2026.02.01.csv",
+    "sha256": "d664bbae2903828f84b19e7af548fdc744b970a17f56846ad77882a9ca786aae",
+    "timezone": "UTC"
+  },
+  "instrument": {
+    "tick_size": 0.0001
+  },
+  "canonical_period": {
+    "start_utc": "2025-08-01T00:00:00Z",
+    "end_utc": "2025-12-01T00:00:00Z",
+    "interval_semantics": "[start_utc, end_utc)",
+    "tradingview_timezone": "UTC+8",
+    "tradingview_start": "2025-08-01 08:00",
+    "tradingview_end": "2025-12-01 08:00"
+  },
+  "pine_source": {
+    "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/pine/S_03-Reversal_v16-4-A_Adaptive-MA.pine",
+    "sha256": "aa45babe2ee8b6a8a61250a217c116346ad6d9e7b55dc9a3b81f23edc5bab47c",
+    "force_end_date_close": true,
+    "force_end_date_close_semantics": "exclusive_end_with_immediate_close_on_boundary_bar_close",
+    "process_orders_on_close": false,
+    "fill_orders_on_standard_ohlc": true
+  },
+  "tradingview_execution_profile": {
+    "initial_capital": 100.0,
+    "currency": "USDT",
+    "default_order_size": 100.0,
+    "default_order_size_type": "percent_of_equity",
+    "pyramiding": 0,
+    "bar_detailization": "default_4_ticks_per_bar",
+    "fill_orders_on_standard_ohlc": true,
+    "script_execution": {
+      "on_bar_close": true,
+      "on_order_fill": false,
+      "on_realtime_bar_tick": false
+    },
+    "commission": {
+      "value": 0.05,
+      "type": "percent"
+    },
+    "long_leverage": "Infinity",
+    "short_leverage": "Infinity",
+    "slippage_ticks": 0,
+    "limit_order_execution": "requested_price",
+    "order_execution_delay": "one_tick"
+  },
+  "references": [
+    {
+      "reference_id": "reference_a_kama",
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_a_kama",
+      "ma_type": "KAMA",
+      "ma_length": 125,
+      "close_count_long": 4,
+      "close_count_short": 6,
+      "t_band_long_pct": 1.0,
+      "t_band_short_pct": 1.2,
+      "use_emergency_sl": false,
+      "emergency_sl_pct": 20.0,
+      "total_trades": 63,
+      "emergency_sl_exits": 0,
+      "emergency_sl_long_exits": 0,
+      "emergency_sl_short_exits": 0,
+      "final_boundary_exercised": true,
+      "role": "external_tradingview_parity_target"
+    },
+    {
+      "reference_id": "reference_b_supersmoother",
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_b_supersmoother",
+      "ma_type": "SuperSmoother",
+      "ma_length": 175,
+      "close_count_long": 7,
+      "close_count_short": 4,
+      "t_band_long_pct": 1.8,
+      "t_band_short_pct": 0.8,
+      "use_emergency_sl": false,
+      "emergency_sl_pct": 20.0,
+      "total_trades": 66,
+      "emergency_sl_exits": 0,
+      "emergency_sl_long_exits": 0,
+      "emergency_sl_short_exits": 0,
+      "final_boundary_exercised": true,
+      "role": "external_tradingview_parity_target"
+    },
+    {
+      "reference_id": "reference_c_frama+sl10",
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_c_frama+sl10",
+      "ma_type": "FRAMA",
+      "ma_length": 100,
+      "close_count_long": 6,
+      "close_count_short": 6,
+      "t_band_long_pct": 1.8,
+      "t_band_short_pct": 1.8,
+      "use_emergency_sl": true,
+      "emergency_sl_pct": 10.0,
+      "total_trades": 62,
+      "emergency_sl_exits": 3,
+      "emergency_sl_long_exits": 1,
+      "emergency_sl_short_exits": 2,
+      "final_boundary_exercised": true,
+      "role": "external_tradingview_parity_target"
+    },
+    {
+      "reference_id": "reference_d_dsma+sl10",
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_d_dsma+sl10",
+      "ma_type": "DSMA",
+      "ma_length": 200,
+      "close_count_long": 6,
+      "close_count_short": 7,
+      "t_band_long_pct": 1.6,
+      "t_band_short_pct": 1.8,
+      "use_emergency_sl": true,
+      "emergency_sl_pct": 10.0,
+      "total_trades": 53,
+      "emergency_sl_exits": 3,
+      "emergency_sl_long_exits": 0,
+      "emergency_sl_short_exits": 3,
+      "final_boundary_exercised": true,
+      "role": "external_tradingview_parity_target"
+    }
+  ],
+  "baseline_interpretation": {
+    "all_trade_counts_match_metrics_screenshots": true,
+    "all_references_cover_long_and_short_trades": true,
+    "all_references_exercise_end_boundary_close": true,
+    "emergency_sl_coverage": {
+      "total_exits": 6,
+      "long_exits": 1,
+      "short_exits": 5
+    },
+    "symmetric_long_short_control": "A future Merlin Grid planning constraint only; it is not a Pine input and does not change execution for an expanded candidate parameter set.",
+    "custom_pine_tables": "Not parity authorities; TradingView Strategy Tester metrics screenshots and raw exports are authoritative."
+  },
+  "asset_hashes": [
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_a_kama/tradingview_trades.csv",
+      "sha256": "97e372b1985befd4855e3d5b2d176da6e6dc7c57620efd0b81d49e8a3f7d6669"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_a_kama/trades_normalized_utc.csv",
+      "sha256": "140096226e13cdd3e3d0220ce7cf2b44f624f265396b426a92df0bda66c1d3c8"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_a_kama/tradingview_inputs.PNG",
+      "sha256": "91a1d0d1415b9a30ce76b525460b550e5721938b56e022521d808cfd97a92c0a"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_a_kama/tradingview_properties.PNG",
+      "sha256": "81d4cc730ead469c82302b747f3a8ad09dd99853bc483f11798a9e494d27efdc"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_a_kama/tradingview_metrics.PNG",
+      "sha256": "f5b14fb94ff1845412101d637c185a77062c1554d7a93f09313dcbc9f63373d9"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_b_supersmoother/tradingview_trades.csv",
+      "sha256": "147a4bdc257d930b3bef287c50c1f15cce3aab789d194876f4de24529467d409"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_b_supersmoother/trades_normalized_utc.csv",
+      "sha256": "72c52c5aea58ee5ac9786795abeec88bf377c66d0a848777acb9797730f1712c"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_b_supersmoother/tradingview_inputs.PNG",
+      "sha256": "795a3fc0e759c938d8bb5286baa73a28502a00c951a3d3c882eb35e7a9a5f36c"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_b_supersmoother/tradingview_properties.PNG",
+      "sha256": "81d4cc730ead469c82302b747f3a8ad09dd99853bc483f11798a9e494d27efdc"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_b_supersmoother/tradingview_metrics.PNG",
+      "sha256": "82c89b6f279b5e4b7d1f2cd00c7b267fc96d5f6eae6a6f83646b981b82650e7a"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_c_frama+sl10/tradingview_trades.csv",
+      "sha256": "abb9a5149d98363991409ea568605511d01b3ec9d9764380eb22536e17344804"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_c_frama+sl10/trades_normalized_utc.csv",
+      "sha256": "c7a395aa616ee4f37944e048dcf6c723bd1234247c1cd0c44905d3e8d5f46f59"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_c_frama+sl10/tradingview_inputs.PNG",
+      "sha256": "2f3a53c8ac8abc0012e7c70e3468eb59a6200f0b5b7ef33b33e8ad372a3306db"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_c_frama+sl10/tradingview_properties.PNG",
+      "sha256": "81d4cc730ead469c82302b747f3a8ad09dd99853bc483f11798a9e494d27efdc"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_c_frama+sl10/tradingview_metrics.PNG",
+      "sha256": "ba34c40c244eb7223e26a667dbdb5911e3dee2f663bb57604bc4d925a29b8299"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_d_dsma+sl10/tradingview_trades.csv",
+      "sha256": "db4ad1c71d1e677bb752ec7306db4ad0b46d45954a361ebd958fc8d4f9669f5d"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_d_dsma+sl10/trades_normalized_utc.csv",
+      "sha256": "d90661a6400fc916b9c45ded0e8738b5c87fba4d66f14c156a914cd903c7e37d"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_d_dsma+sl10/tradingview_inputs.PNG",
+      "sha256": "be86c047e0abd62bb6417d898f37459aa8b44a4be39a7d471d44525952ec17d7"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_d_dsma+sl10/tradingview_properties.PNG",
+      "sha256": "81d4cc730ead469c82302b747f3a8ad09dd99853bc483f11798a9e494d27efdc"
+    },
+    {
+      "path": "data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/reference_d_dsma+sl10/tradingview_metrics.PNG",
+      "sha256": "a395f105fffb9210c4516c394db96fa2fb4674374ca19e1653b91a4bab2fa2e2"
+    }
+  ]
+}

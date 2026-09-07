@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "reference_id": "reference_d_dsma+sl10",
+  "source": "TradingView Strategy Tester metrics screenshot and raw trades export.",
+  "timezone_note": "TradingView UI/export timestamps use UTC+8. Normalized machine-readable trades use UTC.",
+  "metrics": {
+    "net_profit_usdt": 14.04,
+    "net_profit_pct": 14.04,
+    "max_drawdown_usdt": 24.97,
+    "max_drawdown_pct": 24.03,
+    "profitable_trades": 22,
+    "total_trades": 53,
+    "win_rate_pct": 41.51,
+    "profit_factor": 1.133,
+    "emergency_sl_exits": 3,
+    "emergency_sl_long_exits": 0,
+    "emergency_sl_short_exits": 3
+  },
+  "raw_export": {
+    "rows": 106,
+    "entry_rows": 53,
+    "exit_rows": 53,
+    "closed_trades": 53,
+    "winning_exit_rows": 22,
+    "exit_signal_counts": {
+      "Close Short": 23,
+      "Close Long": 26,
+      "Emergency SL": 3,
+      "End Close": 1
+    },
+    "last_trade_number": 53,
+    "last_exit_signal": "End Close",
+    "last_exit_time_tradingview": "2025-12-01 07:30",
+    "last_exit_time_utc": "2025-11-30T23:30:00Z",
+    "last_exit_price_usdt": 1.4958,
+    "last_cumulative_pnl_usdt": 14.04,
+    "sum_individually_rounded_pnl_usdt": 14.06,
+    "boundary_close": {
+      "boundary_bar_open_utc": "2025-11-30T23:30:00Z",
+      "semantic_boundary_utc": "2025-12-01T00:00:00Z",
+      "note": "TradingView labels the immediate End Close with the 30-minute boundary bar opening timestamp."
+    }
+  },
+  "consistency": {
+    "screenshot_trade_count_matches_csv": true,
+    "screenshot_profitable_trade_count_matches_csv": true,
+    "screenshot_net_profit_matches_last_cumulative_pnl": true,
+    "note": "Sums of individually rounded Net PnL rows may differ slightly from TradingView cumulative PnL; the screenshot and final cumulative field are authoritative."
+  }
+}

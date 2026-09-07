@@ -57,6 +57,7 @@ tracked repository.
 
 - [S01 V1 regression baseline](../data/baseline/README.md)
 - [S03 Regime-ER V2 baseline](../data/baseline_v2/s03_reversal_v11_regime_er/README.md)
+- [S03 v16-4-A Adaptive MA V2 baseline](../data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/README.md)
 - [S06 R-Trend v02 V2 baseline](../data/baseline_v2/s06_r_trend_v02/README.md)
 - [S06 Regime-TL V2 baseline](../data/baseline_v2/s06_r_trend_v02_regime_trendlines/README.md)
 - [S06 v06-4-A2 V2 baseline index](../data/baseline_v2/s06_r_trend_v06_4_a2/README.md), which links its six reference-specific READMEs.
