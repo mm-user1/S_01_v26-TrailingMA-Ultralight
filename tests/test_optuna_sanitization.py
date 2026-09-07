@@ -2,7 +2,6 @@ import math
 
 import pytest
 
-
 from core.optuna_engine import (
     ConstraintSpec,
     OptimizationConfig,

@@ -7,9 +7,8 @@ from pathlib import Path
 
 import pytest
 
-
-from core import storage  # noqa: E402
-from core.optuna_engine import (  # noqa: E402
+from core import storage
+from core.optuna_engine import (
     DEFAULT_SCORE_CONFIG,
     NSGAIISampler,
     OptimizationConfig,
@@ -19,7 +18,7 @@ from core.optuna_engine import (  # noqa: E402
     run_optimization,
     run_optuna_optimization,
 )
-from strategies import get_strategy_config, list_strategies  # noqa: E402
+from strategies import get_strategy_config, list_strategies
 
 DATA_PATH = (
     Path(__file__).parent.parent

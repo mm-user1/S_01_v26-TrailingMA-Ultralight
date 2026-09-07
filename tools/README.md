@@ -52,6 +52,13 @@ persistent Python/Numba caches. The default root is `../merlin-tests`;
 worktree (including an enclosing checkout). See the [test guide](../tests/README.md)
 for selection, preflight rules, prepared raw commands, and cold checks.
 
+Use separate short switches, `-qq`/`-vv`, or attached/separate values for
+`-k`, `-m`, `-o`, `-p`, `-r`, and `-W`. Focused markers, safe ini overrides,
+`-ra`, `-pno:cacheprovider`, `--co` and `--collect-only` are supported.
+Ambiguous clusters (`-qm`, `-qo`, `-qc`, `-vs`, `-sx`) and a second `--` are
+rejected before preparation. Use prepared raw pytest for advanced syntax.
+The launcher controls its documented CLI, not arbitrary pytest plugin behavior.
+
 ```powershell
 & C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe tools/run_tests.py fast
 & C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe tools/run_tests.py full
@@ -64,12 +71,16 @@ pytest arguments to the Python launcher's focused mode:
 ```powershell
 .\tools\run_pytest.ps1 -q tests\test_benchmark_grid_v2.py
 .\tools\run_pytest.ps1 -q tests\v2
+.\tools\run_pytest.ps1 -PytestArgs @('-v', '-k', 'core_logger_console_handler_is_configured_once', 'tests/server')
 ```
 
 Set `MERLIN_PYTHON` only when an alternate project interpreter is intentional.
 Use `-KeepTemp` before pytest arguments to retain a successful run directory for
 debugging. Failures and interruptions retain their run automatically. Successful
 runs otherwise remove only their own run directory; shared caches persist.
+Use the explicit `-PytestArgs` array for pytest switches: bare `-k` binds to
+`KeepTemp` and bare `-v` to PowerShell's `Verbose`. The forwarding implementation
+is unchanged; prefer the Python launcher for ordinary commands.
 
 ## Strategy Lab
 

@@ -5,8 +5,7 @@ from collections import Counter
 import optuna
 import pytest
 
-
-from core.optuna_engine import (  # noqa: E402
+from core.optuna_engine import (
     NSGAIIISampler,
     NSGAIISampler,
     OptimizationConfig,

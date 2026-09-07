@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 from core.grid_v2 import GRID_V2_ENGINE_VERSION, GridV2Settings, build_grid_v2_plan
 from core.optuna_engine import OptimizationConfig
 
+from strategies import get_strategy_config
 from strategies.s06_r_trend_v02_b2.strategy import load_config
 
 
@@ -309,3 +311,164 @@ def test_inactive_axis_dedup_collapses_to_first_deterministic_candidate():
     assert plan.per_variant_counts == {"with_target": 2, "without_target": 1}
     assert [candidate.candidate_id for candidate in plan.candidates] == [1, 2, 3]
     assert plan.candidates[-1].params["stopRR"] == 1.0
+
+
+@pytest.mark.slow
+def test_tz64a_request_runtime_row_digests_and_identity_pins():
+    from core.grid_v2 import build_grid_v2_plan
+    from ui import server_services
+
+    strategy_id = "s06_r_trend_v02_b2"
+    config = get_strategy_config(strategy_id)
+    context = server_services._resolve_strategy_context(
+        [("strategy_id", True, strategy_id)]
+    )
+
+    def ordered_row_digest(plan):
+        digest = hashlib.sha256()
+        for index in range(len(plan.candidate_table)):
+            candidate = plan.candidate_for_index(index)
+            row = {
+                "candidate_id": candidate.candidate_id,
+                "variant_name": candidate.variant_name,
+                "grid_mode_name": candidate.grid_mode_name,
+                "params": dict(candidate.params),
+            }
+            digest.update(
+                (json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode(
+                    "utf-8"
+                )
+            )
+        return digest.hexdigest()
+
+    def semantic_digest(plan):
+        digest = hashlib.sha256()
+        for key in plan.candidate_table.semantic_keys_by_row or ():
+            digest.update((key + "\n").encode("utf-8"))
+        return digest.hexdigest()
+
+    blank_payload, blank_runtime = server_services._normalize_v2_optimizer_payload(
+        context,
+        {
+            "optimization_mode": "grid",
+            "fixed_params": {"dateFilter": False, "start": "", "end": ""},
+        },
+        warmup_members=[],
+    )
+    dated_payload, dated_runtime = server_services._normalize_v2_optimizer_payload(
+        context,
+        {
+            "optimization_mode": "grid",
+            "fixed_params": {
+                "dateFilter": True,
+                "start": "2025-05-01T00:00",
+                "end": "2025-11-20T00:00",
+            }
+        },
+        warmup_members=[],
+    )
+    alias_payload, _alias_runtime = server_services._normalize_v2_optimizer_payload(
+        context,
+        {"optimization_mode": "grid", "fixed_params": {"dateFilter": "0"}},
+        warmup_members=[],
+    )
+    date_only_payload, _date_only_runtime = (
+        server_services._normalize_v2_optimizer_payload(
+            context,
+            {
+                "optimization_mode": "grid",
+                "fixed_params": {
+                    "dateFilter": True,
+                    "start": "2025-06-01",
+                    "end": "2025-06-30",
+                }
+            },
+            warmup_members=[],
+        )
+    )
+    assert blank_payload["fixed_params"] == {
+        "dateFilter": False,
+        "start": None,
+        "end": None,
+    }
+    assert dated_payload["fixed_params"] == {
+        "dateFilter": True,
+        "start": "2025-05-01T00:00:00Z",
+        "end": "2025-11-20T00:00:00Z",
+    }
+    assert alias_payload["fixed_params"] == {"dateFilter": False}
+    assert date_only_payload["fixed_params"] == {
+        "dateFilter": True,
+        "start": "2025-06-01T00:00:00Z",
+        "end": "2025-06-30T23:59:59.999999Z",
+    }
+    assert blank_runtime.values["warmupBars"] == dated_runtime.values["warmupBars"] == 1000
+
+    cases = [
+        (None, "f6a6258a07f21102ae60a91a239b960a23a5c59f15790423ab3a3874c00bfa6f"),
+        ({"dateFilter": False}, "e0ba87a4dbf66a843d462d0f73d8b1c991841b247acbb6051d999bd5767b5f7c"),
+        (
+            {"dateFilter": False, "start": "", "end": ""},
+            "8c2ca227ef140b31700f358d16a84246f34d7edb0f46b63f139bef003a8a25a5",
+        ),
+        (
+            blank_payload["fixed_params"],
+            "c5645dfc07084855c4618053b12c58b55859637425fedafe849dd9f751f01ff6",
+        ),
+        (
+            {
+                "dateFilter": True,
+                "start": "2025-05-01T00:00",
+                "end": "2025-11-20T00:00",
+            },
+            "73d4665bffa3a4df39d84e71cce5778d50cae0cb43ecb1f6f340010d20c68784",
+        ),
+        (
+            dated_payload["fixed_params"],
+            "54a7709b31efc592bf6d329d45b7a0dd2bab38a78d6a7bdf1673d89f1829e19d",
+        ),
+        (
+            {
+                "dateFilter": True,
+                "start": "2025-06-01",
+                "end": "2025-06-30",
+            },
+            "b1900647b0afefb3f8f11b5150426ef04c4dc8164221f51eb260e19f1c46339c",
+        ),
+        (
+            date_only_payload["fixed_params"],
+            "9faf81224522a95727fb39961e3a7ea9da010c3dc4655e99ce84be11edd24e68",
+        ),
+    ]
+    for base_params, expected_row_digest in cases:
+        plan = build_grid_v2_plan(config, base_params=base_params)
+        assert len(plan.candidate_table) == 48_480
+        assert plan.per_variant_counts == {"bracket": 480, "trail": 48_000}
+        assert ordered_row_digest(plan) == expected_row_digest
+        assert semantic_digest(plan) == (
+            "fc55d174e835e7196ae5fcf21427d318dc364241f6b10560aa32545e6910a08f"
+        )
+        assert plan.plan_fingerprint == (
+            "0f8d001c380df5ee95d34ca4e25910c674e20e9e8f34886a1bd2f1c261f019b2"
+        )
+
+    from core.param_identity import create_display_param_id
+
+    trading_params = {"maType": "EMA", "maLength": 50}
+    raw_display_id = create_display_param_id(
+        trading_params,
+        fixed_params={
+            "dateFilter": True,
+            "start": "2025-06-01",
+            "end": "2025-06-30",
+            "warmupBars": 1000,
+        },
+    )
+    canonical_display_id = create_display_param_id(
+        trading_params,
+        fixed_params={
+            **date_only_payload["fixed_params"],
+            "warmupBars": 5000,
+        },
+    )
+    assert raw_display_id == canonical_display_id

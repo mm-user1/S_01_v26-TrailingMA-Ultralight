@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 from core import storage
 from ui import server_routes_data
 from ui.server import app

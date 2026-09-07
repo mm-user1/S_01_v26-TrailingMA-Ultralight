@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-
 from core import metrics
 from core.backtest_engine import load_data, prepare_dataset_with_warmup
 from core.grid_engine import supports_fast_grid

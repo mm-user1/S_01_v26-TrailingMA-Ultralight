@@ -5,7 +5,6 @@ import pytest
 
 from dataclasses import asdict
 
-
 from core import backtest_engine, metrics
 from indicators.oscillators import rsi, stoch_rsi
 from strategies.s04_stochrsi.strategy import S04Params, S04StochRSI

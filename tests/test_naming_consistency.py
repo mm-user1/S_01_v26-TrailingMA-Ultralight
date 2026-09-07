@@ -9,7 +9,6 @@ from typing import Any, Dict
 
 import pytest
 
-
 from strategies import get_strategy_config
 from strategies.s01_trailing_ma.strategy import S01Params
 from strategies.s04_stochrsi.strategy import S04Params

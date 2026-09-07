@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-
 from core.backtest_engine import load_data, prepare_dataset_with_warmup
 from core.grid_engine import (
     _load_backend,

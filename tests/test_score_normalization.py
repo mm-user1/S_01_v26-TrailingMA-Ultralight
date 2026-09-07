@@ -4,8 +4,7 @@ Unit tests for composite score normalization methods.
 
 import pytest
 
-
-from core.optuna_engine import (  # noqa: E402
+from core.optuna_engine import (
     DEFAULT_SCORE_CONFIG,
     OptimizationResult,
     SCORE_METRIC_ATTRS,

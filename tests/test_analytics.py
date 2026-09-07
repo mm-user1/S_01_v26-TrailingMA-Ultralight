@@ -2,8 +2,7 @@ import math
 
 import pytest
 
-
-from core.analytics import (  # noqa: E402
+from core.analytics import (
     RETURN_PROFILE_STEM_LIMIT,
     WARNING_NO_OVERLAP,
     WARNING_NO_VALID_DATA,

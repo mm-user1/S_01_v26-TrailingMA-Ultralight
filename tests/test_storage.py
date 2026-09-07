@@ -10,7 +10,6 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-
 from core import storage
 from core.storage import (
     create_new_db,

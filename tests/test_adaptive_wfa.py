@@ -3,7 +3,6 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-
 from core.backtest_engine import StrategyResult, TradeRecord
 from core.post_process import PostProcessConfig
 from core.walkforward_engine import ISPipelineResult, WFConfig, WalkForwardEngine, WindowResult

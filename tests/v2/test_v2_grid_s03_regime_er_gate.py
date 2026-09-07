@@ -404,8 +404,9 @@ def test_signal_fast_metrics_are_request_gated_and_match_reference(
     compute_sharpe,
     compute_sqn,
 ):
-    if not compiled_batch_available():
-        pytest.skip("Compiled Grid V2 unavailable in this process; rerun in a fresh JIT-on process")
+    numba = pytest.importorskip("numba")
+    assert not numba.config.DISABLE_JIT
+    assert compiled_batch_available(), "Compiled Grid V2 became unavailable after collection"
     df, trade_start_idx = prepared_data
     common = dict(enabled_axes=("regimeErLength",), top_n=0)
     base_params = merged_reference_params(REFERENCE_A)
@@ -440,6 +441,10 @@ def test_signal_fast_metrics_are_request_gated_and_match_reference(
         compute_sqn=compute_sqn,
     )
 
+    assert compiled.metadata["backend_kind"] == COMPILED_BATCH_KIND
+    assert compiled.metadata["compiled_batch_used"] is True
+    assert len(compiled.rows) == len(reference.rows) == len(indices)
+    assert [row.candidate_id for row in compiled.rows] == [index + 1 for index in indices]
     assert compiled.metadata["month_id_nbytes"] == (len(df) * 4 if compute_sharpe else 0)
     for compiled_row, reference_row in zip(compiled.rows, reference.rows):
         _assert_rows_equal(compiled_row, reference_row)
@@ -452,8 +457,9 @@ def test_signal_reversal_compiled_sharpe_matches_reference_after_real_warmup(
     prepared_data,
     hooks,
 ):
-    if not compiled_batch_available():
-        pytest.skip("Compiled Grid V2 unavailable in this process; rerun in a fresh JIT-on process")
+    numba = pytest.importorskip("numba")
+    assert not numba.config.DISABLE_JIT
+    assert compiled_batch_available(), "Compiled Grid V2 became unavailable after collection"
     df, trade_start_idx = prepared_data
     plan = build_grid_v2_plan(
         load_config(),
@@ -472,6 +478,10 @@ def test_signal_reversal_compiled_sharpe_matches_reference_after_real_warmup(
         (0,),
         compute_sharpe=True,
     )
+    assert compiled.metadata["backend_kind"] == COMPILED_BATCH_KIND
+    assert compiled.metadata["compiled_batch_used"] is True
+    assert len(compiled.rows) == 1
+    assert compiled.rows[0].candidate_id == 1
     candidate = plan.candidate_for_index(0)
     params = hooks.normalize_params(dict(candidate.params))
     data = hooks.build_execution_data(df, params)

@@ -14,15 +14,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-
-from core.backtest_engine import (  # noqa: E402
+from core.backtest_engine import (
     StrategyResult,
     TradeRecord,
     load_data,
     prepare_dataset_with_warmup,
 )
-import core.metrics as metrics_module  # noqa: E402
-from core.metrics import (  # noqa: E402
+import core.metrics as metrics_module
+from core.metrics import (
     _advanced_metric_view,
     _calculate_monthly_returns,
     calculate_basic,
@@ -33,7 +32,7 @@ from core.metrics import (  # noqa: E402
     _calculate_ulcer_index_value,
     _welford_mean_m2,
 )
-from strategies.s01_trailing_ma.strategy import S01Params, S01TrailingMA  # noqa: E402
+from strategies.s01_trailing_ma.strategy import S01Params, S01TrailingMA
 
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_PATH = PROJECT_ROOT / "data" / "raw" / "OKX_LINKUSDT.P, 15 2025.05.01-2025.11.20.csv"

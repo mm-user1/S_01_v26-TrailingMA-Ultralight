@@ -1,6 +1,5 @@
 import numpy as np
 
-
 from core.metrics import calculate_higher_moments_from_monthly_returns
 from core.post_process import calculate_dsr, calculate_expected_max_sharpe
 

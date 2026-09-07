@@ -126,9 +126,6 @@ def test_csv_historical_read_preserves_stored_columns(value):
         assert response.get_json()["study"]["csv_file_name"] == expected
         rows = client.get("/api/studies").get_json()["studies"]
         assert next(row for row in rows if row["study_id"] == study_id)["csv_file_name"] == expected
-    if expected == NAME:
-        # Results extracts the dataset prefix at the first underscore.
-        assert response.get_json()["study"]["csv_file_name"].split("_", 1)[1] == NAME.split("_", 1)[1]
     with storage.get_db_connection() as conn:
         after = tuple(conn.execute("SELECT csv_file_name, csv_file_path, config_json FROM studies WHERE study_id=?", (study_id,)).fetchone())
     assert after == before

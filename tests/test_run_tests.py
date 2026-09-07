@@ -16,7 +16,7 @@ from tools import run_tests as runner
     ("fast", [], {"NUMBA_DISABLE_JIT": "1"}),
     ("full", [], {"NUMBA_DISABLE_JIT": "false"}),
     ("full", ["-m", "slow"], {}),
-    ("fast", ["--markexpr=slow"], {}),
+    ("fast", ["--"], {}),
     (None, ["--basetemp=/tmp/unsafe"], {}),
     (None, ["--base", "/tmp/unsafe"], {}),
     (None, ["-o", "cache_dir=/tmp/unsafe"], {}),
@@ -26,11 +26,67 @@ from tools import run_tests as runner
     (None, ["-c", "other.ini"], {}),
     (None, ["--config-file=other.ini"], {}),
     (None, ["@hidden-args"], {}),
+    (None, ["-k", "@hidden-args"], {}),
+    ("fast", ["-qm", "slow"], {}),
+    ("fast", ["-qmslow"], {}),
+    ("full", ["-vm", "slow"], {}),
+    ("fast", ["-mslow"], {}),
+    (None, ["-qo", "cache_dir=external"], {}),
+    (None, ["-qocache_dir=external"], {}),
+    (None, ["-vo", "addopts=-k hidden"], {}),
+    (None, ["-voaddopts=-k hidden"], {}),
+    (None, ["-qc", "other.ini"], {}),
+    (None, ["-vcother.ini"], {}),
+    (None, ["-cother.ini"], {}),
+    (None, ["--conf=other.ini"], {}),
+    (None, ["--root=external"], {}),
+    (None, ["--over", "cache_dir=external"], {}),
+    (None, ["-vs"], {}),
+    (None, ["-sx"], {}),
 ])
-def test_runner_rejects_hidden_selection_and_path_overrides(mode, options, environment):
+def test_runner_rejects_hidden_selection_and_path_overrides(mode, options, environment, monkeypatch):
     args = runner.parse_args(([mode] if mode else []) + ["--"] + options)
     with pytest.raises(ValueError):
         runner.validate_options(args, environment)
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+    monkeypatch.delenv("NUMBA_DISABLE_JIT", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    def forbidden(*args):
+        pytest.fail("Rejected input reached preparation or child launch")
+
+    monkeypatch.setattr(runner, "prepare_run", forbidden)
+    monkeypatch.setattr(runner, "run_child", forbidden)
+    assert runner.main(([mode] if mode else []) + ["--"] + options) == 2
+
+
+@pytest.mark.parametrize("options", [
+    ["--co"], ["--collect-only"], ["-q"], ["-qq"], ["-vv"], ["-v", "-s"],
+    ["-kclock"], ["-k", "clock or calendar"], ["-mslow"], ["-m", "not slow"],
+    ["-ra"], ["-rs"], ["-r", "a"], ["-o", "console_output_style=count"],
+    ["-oconsole_output_style=count"], ["--override-ini", "console_output_style=count"],
+    ["-pno:cacheprovider"], ["-p", "no:cacheprovider"], ["-po:cacheprovider"],
+    ["-W", "error"], ["-Werror"], ["tests/test_metrics.py::TestMetricsEdgeCases"],
+    ["-k", "qmslow"],
+])
+def test_runner_supported_pytest_forms(options):
+    runner.validate_options(runner.parse_args(["--"] + options), {})
+
+
+def test_runner_actual_cli_collect_aliases_and_attached_values(tmp_path):
+    probe = tmp_path / "test_clock.py"
+    probe.write_text("import pytest\n@pytest.mark.slow\ndef test_clock():\n    assert True\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.pop("PYTEST_ADDOPTS", None)
+    env["MERLIN_TEST_ROOT"] = str(tmp_path / "runner")
+    command = [sys.executable, "-B", str(runner.REPO_ROOT / "tools/run_tests.py"), "--"]
+    options = ["-kclock", "-mslow", "-ra", "-o", "console_output_style=count", "-pno:cacheprovider"]
+    for collect in (["--co"], ["--collect-only"], []):
+        result = subprocess.run(command + options + collect + [str(probe)], env=env,
+                                capture_output=True, text=True, timeout=60)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert ("1 test collected" if collect else "1 passed") in result.stdout
 
 
 @pytest.mark.parametrize("git_file", [False, True])

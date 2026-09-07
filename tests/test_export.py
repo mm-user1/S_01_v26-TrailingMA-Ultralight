@@ -1,6 +1,5 @@
 import pandas as pd
 
-
 from core.backtest_engine import TradeRecord
 from core.export import export_trades_csv
 

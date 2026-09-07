@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-
 from core import backtest_engine
 from core.grid_engine import _load_backend, supports_fast_grid
 from core.optuna_engine import OptimizationConfig

@@ -9,7 +9,6 @@ from typing import Any
 import pandas as pd
 import pytest
 
-
 from core.backtest_engine import load_data, prepare_dataset_with_warmup
 from strategies.s01_trailing_ma.strategy import S01Params, S01TrailingMA
 from strategies.s03_reversal_v10.strategy import S03ReversalV10

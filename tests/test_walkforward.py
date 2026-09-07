@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-
 from core import metrics, storage
 from core.walkforward_engine import (
     ISPipelineResult,

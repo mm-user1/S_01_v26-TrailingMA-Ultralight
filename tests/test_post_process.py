@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-
 from core.post_process import (
     PostProcessConfig,
     _ft_worker_entry,

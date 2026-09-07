@@ -25,7 +25,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Any
 
-
 import pandas as pd
 
 from core.backtest_engine import load_data, prepare_dataset_with_warmup

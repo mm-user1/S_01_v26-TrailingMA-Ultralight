@@ -1,4 +1,4 @@
-﻿# Tests
+# Tests
 
 Run from the repository root using the configured project interpreter. On Windows:
 
@@ -55,11 +55,56 @@ baseline/contract checks in fast. A subprocess alone does not justify `slow`.
 Full always includes slow tests. Keep the existing `regression` marker for evidence
 selection; collection output and in-code markers own the current inventory.
 
+## Test design and server ownership
+
+Test observable behavior, including success, validation failures, and boundaries.
+Use isolated mutable state and restore it after each test. Preserve numerical
+oracles, tolerances, candidate order, parity checks, and negative cases. V1 supports
+Optuna and Grid; new V2 Optimize/WFA requests require explicit Grid, while historical
+V2 Optuna reads and supported replay remain compatible. Ordinary helpers must not
+mutate global JIT settings; interpreted oracles require separately configured
+processes. Tests never write protected application data.
+
+The former server module is now `tests/server`, with these responsibilities:
+
+| Module | Ownership |
+| --- | --- |
+| `test_ui_contracts.py` | Source-text UI/readiness, bootstrap and logging |
+| `test_run.py` | Strategy/optimizer policy, configuration and cancellation |
+| `test_runtime.py` | Runtime adapter, validation precedence, dates and backtest projection |
+| `test_grid.py` | Grid metadata and preview HTTP contracts |
+| `test_grid_settings.py` | Stored Grid display, constraints and memoization |
+| `test_wfa.py` | WFA construction, months, adaptive fields and execution routes |
+| `test_data.py` | CSV import and stored WFA details/equity |
+| `test_queue.py` | Queue persistence, transport and non-mutating reads |
+| `test_analytics.py` | Analytics summary, equity and sets |
+| `test_export.py` | Stored execution, trade downloads and Lancelot compatibility |
+
+Keep tests independent of other test modules. The package-local `conftest.py`
+provides the function-scoped client for the existing Flask app and restores
+`TESTING`; root fixtures continue to isolate storage, journals, Queue and CSV roots.
+Keep single-owner builders local. Import shared builders explicitly with
+`from ._helpers import ...`; they return fresh mutable values and own the package's
+repository-root constant for tracked source/sample reads. Register assertion-bearing
+shared modules with `pytest.register_assert_rewrite` in the local conftest **before**
+importing them, using their actual qualified name (`server._helpers`). Keep the
+package marker empty. Do not import conftest or add test-to-test imports.
+
+```powershell
+& $py tools/run_tests.py -- tests/server
+& $py tools/run_tests.py -- tests/server/test_runtime.py
+& $py tools/run_tests.py -- tests/server --co
+& $py tools/run_tests.py -- tests/v2/test_v2_grid_identity.py::test_tz64a_request_runtime_row_digests_and_identity_pins
+```
+
+The last case remains slow and preserves request normalization, row digests and
+identity pins without requiring the server client.
+
 ## Isolation, preflight, and retention
 
 `tools/run_tests.py` uses only the standard library and launches pytest with
 `sys.executable`, the repository cwd, and its tracked pytest configuration.
-Everything after `--` is pytest input. Every mode rejects nonblank `PYTEST_ADDOPTS`:
+Supported options and targets after `--` are pytest input. Every mode rejects nonblank `PYTEST_ADDOPTS`:
 unset it and pass intentional options explicitly after `--`. Named fast/full modes
 also reject nonempty `NUMBA_DISABLE_JIT` other than `0`; unset it or use `0`.
 The launcher never silently changes JIT or thread counts.
@@ -68,6 +113,19 @@ The launcher owns `--basetemp`, `cache_dir`, and configuration selection. Altern
 configs, `addopts` overrides, and argument files are rejected because they can
 hide selectors or path overrides. Advanced configuration can use prepared raw
 pytest below. Disabling the cache provider (`-p no:cacheprovider`) is allowed.
+
+Use individual short switches or ordinary `-qq`/`-vv` repetitions. The value-taking
+options `-k`, `-m`, `-o`, `-p`, `-r`, and `-W` accept separate or attached values:
+`-kclock`, focused `-mslow`, `-ra`/`-rs`, `-o console_output_style=count`, and
+`-pno:cacheprovider` work. Consumed values are opaque to grouping checks;
+`-po:cacheprovider` means the plugin name `o:cacheprovider`, whose existence pytest
+decides. Safe ini overrides remain supported. Both exact aliases `--co` and
+`--collect-only` work; abbreviations of forbidden long options remain forbidden.
+Mixed clusters such as `-qm`, `-qocache_dir=...`, `-qc`, `-vs` and `-sx` are
+rejected before run preparation: separate the switches or use prepared raw pytest.
+The launcher does not support a second `--` positional terminator. Unfamiliar
+advanced forms also belong in prepared raw pytest. This bounded grammar does not
+sandbox plugins: explicit `-p` and `PYTEST_PLUGINS` retain pytest semantics.
 
 Default root: `repository_root.parent / "merlin-tests"`. Override with
 `MERLIN_TEST_ROOT` when needed. The resolved root must be outside every Git
@@ -97,6 +155,14 @@ failure preserves a passing exit code and reports the retained directory. Shared
 caches and other runs are never cleaned. The PowerShell `tools/run_pytest.ps1`
 shim forwards ordinary pytest arguments in focused mode and supports `-KeepTemp`;
 it retains its configured interpreter selection (`MERLIN_PYTHON` override).
+Pass pytest switches explicitly as an array: PowerShell otherwise binds bare `-k`
+to `KeepTemp` and bare `-v` to its common `Verbose` parameter.
+
+```powershell
+.\tools\run_pytest.ps1 -PytestArgs @('-v', '-k', 'core_logger_console_handler_is_configured_once', 'tests/server')
+```
+
+Use `-KeepTemp` separately; prefer the Python launcher for ordinary commands.
 
 Numba cache reuse does not guarantee invalidation of dependencies in other files
 or compile-time globals; see [Numba caching limitations](https://numba.readthedocs.io/en/stable/developer/caching.html#caching-limitations).
@@ -111,6 +177,16 @@ $env:MERLIN_TEST_ROOT = Join-Path $env:LOCALAPPDATA ("Temp\merlin-fast-" + [guid
 & $py tools/run_tests.py fast -- --durations=20
 & $py tools/run_tests.py fast -- --durations=20
 ```
+
+For organization-only acceptance, reuse applicable cold evidence and let focused
+checks warm the external shared cache before unfiltered fast/full gates. The Lab
+two-process smoke has a 300-second child timeout that has failed on a cold,
+constrained one-vCPU host. If that known timeout recurs, retain its failed log,
+confirm the unmodified case passes with the warmed cache, then rerun the affected
+unfiltered gate successfully. A focused warm pass alone does not repair a failed
+suite result. Investigate other failures or a repeated warm failure; do not shorten
+the workload, skip it, disable JIT, or change its timeout. Record warmup, cache/host
+conditions and failed attempts. Warm acceptance does not certify cold-start timing.
 
 ## Prepared raw pytest and coverage
 

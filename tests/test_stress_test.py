@@ -2,7 +2,6 @@ import json
 
 import numpy as np
 
-
 from core.post_process import (
     StressTestConfig,
     StressTestResult,

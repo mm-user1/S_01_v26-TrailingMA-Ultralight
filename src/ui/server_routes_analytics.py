@@ -4,7 +4,6 @@ import re
 import time
 from datetime import datetime, timezone
 from http import HTTPStatus
-from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from flask import jsonify, render_template, request

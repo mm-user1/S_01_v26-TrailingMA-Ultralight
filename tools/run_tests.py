@@ -22,7 +22,9 @@ def parse_args(argv):
         "omit mode for focused pytest arguments after --.",
         epilog="Artifacts: MERLIN_TEST_ROOT or ../merlin-tests, outside any Git worktree. "
         "Caches persist. Successful run directories are removed unless --keep-temp; "
-        "failures and interruptions are retained. Unset PYTEST_ADDOPTS and pass options after --.",
+        "failures and interruptions are retained. Unset PYTEST_ADDOPTS and pass options after --. "
+        "Use separate short switches (or -qq/-vv); attached values for -k/-m/-o/-p/-r/-W "
+        "are supported. Ambiguous clusters and a second -- require prepared raw pytest.",
     )
     parser.add_argument("mode", nargs="?", choices=("fast", "full"))
     parser.add_argument("--keep-temp", action="store_true")
@@ -37,22 +39,36 @@ def validate_options(args, env):
         raise ValueError("Unset PYTEST_ADDOPTS and pass intentional pytest options explicitly after --.")
     if args.mode and env.get("NUMBA_DISABLE_JIT", "") not in ("", "0"):
         raise ValueError("fast/full require JIT: unset NUMBA_DISABLE_JIT or set it to 0.")
-    tokens = args.pytest_args
-    for index, token in enumerate(tokens):
-        option = token.split("=", 1)[0]
+    # Pytest expands argument files before parsing option values.
+    for token in args.pytest_args:
+        if token == "--":
+            raise ValueError("A second -- positional terminator is not supported in launcher passthrough; "
+                             "use prepared raw pytest.")
         if token.startswith("@"):
             raise ValueError("Pass pytest arguments directly after --; argument files can hide overrides.")
+    tokens = iter(args.pytest_args)
+    for token in tokens:
+        option = token.split("=", 1)[0]
+        if option in {"--co", "--collect-only"}:
+            continue
         if (option.startswith("--") and any(name.startswith(option) for name in (
                 "--basetemp", "--config-file", "--rootdir"))) or token.startswith("-c") and not token.startswith("--"):
             raise ValueError(f"Runner owns isolation/configuration; forbidden pytest option: {token}")
-        if args.mode and (token.startswith("-m") and not token.startswith("--") or
-                          option.startswith("--") and "--markexpr".startswith(option)):
-            raise ValueError("-m is reserved for fast/full; use focused mode for custom markers.")
         ini = None
-        if token == "-o" or option.startswith("--") and "--override-ini".startswith(option):
-            ini = token.split("=", 1)[1] if "=" in token else (tokens[index + 1] if index + 1 < len(tokens) else "")
-        elif token.startswith("-o") and not token.startswith("--"):
-            ini = token[2:].removeprefix("=")
+        if option.startswith("--") and "--override-ini".startswith(option):
+            ini = token.split("=", 1)[1] if "=" in token else next(tokens, "")
+        elif token.startswith("-") and not token.startswith("--"):
+            short = token[:2]
+            if short in {"-k", "-m", "-o", "-p", "-r", "-W"}:
+                # Values are opaque: e.g. -po:cacheprovider is a plugin name.
+                value = token[2:] if len(token) > 2 else next(tokens, "")
+                if short == "-m" and args.mode:
+                    raise ValueError("-m is reserved for fast/full; use focused mode for custom markers.")
+                if short == "-o":
+                    ini = value.removeprefix("=")
+            elif len(token) > 2 and not (set(token[1:]) == {"q"} or set(token[1:]) == {"v"}):
+                raise ValueError(f"Ambiguous short options: {token}. Separate the options "
+                                 "or use prepared raw pytest.")
         if ini is not None and ini.split("=", 1)[0].strip() in {"cache_dir", "addopts"}:
             raise ValueError(f"Runner owns cache_dir/addopts; forbidden override: {ini}")
 
