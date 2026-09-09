@@ -180,6 +180,58 @@ Current plans publish
 declared config order. It does not rewrite config metadata. Numeric request
 ranges do not independently redefine V2 granularity.
 
+### Optional numeric parameter ties
+
+`optimization_rules.parameter_tie_groups` declares groups with `id`, `label`,
+`description`, and independent `[source, target]` numeric pairs. The initial
+capability accepts matching numeric signal types with the same finite declared
+bounds. Runtime fields, selectors, dependencies, overlapping pairs, chains,
+cycles, bool/select parameters, malformed declarations and unknown selections
+fail validation. This is a bounded equality facility, not a constraint solver.
+
+The request list `grid_v2_enabled_tie_groups` defaults to `[]` and becomes the
+immutable `GridV2Settings.enabled_tie_groups` tuple. Enabling a group removes
+the target's independent axis: the source owns its domain or validated fixed
+value. Target editing values/ranges do not intersect that domain or alter the
+effective plan. Redundant target enablement is normalized away; target-only
+enablement is rejected. Generated source values must fit the target domain.
+An explicitly empty `enabled_axes=()` in the direct planner yields one fixed
+expanded candidate; HTTP/UI/OptimizationConfig empty-axis behavior is unchanged.
+
+Preview multiplies reduced dimensions without building a table. Full plans
+expand those dimensions directly; sampled K < N requests use the existing
+sampler on reduced dimensions and expand only the delivered rows. Saturation
+uses the full builder. Both builders and scalar/materialized table accessors
+resolve target values. Independent axis codes omit derived targets. The
+sampled block-disjointness proof never treats a derived target seed as a fixed
+discriminator. Rebasing carries the same resolution metadata and clears lazy
+parameter caches through a new table instance.
+
+Expanded candidate semantic and value-based signal/dataprep keys contain both
+members and exclude tie selection. Internal within-plan grouping signatures
+may encode independent axes and resolved values differently; cross-plan equality
+is required of resolved value keys, not those internal codes. Enabled ties add
+`grid_v2_parameter_ties_v1` to plan identity, including selected groups and pairs;
+effective domains remain in the existing identity payload. Absent/empty ties
+retain existing versions, candidate order, semantic keys and pinned fingerprints.
+
+The config-driven checkbox defaults off, mirrors disabled target controls and
+marks source labels as common L/S. Disabling restores both members' captured
+asymmetric values and optimization settings. Queue's existing `uiSnapshot`
+adds optional `parameterTies: {strategyId, groups}` restoration data. Request
+`item.config.grid_v2_enabled_tie_groups` alone owns execution. Queue applies
+base controls and ordinary snapshots first, validates restoration membership,
+then resolves active groups from the request. Missing restoration uses supplied
+independent values/defaults. Missing legacy selection means off. Reads do not
+rewrite saved items; stale asynchronous configuration responses are ignored.
+
+Studies save the canonical selection and `grid_config.enabled_tie_groups`.
+Stored Preview can recover from the nested field alone; canonical `[]` wins
+over stale nested facts. WFA reuses the reduced plan and transports expanded
+IS/OOS parameters. Manual/Forward/OOS replay never reapplies study ties.
+Presets and Strategy Lab tie certification are outside this release. Discovery
+of the strategy does not certify tie-enabled Strategy Lab workflows.
+
 ## Compiled execution and resources
 
 Compiled Grid uses core-owned config packing and population batching. Full

@@ -43,8 +43,9 @@ if ($jsTests.Count -eq 0) { throw 'No JavaScript pytest wrappers found.' }
 if ($LASTEXITCODE -ne 0) { throw 'JavaScript wrapper tests failed.' }
 ```
 
-All six JS wrappers belong in fast. They invoke Node with script-specific inputs;
-they skip when Node is absent, which leaves JS acceptance pending. Compiled gates
+All JS wrappers belong in fast. They invoke Node with script-specific inputs.
+Existing wrappers skip when Node is absent, leaving JS acceptance pending;
+the parameter-tie certification wrapper requires Node and fails if absent. Compiled gates
 require Numba and actual compiled backend execution, not reference fallback.
 Explicit module-level JIT-off and missing-dependency guards remain supported for
 focused/raw use; their skips cannot certify compiled execution.

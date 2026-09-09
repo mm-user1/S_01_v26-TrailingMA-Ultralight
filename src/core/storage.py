@@ -2584,6 +2584,8 @@ def save_grid_study_to_db(
     """
 
     config_payload = _prepare_study_config_payload(config)
+    if hasattr(grid_settings, "enabled_tie_groups"):
+        config_payload.setdefault("grid_config", {})["enabled_tie_groups"] = list(grid_settings.enabled_tie_groups)
 
     def json_safe(value: Any) -> Any:
         if isinstance(value, dict):

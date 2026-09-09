@@ -148,6 +148,13 @@ runtime validation; Queue reads preserve invalid or legacy state for explicit
 user handling. Presets configure editable UI state but do not override V2's
 effective Grid-only policy.
 
+V2 configs may expose numeric equality groups such as **Symmetric L/S**.
+These reduce independent Grid axes while candidates retain explicit values.
+Queue stores executable group selection separately from the optional UI
+snapshot needed to restore asymmetric controls. Stored-study Preview restores
+the selection; replay uses explicit candidate parameters. Presets do not
+persist parameter ties.
+
 Trade exports cover the supported IS, Forward Test, OOS, Manual, and WFA
 surfaces. Lancelot partial-bundle export is a narrow legacy integration for
 `s03_reversal_v10`, not a general V2 import requirement.
@@ -201,6 +208,7 @@ complete current strategy matrix in general documentation.
 | `s03_reversal_v10` | S03 Reversal | `v10` | V1 | Close-count/T-Bands reversal strategy with V1 Fast Grid |
 | `s03_reversal_v11` | S03 Reversal | `v11` | V1 | v10 behavior plus optional Emergency SL and V1 Fast Grid |
 | `s03_reversal_v11_regime_er_b2` | S03 Reversal v11 Regime-ER B2 | `v11-regime-er-b2` | V2 | Regime-ER S03 signals on generic signal-reversal execution |
+| `s03_reversal_v16_4_a_adaptive_ma_b2` | S03 Reversal v16-4-A Adaptive MA B2 | `v16-4-a-b2` | V2 | Four adaptive MAs with combined Close Count/T Bands and optional symmetric Grid planning |
 | `s04_stochrsi` | S04 StochRSI | `v02` | V1 | StochRSI swing entries with swing-based stops |
 | `s06_r_trend_v02` | S06 R-Trend | `v02` | V1 | Williams %R trend/reversal entries with bracket or MA-trail risk management and V1 Fast Grid |
 | `s06_r_trend_v02_b2` | S06 R-Trend B2 | `v02-b2` | V2 | S06 v02 signals on generic position execution |

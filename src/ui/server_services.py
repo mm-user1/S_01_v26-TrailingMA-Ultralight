@@ -1294,6 +1294,11 @@ def _normalize_v2_optimizer_payload(
                 "only; set optimization_mode='grid'."
             ),
         )
+    from core.engine_v2.parameter_ties import enabled_parameter_ties
+    try:
+        enabled_parameter_ties(context.config, payload.get("grid_v2_enabled_tie_groups", []))
+    except ValueError as exc:
+        raise _validation_error(code="V2_INVALID_PARAMETER_TIES", strategy_id=context.strategy_id, path="grid_v2_enabled_tie_groups", message=str(exc)) from exc
     _validate_v2_optimizer_runtime_paths(context, payload)
     fixed_params = payload.get("fixed_params")
     runtime_members = _runtime_members_from_mapping(fixed_params, prefix="fixed_params")
@@ -1794,6 +1799,7 @@ def _derive_grid_preview(config: Dict[str, Any], study: Dict[str, Any]) -> Dict[
     grid_config = _parse_json_dict(payload.get("grid_config"))
     aliases = {
         "grid_v2_planning_policy": ("planning_policy",),
+        "grid_v2_enabled_tie_groups": ("enabled_tie_groups",),
         "grid_budget": ("budget",),
         "grid_seed": ("seed",),
         "grid_top_candidates": ("top_candidates",),
@@ -2228,6 +2234,15 @@ def build_grid_settings_view(
                 },
             ]
         )
+    selected_ties = _grid_config_value(config, "grid_v2_enabled_tie_groups", "enabled_tie_groups")
+    if isinstance(selected_ties, list) and selected_ties:
+        from strategies import get_strategy_config
+        try:
+            groups = get_strategy_config(str(study.get("strategy_id") or config.get("strategy_id")) ).get("optimization_rules", {}).get("parameter_tie_groups", [])
+        except ValueError:
+            groups = []
+        labels = {group["id"]: group.get("label", group["id"]) for group in groups}
+        rows.append({"key": "Linked parameters", "val": ", ".join(labels.get(name, name) for name in selected_ties)})
     rows.append({"key": "Constraints", "val": constraints_label})
     if not is_wfa_grid:
         rows.append(
@@ -2920,12 +2935,23 @@ def _build_optimization_config(
     if not isinstance(enabled_params, dict):
         raise ValueError("enabled_params must be a dictionary.")
 
+    from core.engine_v2.parameter_ties import enabled_parameter_ties
+    from strategies import get_strategy_config
+    requested_ties = payload.get("grid_v2_enabled_tie_groups", [])
+    tie_pairs = enabled_parameter_ties(get_strategy_config(strategy_id), requested_ties) if requested_ties != [] else ()
+    tied_targets = {target for _, target in tie_pairs}
+    for source, target in tie_pairs:
+        if enabled_params.get(target) and not enabled_params.get(source):
+            raise ValueError(f"Tied target '{target}' cannot be optimized alone; use shared source '{source}'.")
+
     param_ranges_raw = payload.get("param_ranges", {})
     if not isinstance(param_ranges_raw, dict):
         raise ValueError("param_ranges must be a dictionary.")
     param_ranges = {}
     select_range_options: Dict[str, List[Any]] = {}
     for name, values in param_ranges_raw.items():
+        if name in tied_targets:
+            continue
         if isinstance(values, dict):
             range_type = str(values.get("type", "")).lower()
             if range_type in {"select", "options"}:
@@ -3317,6 +3343,7 @@ def _build_optimization_config(
         n_startup_trials=n_startup_trials,
         coverage_mode=coverage_mode,
         grid_v2_planning_policy=grid_v2_planning_policy,
+        grid_v2_enabled_tie_groups=deepcopy(payload.get("grid_v2_enabled_tie_groups", [])),
         grid_budget=grid_budget,
         grid_seed=grid_seed,
         grid_top_candidates=grid_top_candidates,

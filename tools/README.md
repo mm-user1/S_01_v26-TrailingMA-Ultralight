@@ -43,6 +43,15 @@ benchmark payload do not independently redefine V2 grid granularity.
 `inspect-wfa-db` uses SQLite read-only immutable mode and is for frozen
 snapshots, not a live database with possible WAL frames.
 
+`benchmark_s03_adaptive_ma.py --output <external-directory>` verifies the
+frozen S03 adaptive-MA hashes and references, emits full per-trade comparisons
+and measured warmup signal differences, and measures both Previews, the full
+2,800-row symmetric run and a 128-row asymmetric sample across every MA. It
+uses one worker, a 32 MB cache budget, and two executions per plan. Output and
+Numba/Python caches remain external. It never constructs the 196,000-row full
+asymmetric population or changes frozen inputs. See the performance document
+for the measured environment, cold/warm distinction and process-memory scope.
+
 ## Isolated tests
 
 `run_tests.py` is the canonical standard-library launcher. It uses the current

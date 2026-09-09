@@ -310,8 +310,12 @@ def validate_parameter_roles(config: Mapping[str, Any]) -> None:
         return
     try:
         validate_v2_runtime_declarations(config)
+        from .parameter_ties import parameter_tie_groups
+        parameter_tie_groups(config)
     except V2RuntimeValidationError as exc:
         raise ProfileValidationError(exc.diagnostics) from exc
+    except ValueError as exc:
+        raise ProfileValidationError(str(exc), strategy_id=_strategy_label(config), path="optimization_rules.parameter_tie_groups") from exc
     strategy_id = _strategy_label(config)
     params = _parameters(config)
     roles = {str(name): _role_for(str(name), spec, strategy_id, required=_is_optimized(spec)) for name, spec in params.items()}

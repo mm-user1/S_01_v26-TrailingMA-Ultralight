@@ -7,6 +7,8 @@ signal/dataprep hooks.
 
 from __future__ import annotations
 
+from core.engine_v2.parameter_ties import enabled_parameter_ties, expand_parameter_ties
+
 import hashlib
 import inspect
 import itertools
@@ -156,6 +158,7 @@ class GridV2Settings:
     allocation_method: str = "auto_sqrt_space"
     min_quota: float = 0.10
     manual_percents: tuple[tuple[str, float], ...] = ()
+    enabled_tie_groups: tuple[str, ...] = ()
 
     @property
     def top_candidates(self) -> int:
@@ -317,6 +320,7 @@ class GridV2CandidateTable:
     enumerated_candidate_count: int
     semantic_dedup_count: int
     per_variant_counts: Mapping[str, int]
+    parameter_ties: tuple[tuple[str, str], ...] = ()
     _params_cache: dict[int, Mapping[str, Any]] = field(default_factory=dict, init=False, repr=False)
     _semantic_key_cache: dict[int, str] = field(default_factory=dict, init=False, repr=False)
     _canonical_identity_cache: dict[int, str] = field(default_factory=dict, init=False, repr=False)
@@ -403,11 +407,14 @@ class GridV2CandidateTable:
             code = int(self.axis_value_codes[idx, column]) if self.axis_value_codes.shape[1] else -1
             if code >= 0:
                 params[name] = self.parameter_domains[name].values[code]
+        expand_parameter_ties(params, self.parameter_ties)
         materialized = _jsonable_mapping(params)
         self._params_cache[idx] = materialized
         return materialized
 
     def param_value_for_index(self, index: int, name: str) -> Any:
+        if self.parameter_ties:
+            name = next((source for source, target in self.parameter_ties if target == name), name)
         idx = self.validate_index(index)
         if self.params_by_row is not None:
             return _jsonable_value(self.params_by_row[idx].get(name))
@@ -735,6 +742,7 @@ class _GridV2PlanBlock:
     axis_names: tuple[str, ...]
     # Enabled axes fixed by a logical block remain diagnostic-only state.
     fixed_axis_names: tuple[str, ...] = ()
+    parameter_ties: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -773,6 +781,7 @@ class _GridV2PlanPrelude:
     mode_labels: Mapping[str, str]
     raw_candidate_count: int
     planning: _GridV2PlanningResolution
+    parameter_ties: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1047,6 +1056,12 @@ def _grid_v2_plan_prelude(
 ) -> _GridV2PlanPrelude:
     from core.grid_engine import normalize_grid_v2_planning_policy, parse_grid_budget
 
+    enabled_parameter_ties(config, settings.enabled_tie_groups)
+    if settings.enabled_tie_groups:
+        settings = replace(settings, enabled_tie_groups=tuple(
+            group["id"] for group in config["optimization_rules"]["parameter_tie_groups"]
+            if group["id"] in settings.enabled_tie_groups
+        ))
     supplied = base_params or {}
     reserved_option_names = {
         f"{name}_options" for name in V2_RESERVED_RUNTIME_PARAM_NAMES
@@ -1091,7 +1106,30 @@ def _grid_v2_plan_prelude(
         selector_values,
         selected_variants,
     )
+    pairs = enabled_parameter_ties(config_copy, settings.enabled_tie_groups)
+    if pairs:
+        enabled = set(settings.enabled_axes) if settings.enabled_axes is not None else {
+            name for name, spec in params_spec.items()
+            if spec.get("optimize", {}).get("enabled", False) and _axis_enabled(name, spec.get("optimize", {}), settings)
+        }
+        unknown = enabled - set(params_spec)
+        if unknown:
+            raise ValueError(f"Grid V2 enabled_axes contains unknown parameter(s): {sorted(unknown)}.")
+        for source, target in pairs:
+            if target in enabled and source not in enabled:
+                raise ValueError(f"Tied target '{target}' cannot be optimized alone; use shared source '{source}'.")
+            fixed_params[target] = fixed_params[source]
+        settings = replace(settings, enabled_axes=tuple(name for name in params_spec if name in enabled and name not in {t for _, t in pairs}))
     domains = _build_parameter_domains(config_copy, settings, fixed_params, profile)
+    for source, target in pairs:
+        source_domain = domains[source]
+        spec = params_spec[target]
+        for value in source_domain.values:
+            if not spec["min"] <= value <= spec["max"]:
+                raise ValueError(f"Shared source '{source}' is outside target '{target}' domain.")
+        domains[target] = replace(domains[target], values=source_domain.values, default=source_domain.default, is_axis=False, source="parameter_tie")
+        fixed_params[source] = source_domain.default if source_domain.is_axis else source_domain.values[0]
+        fixed_params[target] = fixed_params[source]
     return _grid_v2_plan_prelude_from_parts(
         config=config_copy,
         settings=settings,
@@ -1174,6 +1212,7 @@ def _grid_v2_plan_prelude_from_parts(
         mode_labels=mode_labels,
         raw_candidate_count=raw_count,
         planning=planning,
+        parameter_ties=enabled_parameter_ties(config, settings.enabled_tie_groups),
     )
 
 
@@ -1336,7 +1375,8 @@ def _prove_sampled_blocks_semantically_disjoint(
                 continue
             shared_active = set(left.active_names) & set(right.active_names)
             fixed_discriminator = any(
-                name not in left.axis_names
+                name not in {target for _, target in left.parameter_ties + right.parameter_ties}
+                and name not in left.axis_names
                 and name not in right.axis_names
                 and _hashable_jsonable_value(left.seed_params.get(name))
                 != _hashable_jsonable_value(right.seed_params.get(name))
@@ -1391,6 +1431,7 @@ def _grid_v2_plan_identity_signature(plan: GridV2Plan) -> Any:
 def _grid_v2_planning_identity_payload(prelude: _GridV2PlanPrelude) -> dict[str, Any]:
     planning = prelude.planning
     return {
+        **({"grid_v2_parameter_ties_v1": {"groups": list(prelude.settings.enabled_tie_groups), "pairs": prelude.parameter_ties}} if prelude.parameter_ties else {}),
         "engine": GRID_V2_ENGINE_VERSION,
         "plan_identity_schema_version": GRID_V2_PLAN_IDENTITY_SCHEMA_VERSION,
         "semantic_identity_schema_version": GRID_V2_SEMANTIC_IDENTITY_SCHEMA_VERSION,
@@ -1491,6 +1532,7 @@ def _rebase_grid_v2_plan(cached_plan: GridV2Plan, prelude: _GridV2PlanPrelude) -
     cached_table = cached_plan.candidate_table
     rebased_table = replace(
         cached_table,
+        parameter_ties=prelude.parameter_ties,
         profile=prelude.profile,
         parameter_domains=prelude.domains,
         axis_names=prelude.axis_names,
@@ -1619,6 +1661,7 @@ def _build_candidate_table(
             enumerated_count += 1
             params = dict(block.seed_params)
             params.update(zip(block.axis_names, values))
+            expand_parameter_ties(params, block.parameter_ties)
             semantic_identity = _semantic_identity_tuple(
                 config=config,
                 profile=profile,
@@ -1657,6 +1700,7 @@ def _build_candidate_table(
         axis_code_array = axis_code_array.reshape((len(axis_value_codes), len(axis_names)))
 
     return GridV2CandidateTable(
+        parameter_ties=enabled_parameter_ties(config, settings.enabled_tie_groups),
         strategy_id=str(config.get("id", profile.strategy_id)),
         strategy_version=str(config.get("version", "")),
         profile=profile,
@@ -1740,6 +1784,7 @@ def _build_sampled_candidate_table(
                 (name, domains[name].values[int(code)])
                 for name, code in zip(block.axis_names, codes)
             )
+            expand_parameter_ties(params, block.parameter_ties)
             semantic_identity = _semantic_identity_tuple(
                 config=config,
                 profile=profile,
@@ -1780,6 +1825,7 @@ def _build_sampled_candidate_table(
     elif axis_code_array.ndim == 1:
         axis_code_array = axis_code_array.reshape((len(axis_value_codes), len(axis_names)))
     table = GridV2CandidateTable(
+        parameter_ties=prelude.parameter_ties,
         strategy_id=str(config.get("id", profile.strategy_id)),
         strategy_version=str(config.get("version", "")),
         profile=profile,
@@ -3380,8 +3426,17 @@ def _build_planning_blocks(
                 settings=settings,
                 block_fixed_names=tuple(bool_values),
             )
+            pairs = enabled_parameter_ties(config, settings.enabled_tie_groups)
+            if pairs:
+                # Equality filtering visits a pair at its earliest original axis.
+                sources = {target: source for source, target in pairs}
+                variant_axis_names = tuple(dict.fromkeys(
+                    sources.get(name, name) for name in active_names
+                    if sources.get(name, name) in variant_axis_names
+                ))
             blocks.append(
                 _GridV2PlanBlock(
+                    parameter_ties=pairs,
                     name=block_name,
                     label=block_label,
                     variant_name=variant_name,

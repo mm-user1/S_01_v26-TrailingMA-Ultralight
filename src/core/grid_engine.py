@@ -514,7 +514,11 @@ def _settings_from_config(config: OptimizationConfig) -> GridSettings:
 
 def _grid_v2_settings_from_config(config: OptimizationConfig):
     from .grid_v2 import GridV2Settings
+    from .engine_v2.parameter_ties import enabled_parameter_ties
+    from strategies import get_strategy_config
 
+    requested_ties = getattr(config, "grid_v2_enabled_tie_groups", [])
+    enabled_parameter_ties(get_strategy_config(config.strategy_id), requested_ties)
     enabled_params = getattr(config, "enabled_params", {}) or {}
     enabled_axes = tuple(
         name for name, enabled in enabled_params.items()
@@ -530,6 +534,7 @@ def _grid_v2_settings_from_config(config: OptimizationConfig):
         slow_enrich_selected=False,
         enabled_variants=enabled_variants,
         enabled_axes=enabled_axes or None,
+        enabled_tie_groups=tuple(requested_ties),
         prefer_compiled=bool(getattr(config, "grid_v2_prefer_compiled", True)),
         planning_policy=normalize_grid_v2_planning_policy(
             getattr(config, "grid_v2_planning_policy", "full")
@@ -809,6 +814,10 @@ def _validate_fast_objective_limit(objectives: Sequence[str]) -> None:
 
 
 def validate_grid_config(config: OptimizationConfig) -> None:
+    if getattr(config, "grid_v2_enabled_tie_groups", []) != []:
+        from .engine_v2.parameter_ties import enabled_parameter_ties
+        from strategies import get_strategy_config
+        enabled_parameter_ties(get_strategy_config(config.strategy_id), config.grid_v2_enabled_tie_groups)
     if not supports_fast_grid(config.strategy_id):
         raise ValueError(f"Grid mode is not supported for strategy '{config.strategy_id}'.")
 
@@ -880,6 +889,7 @@ def _preview_grid_v2_parameter_space(config: OptimizationConfig) -> Dict[str, An
         "sampler_version": preview.sampler_version,
         "allocator_version": preview.allocator_version,
         "plan_identity_schema_version": preview.plan_identity_schema_version,
+        "enabled_tie_groups": list(settings.enabled_tie_groups),
         "requested_planning_policy": preview.requested_planning_policy,
         "effective_planning_policy": preview.effective_planning_policy,
         "effective_policy_reason": preview.effective_policy_reason,

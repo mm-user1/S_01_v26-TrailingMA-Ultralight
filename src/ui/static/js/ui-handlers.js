@@ -1715,6 +1715,7 @@ function buildGridConfig(state) {
     objectives: fastObjectiveConfig.objectives,
     primary_objective: fastObjectiveConfig.primary_objective,
     grid_v2_planning_policy: planningPolicy,
+    grid_v2_enabled_tie_groups: typeof getEnabledParameterTieGroups === 'function' ? getEnabledParameterTieGroups() : [],
     grid_budget: budget,
     grid_seed: Number.isFinite(seedRaw) ? Math.max(0, Math.round(seedRaw)) : 42,
     grid_top_candidates: Number.isFinite(topRaw) ? Math.max(1, Math.min(500, Math.round(topRaw))) : 10,
@@ -1734,6 +1735,14 @@ function buildGridConfig(state) {
     grid_slow_primary_objective: slowObjectiveConfig.primary_objective
   };
 
+  if (typeof declaredParameterTieGroups === 'function') {
+    declaredParameterTieGroups().filter((group) => config.grid_v2_enabled_tie_groups.includes(group.id)).forEach((group) => {
+      group.pairs.forEach(([, target]) => {
+        config.enabled_params[target] = false;
+        delete config.param_ranges[target];
+      });
+    });
+  }
   return config;
 }
 
@@ -2510,6 +2519,7 @@ function syncOptimizerModeUI() {
     syncGridObjectiveAndConstraintUi();
   }
 
+  if (typeof syncParameterTieControls === 'function') syncParameterTieControls();
   if (effectiveGrid) {
     scheduleGridPreviewUpdate();
   }

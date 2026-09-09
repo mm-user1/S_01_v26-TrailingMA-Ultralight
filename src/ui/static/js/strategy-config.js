@@ -6,6 +6,120 @@
 window.currentStrategyId = null;
 window.currentStrategyConfig = null;
 window.currentStrategyConfigId = null;
+let parameterTieState = {};
+let strategyConfigRequest = 0;
+
+function declaredParameterTieGroups() {
+  return window.currentStrategyConfig?.optimization_rules?.parameter_tie_groups || [];
+}
+
+function parameterTieControls(name) {
+  return [`backtest_${name}`, `opt-${name}`, `opt-${name}-from`, `opt-${name}-to`, `opt-${name}-step`]
+    .map((id) => document.getElementById(id));
+}
+
+function captureParameterTieFields(group) {
+  const fields = {};
+  group.pairs.flat().forEach((name) => parameterTieControls(name).forEach((control) => {
+    if (control) fields[control.id] = control.type === 'checkbox'
+      ? { checked: control.checked } : { value: control.value };
+  }));
+  return fields;
+}
+
+function syncParameterTieControls() {
+  declaredParameterTieGroups().forEach((group) => {
+    const active = Boolean(parameterTieState[group.id]?.active);
+    const checkbox = document.getElementById(`grid-tie-${group.id}`);
+    if (checkbox) checkbox.checked = active;
+    group.pairs.forEach(([source, target]) => {
+      const sourceControls = parameterTieControls(source);
+      sourceControls.slice(2).forEach((control) => {
+        if (control) control.disabled = !sourceControls[1]?.checked;
+      });
+      parameterTieControls(target).forEach((control, index) => {
+        if (!control) return;
+        if (active && sourceControls[index]) {
+          control.value = sourceControls[index].value;
+          control.checked = sourceControls[index].checked;
+        }
+        control.disabled = active || (index > 1 && !document.getElementById(`opt-${target}`)?.checked);
+      });
+      const input = document.getElementById(`backtest_${source}`);
+      const fixedLabel = input?.parentElement?.querySelector('label');
+      const optLabel = document.querySelector(`label[for="opt-${source}"]`);
+      [fixedLabel, optLabel].forEach((label) => {
+        if (label) label.textContent = (window.currentStrategyConfig.parameters[source].label || source)
+          + (active ? ' (common L/S)' : '');
+      });
+    });
+  });
+}
+
+function toggleParameterTie(group, enabled) {
+  const previous = parameterTieState[group.id];
+  if (enabled && !previous?.active) {
+    parameterTieState[group.id] = { active: true, fields: captureParameterTieFields(group) };
+  } else if (!enabled && previous?.active) {
+    Object.entries(previous.fields).forEach(([id, state]) => {
+      const control = document.getElementById(id);
+      if (control) Object.assign(control, state);
+    });
+    delete parameterTieState[group.id];
+  }
+  syncParameterTieControls();
+  if (typeof resetGridPreviewState === 'function') resetGridPreviewState();
+  if (typeof scheduleGridPreviewUpdate === 'function') scheduleGridPreviewUpdate();
+}
+
+function getEnabledParameterTieGroups() {
+  return declaredParameterTieGroups().filter((group) => parameterTieState[group.id]?.active).map((group) => group.id);
+}
+
+function collectParameterTieSnapshot() {
+  return { strategyId: window.currentStrategyId, groups: JSON.parse(JSON.stringify(parameterTieState)) };
+}
+
+function applyQueueParameterTies(item) {
+  parameterTieState = {};
+  const snapshot = item.uiSnapshot?.parameterTies;
+  const savedGroups = snapshot?.strategyId === window.currentStrategyId ? snapshot.groups : {};
+  const selected = Array.isArray(item.config?.grid_v2_enabled_tie_groups) ? item.config.grid_v2_enabled_tie_groups : [];
+  declaredParameterTieGroups().forEach((group) => {
+    if (!selected.includes(group.id)) return;
+    const fields = captureParameterTieFields(group);
+    const saved = savedGroups?.[group.id]?.fields;
+    Object.keys(fields).forEach((id) => {
+      const state = saved?.[id];
+      if (state && typeof state === 'object') {
+        if ('checked' in fields[id] && typeof state.checked === 'boolean') fields[id] = { checked: state.checked };
+        if ('value' in fields[id] && ['string', 'number'].includes(typeof state.value)) fields[id] = { value: String(state.value) };
+      }
+    });
+    parameterTieState[group.id] = { active: true, fields };
+  });
+  syncParameterTieControls();
+}
+
+function renderParameterTieControls(container) {
+  parameterTieState = {};
+  declaredParameterTieGroups().forEach((group) => {
+    const label = document.createElement('label');
+    label.title = group.description || '';
+    label.className = 'opt-section-title';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.id = `grid-tie-${group.id}`;
+    checkbox.addEventListener('change', () => toggleParameterTie(group, checkbox.checked));
+    label.appendChild(checkbox);
+    label.appendChild(document.createTextNode(` ${group.label}`));
+    container.appendChild(label);
+    group.pairs.forEach(([source]) => parameterTieControls(source).forEach((control) => {
+      if (!control) return;
+      ['input', 'change'].forEach((event) => control.addEventListener(event, syncParameterTieControls));
+    }));
+  });
+}
 const STRATEGY_CONFIG_NOT_READY_MESSAGE =
   'Strategy configuration is not ready. Select another strategy or reload the page.';
 const DYNAMIC_BACKTEST_GLOBAL_PARAM_NAMES = new Set(['dateFilter', 'start', 'end', 'warmupBars']);
@@ -22,6 +136,7 @@ function isCurrentStrategyConfigReady() {
 }
 
 function clearStrategyGeneratedState() {
+  parameterTieState = {};
   window.currentStrategyConfig = null;
   window.currentStrategyConfigId = null;
 
@@ -108,13 +223,14 @@ async function handleStrategyChange() {
 }
 
 async function loadStrategyConfig(strategyId) {
+  const request = ++strategyConfigRequest;
   const requestedStrategyId = String(strategyId || '').trim();
   let provisionalConfig = null;
   clearStrategyGeneratedState();
 
   try {
     const config = await fetchStrategyConfig(requestedStrategyId);
-    if (requestedStrategyId !== window.currentStrategyId) {
+    if (request !== strategyConfigRequest || requestedStrategyId !== window.currentStrategyId) {
       return false;
     }
     if (!config || typeof config !== 'object' || !config.parameters || typeof config.parameters !== 'object') {
@@ -127,7 +243,7 @@ async function loadStrategyConfig(strategyId) {
     generateBacktestForm(config);
     generateOptimizerForm(config);
 
-    if (requestedStrategyId !== window.currentStrategyId) {
+    if (request !== strategyConfigRequest || requestedStrategyId !== window.currentStrategyId) {
       if (window.currentStrategyConfig === provisionalConfig) {
         clearStrategyGeneratedState();
       }
@@ -145,7 +261,7 @@ async function loadStrategyConfig(strategyId) {
     }
     return true;
   } catch (error) {
-    if (requestedStrategyId !== window.currentStrategyId) {
+    if (request !== strategyConfigRequest || requestedStrategyId !== window.currentStrategyId) {
       if (provisionalConfig && window.currentStrategyConfig === provisionalConfig) {
         clearStrategyGeneratedState();
       }
@@ -266,6 +382,7 @@ function generateOptimizerForm(config) {
   }
 
   console.log(`Generated optimizer form with ${totalParams} parameters`);
+  renderParameterTieControls(container);
 }
 
 function createOptimizerRow(paramName, paramDef) {

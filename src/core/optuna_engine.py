@@ -130,6 +130,7 @@ class OptimizationConfig:
     grid_slow_primary_objective: Optional[str] = None
     grid_v2_prefer_compiled: bool = True
     grid_v2_max_cache_mb: Optional[float] = None
+    grid_v2_enabled_tie_groups: List[str] = field(default_factory=list)
 
 
 @dataclass

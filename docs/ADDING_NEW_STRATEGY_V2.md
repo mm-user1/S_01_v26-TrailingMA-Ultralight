@@ -172,6 +172,23 @@ space, delivered budget, seed, allocation, and profile in any count claim.
 Use sampled planning for intentionally bounded work; never add sampling inside
 the strategy package or weaken cache estimates.
 
+### Optional equality groups
+
+For independent, always-active numeric signal pairs with matching types and
+finite supported bounds, declare `optimization_rules.parameter_tie_groups`.
+Each group supplies a unique `id`, user-facing `label`/`description`, and a list
+of `[source, target]` pairs. Sources own the shared values and optimization
+domains. Do not put a planning checkbox in strategy parameters or add tying to
+normalizers/signals. The generic planner expands every candidate explicitly.
+
+Verify disabled preservation, effective counts, fixed sources, target-only
+rejection, full order, sampled determinism, lazy accessors and resolved cache
+keys. Test request/Queue restoration and nested stored Preview. Keep restoration
+snapshots out of execution identity. Unsupported dependencies or overlapping
+pairs must fail explicitly. See the [architecture contract](engine_v2/ARCHITECTURE.md#optional-numeric-parameter-ties)
+for the request and persistence fields. Preset tie persistence and Strategy Lab
+tie certification are separate work.
+
 ## 8. Build parity and integration evidence
 
 Use layered evidence:

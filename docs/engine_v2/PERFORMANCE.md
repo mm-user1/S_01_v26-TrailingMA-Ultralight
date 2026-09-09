@@ -980,3 +980,97 @@ The paired Bracket delta is +0.38%. Signal preparation had one row throughout;
 dataprep rows were 2 for each non-Chandelier single-mode plan, 4 for Chandelier
 (two `stopLP` by two active ATR lengths), and 10 combined. Chandelier ATR length
 therefore does not create rows for modes that do not consume it.
+
+
+## TZ20-1 S03 v16-4-A Adaptive MA import (2026-09-09)
+
+Measured on Windows 10 build 19042, Intel64 Family 6 Model 158 Stepping 13,
+16 logical CPUs, Python 3.13.7, NumPy 2.3.3 and Numba 0.65.1. The process
+reported 16 available Numba threads; execution explicitly requested one
+compiled worker. No JIT flags were changed. SUI 30-minute preparation uses
+August 1 through inclusive December 1 2025 UTC, Warmup 1000, 6,857 bars and
+trade start index 1000. All four MAs participate; Emergency SL is fixed off.
+Sharpe, Daily Sharpe and SQN are enabled; two selected rows receive Slow
+reference enrichment. The signal/stack budget is 32 MiB.
+
+Reproduce from the repository root with the project interpreter and a fresh
+external output/cache directory:
+
+```powershell
+$py = 'C:\Users\mt\Desktop\Strategy\S_Python\.venv\Scripts\python.exe'
+$out = Join-Path $env:LOCALAPPDATA 'Temp\merlin-tz20-1-performance-certified'
+$env:NUMBA_CACHE_DIR = Join-Path $out 'numba'
+$env:PYTHONPYCACHEPREFIX = Join-Path $out 'pycache'
+& $py tools/benchmark_s03_adaptive_ma.py --output $out
+```
+
+`references.json` retains all reference trades/deltas and `performance.json`
+retains settings, metadata, selected semantic identities and timings. Preview
+counted 196,000 asymmetric rows in 0.000808 s and 2,800 symmetric rows in
+0.000684 s without constructing either population.
+
+| Production workload | Rows | Plan construction | Execution wall | Signal preparation | Compiled evaluation | Selected Slow |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Full symmetric, first compiled call | 2,800 | 0.153140 s | 12.801122 s | 0.795680 s | 11.583210 s | 0.124359 s |
+| Same full symmetric, warm | 2,800 | same plan | 1.392891 s | 0.776973 s | 0.242862 s | 0.122565 s |
+| Sampled asymmetric, warm | 128 | 0.008772 s | 0.504410 s | 0.425803 s | 0.011230 s | 0.050480 s |
+
+These are individual observed calls, not median claims. The other sampled
+call took 0.505918 s. The initial directory was empty; reference
+characterization had already compiled indicator/reference signatures before
+the first population call compiled the Grid kernel. Warm timings exclude
+that compilation. Timed selected Slow calls are included in execution wall
+and the engine's evaluation measurement, so the columns are not additive.
+Warm full/sample stack construction took 0.052408/0.002316 s and value-cache
+key construction 0.127318/0.005351 s.
+
+The sampled policy uses budget 128, seed 42 and default `auto_sqrt_space` allocation;
+all four MAs are present (32 samples each). The single plain block targets
+and delivers 128, with zero collisions, top-ups or shortfall. Planning versions
+are `grid_v2_planning_v1`, `balanced_discrete_lhs_pcg64_v1`, and
+`ordered_block_allocator_v1`; complete per-block metadata is retained. This
+metadata was reconstructed read-only after timing and its fingerprint checked
+against the measured plan. Full symmetric planning enumerates four independent
+signal axes and expands both right-side values. The full plan fingerprint is
+`a975735c9983d10528a23d075b9129e84445396ae966444461fec618c587f1a2`;
+the sampled fingerprint is
+`1ccf81e016887923e485923ee622765918b8e88fae50f6bf158602af7d8f7e11`.
+Both execute actual `compiled_numba`, stacked signals, and mapping packing,
+with zero legacy candidate population materialization. Selected full IDs are
+499 and 359; sampled IDs are 98 and 21. IDs are scoped to their own plans.
+
+The full run builds exactly 2,800 signal rows in three chunks, with peak 1,202
+rows and 31.993492 MiB of estimated stack resources. Its unchunked signal
+estimate is 73.240662 MiB. The sample uses one 128-row, 3.687424 MiB stack.
+Native Windows peak process working set was 379,908,096 bytes (362.31 MiB),
+covering reference characterization, JIT, both plans and executions together.
+It is not a separate candidate-table peak or a promise that total process
+memory stays within the 32 MiB signal budget.
+
+Existing planning was compared against base HEAD
+`a12bdf2bad99d1cc95f78136c9ba971fc3d57811`, loading its unchanged source into
+isolated module namespaces in the same process. Configs, defaults, axes and
+settings were identical; each batch used one warmup and 31 timed builds, with
+two alternating before/after batches. The retained external
+`compare_planning.py` and `planning_comparison.json` reproduce that comparison.
+
+| Existing workload | Rows / enabled axes | Before medians | Final medians | Paired change |
+| --- | --- | --- | --- | --- |
+| S03 v11 Regime-ER | 60 / closeCountLong, tBandLongPct | 0.004327 / 0.004352 s | 0.004379 / 0.004395 s | +1.20% / +0.98% |
+| S06 v02 B2 | 20 / stopLP, stopX | 0.002203 / 0.002207 s | 0.002260 / 0.002242 s | +2.58% / +1.56% |
+
+An earlier S06 repeat showed +7.09%; inspection found unnecessary declaration
+traversal for old configs with no ties. A direct empty-declaration return and
+avoiding empty tie accessor work reduced the final repeated overhead above.
+Both old fingerprints remain exact: S03
+`599a0c0773acb592cb9aa959aba850e81bc85a584cea2da18e836c1d09a77009`, S06
+`783a1ff2da8b6a110764ec73a6403fee025b00fb2347d1477075cf9480dd650b`.
+No broad planner rewrite, disabled diagnostics or machine-dependent test
+threshold was introduced.
+
+The optional complete 196,000-row asymmetric construction was omitted to
+keep this evidence bounded; it is absent from normal test discovery. No
+196,000-candidate real-data backtest was performed. Audit Ubuntu planning
+measurements/extrapolations are separate context and are not measurements of
+this Windows implementation. Ubuntu verification remains the independent
+reviewer's responsibility.

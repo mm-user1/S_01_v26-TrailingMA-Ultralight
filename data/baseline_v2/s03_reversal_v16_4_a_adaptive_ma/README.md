@@ -85,3 +85,17 @@ These external references therefore record only the explicit Pine parameters.
 - `params.json`: machine-readable inputs and execution semantics.
 - `tradingview_summary.json`: transcribed metrics and raw-export consistency.
 - Each reference directory has a concise local README.
+
+## Separate Merlin import interpretation
+
+The production import is `s03_reversal_v16_4_a_adaptive_ma_b2`. It intentionally
+uses the existing shared Merlin KAMA initialization and includes a bar whose
+opening timestamp equals runtime End. The four frozen TradingView references
+above retain their original meaning and files. Separate production metrics,
+quantities, PnL and exact price residuals are in
+[merlin_expectations.json](merlin_expectations.json); the explanatory authority
+is [V2 certification](../../../docs/engine_v2/CERTIFICATION.md#s03-v16-4-a-adaptive-ma-import).
+Reference D's additional final bar executes a Long Emergency SL at 1.42443,
+giving four production stop exits versus the export's three. Six non-final
+stop fills have bounded exported-price residuals; they are enumerated in the
+certification entry, including three omitted by the preparation specification.

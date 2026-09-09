@@ -683,6 +683,7 @@ def register_routes(app):
             "grid_budget": int(getattr(optimization_config, "grid_budget", 200000)),
             "grid_seed": int(getattr(optimization_config, "grid_seed", 42)),
             "grid_top_candidates": int(getattr(optimization_config, "grid_top_candidates", 10)),
+            "grid_v2_enabled_tie_groups": list(optimization_config.grid_v2_enabled_tie_groups),
             "grid_v2_planning_policy": getattr(
                 optimization_config, "grid_v2_planning_policy", "full"
             ),
@@ -743,6 +744,7 @@ def register_routes(app):
         base_template["optuna_config"] = json.loads(json.dumps(optuna_settings))
         if optimizer_mode == "grid":
             base_template["grid_config"] = {
+                "enabled_tie_groups": list(optimization_config.grid_v2_enabled_tie_groups),
                 "planning_policy": getattr(
                     optimization_config, "grid_v2_planning_policy", "full"
                 ),

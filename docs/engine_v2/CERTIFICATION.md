@@ -730,3 +730,120 @@ stop. If that stop is reached, the divergence can change the exit, trade count,
 and every later equity-based position size, so the remaining trade sequence can
 also diverge. Certification therefore uses the pinned alignment opcodes and
 per-trade delta evidence; it does not assume a bounded one-trade price residual.
+
+## S03 v16-4-A Adaptive MA import
+
+The `s03_reversal_v16_4_a_adaptive_ma_b2` package uses generic signal-reversal
+reference/compiled execution with optional Emergency SL. Only SuperSmoother,
+FRAMA and DSMA were added locally; `indicators.ma.kama`, its seed, dispatcher
+and existing option domains remain unchanged. Calls to the shared KAMA are
+verified on short histories, different lengths and shifted windows.
+
+All 22 frozen manifest hashes were rechecked, including the Pine
+`aa45babe2ee8b6a8a61250a217c116346ad6d9e7b55dc9a3b81f23edc5bab47c`
+and market
+`d664bbae2903828f84b19e7af548fdc744b970a17f56846ad77882a9ca786aae`.
+The source copy matches the original local Pine. SUI contains 19,056
+consecutive 30-minute bars. Production preparation uses Warmup 1000 and
+inclusive End `2025-12-01T00:00:00Z`: 6,857 rows, trade start index 1000.
+
+| Reference | Trades / wins | Net Profit % | Profit Factor | Realized Max DD % | Emergency SL (Long / Short) |
+| --- | --- | --- | --- | --- | --- |
+| A KAMA | 63 / 23 | 36.65663378600007 | 1.285729984357437 | 21.320000857549502 | 0 / 0 |
+| B SuperSmoother | 66 / 24 | 37.35478997499999 | 1.2385119655553722 | 19.481348177057505 | 0 / 0 |
+| C FRAMA | 62 / 21 | -2.594669402000008 | 0.9823431476058537 | 27.289743307351365 | 1 / 2 |
+| D DSMA | 53 / 22 | 8.600414829999934 | 1.077460764726533 | 23.064183519914025 | 1 / 3 |
+
+[Separate Merlin expectations](../../data/baseline_v2/s03_reversal_v16_4_a_adaptive_ma/merlin_expectations.json)
+pin all Basic/Advanced metrics, 244 quantities and net PnLs, residual trade
+numbers and measured warmup signal differences. Price/skeleton checks read the
+unchanged normalized external CSVs. Tests compare floating metrics with
+`rel=1e-9, abs=1e-10`, quantities with absolute `1e-10`, and identified prices
+with absolute `1e-12`; unknown residual trades do not inherit a blanket tick
+tolerance. The full task-owned `references.json` records every trade and delta.
+
+All directions, entry timestamps and entry prices match the exports exactly.
+Non-final exit timestamps also match. The four final timestamps move from
+November 30 23:30 to December 1 00:00 UTC. A/B/C final trades close at 1.4230
+instead of 1.4958. D final trade 53 executes an Emergency SL at 1.42443 on the
+additional bar, rather than the Pine End Close at 1.4958. Its fourth stop is
+Long. Single/batch adapters use the same inclusive truncation; date-only End,
+equivalent UTC offsets, between-bar End, empty eligibility and Date Filter off
+retain the common runtime behavior.
+
+### Exact non-final exported stop-price residuals
+
+| Reference / trade | Merlin price | Export price | Scheduled ratchet evidence for newly identified cases |
+| --- | --- | --- | --- |
+| C / 8 | 3.72573 | 3.7257 | Aug 14 03:00 UTC Close 4.1397 multiplied by 0.9 |
+| C / 11 | 3.68973 | 3.6898 | Short Emergency SL, below one tick |
+| C / 47 | 2.12113 | 2.1212 | Short Emergency SL, below one tick |
+| D / 9 | 3.69743 | 3.6975 | Short Emergency SL, below one tick |
+| D / 31 | 2.72217 | 2.7222 | Oct 12 01:00 UTC Close 2.4747 multiplied by 1.1 |
+| D / 45 | 2.09286 | 2.0929 | Nov 4 20:00 UTC Close 1.9026 multiplied by 1.1 |
+
+The approved task's section 3.4 listed only C11/C47/D9 and required all other
+non-final prices to match. That evidence statement is contradicted by C8/D31/D45
+above. They were investigated against immutable market data and the generic
+16-bar ratchet schedule, then individually pinned. The tests independently
+reconstruct every stop from fill and scheduled closes. The three extra cases
+are ordinary four-decimal exported rounding, not KAMA or timing differences.
+No execution rounding, indicator changes or new general tolerance was added.
+Thus the literal three-residual statement does not pass; the production
+behavior and all four expected trade counts/net profits are reproduced.
+
+A/B quantities match throughout. C trades 15,40,49,50,52,54,56,58,59 and D
+trades 17,30 are one 0.01 contract step larger in Merlin after the bounded
+stop-price effects propagate through realized-equity sizing. Other quantities
+match (ignoring floating representations such as 76.32000000000001). Per-trade
+net PnL is independently reconstructed using both entry/exit commissions.
+Maximum non-final absolute PnL differences versus two-decimal CSV PnL are
+A 0.0047338495, B 0.0048556315, C 0.0056629600 and D 0.0049925480 USDT.
+Do not equate rounded per-trade sums with TradingView cumulative PnL, or use
+TradingView intrabar DD/custom tables as canonical Merlin metric oracles.
+
+### Signal, planning and workflow coverage
+
+`tests/v2/test_v2_s03_adaptive_ma.py` covers independent small filter formulas,
+odd FRAMA windows, seeds/constant data, prefix causality, integer/empty inputs,
+batch reuse, all six signal fields, band precedence/memory and counter resets.
+Against Warmup 1000, measured signal differences at Warmup 100 are A/B/C/D
+25/8/16/173; at 500 and 2000 they are zero for these four references. This
+finite observation does not establish universal recursive-history convergence
+or universal Pine-KAMA equality.
+
+Default axes are four MAs, ten lengths, seven counts on each side and ten
+bands on each side, with execution fixed and Emergency SL off. Preview gives
+196,000 asymmetric and 2,800 symmetric rows (49,000/700 for one MA). Optimizing
+active Emergency SL 10/20 doubles either count. The complete 2,800-row table
+is constructed directly, without an asymmetric population. Small full plans
+prove canonical filtered order, including reversed pair declarations; sampled tests prove deterministic membership,
+no full builder for K<N, saturation, explicit expansion, fixed sources,
+value-key equality, rebasing and discarded-target identity invariance.
+
+Compiled/reference comparisons cover all four MAs and both stop settings,
+one/two workers, all applicable emitted metrics/diagnostics, selected Slow
+calls and chunking. The separate performance run executes all 2,800 symmetric
+rows on SUI, plus 128 asymmetric sampled rows covering every MA. Actual
+`compiled_numba`/stacked/mapping dispatch is asserted. Selected rows retain
+candidate/semantic identity and use one authoritative reference run each.
+Fixed-day, calendar-month and Adaptive WFA exercise reduced-plan reuse,
+SQLite save/reload and explicit asymmetric replay. Standard Optimize also
+executes, saves/reloads its study, and reconstructs the reduced Preview.
+Delayed OOS replays explicit asymmetric parameters and preserves trades while
+removing technical history from the flat-prefix metric boundary.
+
+`tests/server/test_parameter_ties.py` covers HTTP/core Preview, invalid request
+selection, inactive target ranges, Queue transport and nested-only stored
+Preview (2,800), canonical explicit off (196,000), and legacy omission.
+`tests/js/test_parameter_ties.js` exercises toggle/edit/restore, double toggle,
+repeated Queue snapshot reload, config selection authority, API fallback,
+Preview invalidation/rescheduling, source range editability, stale same-ID
+async responses, empty loads and strategy switches.
+Existing JS readiness/Queue/Presets wrappers remain preservation gates;
+Presets and Strategy Lab tie integration were not extended.
+
+Before shared edits, 86 existing identity/S03 Regime-ER/S06 v06-4-A2 tests
+passed on Windows. Existing kernel behavior, KAMA, old configs and pinned
+candidate fingerprints remain preservation authorities; no old oracle values
+were refreshed. Final suite results are recorded in the implementation report.

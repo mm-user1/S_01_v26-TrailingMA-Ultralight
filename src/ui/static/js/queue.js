@@ -1129,7 +1129,8 @@ function collectQueueUiSnapshot() {
 
   return {
     version: 1,
-    controls: snapshot
+    controls: snapshot,
+    ...(typeof collectParameterTieSnapshot === 'function' ? { parameterTies: collectParameterTieSnapshot() } : {})
   };
 }
 
@@ -1772,6 +1773,7 @@ async function loadQueueItemIntoForm(itemId, options = {}) {
 
   applyQueueConfigFallback(item);
   applyQueueUiSnapshot(item.uiSnapshot);
+  if (typeof applyQueueParameterTies === 'function') applyQueueParameterTies(item);
 
   await applyQueueDatabaseTarget(item.dbTarget);
   if (!isCurrentRequest()) return false;
@@ -1782,6 +1784,7 @@ async function loadQueueItemIntoForm(itemId, options = {}) {
     syncQueueAutoCreateSetUi({ resetPreference: true });
   }
   refreshQueueFormUiAfterApply();
+  if (typeof syncParameterTieControls === 'function') syncParameterTieControls();
 
   const optimizerResultsEl = document.getElementById('optimizerResults');
   if (optimizerResultsEl && !(suppressProgressOutput && queueRunning)) {

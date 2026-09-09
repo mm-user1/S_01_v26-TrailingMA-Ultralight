@@ -554,6 +554,12 @@ class WalkForwardEngine:
 
             # Construction is the certification boundary for every caller.
             parse_execution_profile(strategy_config)
+            from .engine_v2.parameter_ties import enabled_parameter_ties
+            selected_ties = self.base_config_template.get("grid_v2_enabled_tie_groups", [])
+            enabled_parameter_ties(strategy_config, selected_ties)
+            if "grid_v2_enabled_tie_groups" in self.base_config_template:
+                grid_settings = self.base_config_template.setdefault("grid_config", {})
+                grid_settings["enabled_tie_groups"] = list(selected_ties)
 
     def split_data(
         self,
@@ -3143,6 +3149,7 @@ class WalkForwardEngine:
             swapping_prob=self.base_config_template.get("swapping_prob", 0.5),
             n_startup_trials=self.base_config_template.get("n_startup_trials", 20),
             coverage_mode=bool(self.base_config_template.get("coverage_mode", False)),
+            grid_v2_enabled_tie_groups=deepcopy(self.base_config_template.get("grid_v2_enabled_tie_groups", [])),
             grid_v2_planning_policy=self.base_config_template.get(
                 "grid_v2_planning_policy", "full"
             ),
