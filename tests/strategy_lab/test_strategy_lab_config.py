@@ -64,38 +64,50 @@ RUNSPEC_PAIRINGS = {
         "Reversal @ Triangle", "R Trail", "r_trail", 3600,
         "1a2f515d3e0d5d2812220c0492d1e3df2f8f583919328a71d98a23c4a9c4df7b",
         "5bbf99b35adcfa1769a14cb63b0b70f6baaa000e3dddaac8bc2873d1d27acd39",
+        "6a0311266aaa4c031c52b19388d91b280b6058d607a5427ebfb260b70f7ef14e",
+        "c221b89388654519d86b0c767555ef0c0f8f00e2dc6c6525dfb557c947cba4c4",
     ),
     "s06_v064a2_trend_r_trail.json": (
         "Trend @ Square", "R Trail", "r_trail", 3600,
         "6e7d29017619e6305744974b6f6a9213d45ae06e540af0c03d9bc72511425b26",
         "9f393ef677331e84f6caceb37c563c5f58a55d37718309318e09c5d578562b29",
+        "07782b260b2e34cd9b3d29f3d6ff05d68f830a1536596607f97c24469deee2f0",
+        "53c5c345c14a3cc039af739c039092c0b149e8d8077a71fb3b9175b7a587cd39",
     ),
     "s06_v064a2_reversal_chandelier.json": (
         "Reversal @ Triangle", "Chandelier Exit", "chandelier", 6000,
         "7cfc2d9be50fa12be793e73cffd52f8b8907a53e9b66de82c61f509cb21d9e04",
         "168b2a77afc161f8e044fc8299a89ba941ce79d84ba51970beba912499279d6f",
+        "4e598a89c2615bb74e903bd438a3f4a0dbb5dbe91a62e1b9d7e1150d22880121",
+        "3396a02ee9bd857dc4dea3578a42bec6e35413d003d560b5abd56acd06bc50f7",
     ),
     "s06_v064a2_trend_chandelier.json": (
         "Trend @ Square", "Chandelier Exit", "chandelier", 6000,
         "e2ea87062a8d88e6b35cbf8a68e68a0c703aad3f9ac11fb0f108e649dac1ca09",
         "43644d75e73b2f9d7419e9bb73adf8a1ab3588d781781d3947e618bad1208dc1",
+        "068ea539f7c8c0c599d011944c83360e6e866544bb6ea47bda874a832639493d",
+        "c3f1bd06cee485c0efb5e8a4bd6e0ee53c3f6a57b74fc66ff0c3dae76995a1b2",
     ),
     "s06_v064a2_reversal_fixed_af_sar.json": (
         "Reversal @ Triangle", "Fixed-AF SAR", "fixed_af_sar", 2400,
         "fcb0e2529341b897696111863f9424ab44a1527a8aff04c3a4a0eb8ae0c39023",
         "8de8e2c86c4817073a288d0d41b0d10f676a036bfbfb277a8483f7ae530e641e",
+        "a6793b651ae90818a718e278446305043d295bb214a4a556e25a3aa6731d474f",
+        "59fe6d698d522bcc62c19e24d898a937d734c2dbcea1a6a9ff5b46e891778eca",
     ),
     "s06_v064a2_trend_fixed_af_sar.json": (
         "Trend @ Square", "Fixed-AF SAR", "fixed_af_sar", 2400,
         "b10627f2c919247dda6d92c506646370c8a61daf17defb19a95f46f3e2639562",
         "d59ad55066774eef2183d9cb86b07551ec180a0c187f1c2d97ed315ff7929e32",
+        "2696a1a10efacde011d94452360e064e03cddf6a693ef666c86ee6836bf60f97",
+        "207103e70b779321273f165ee4d2ae429ac8214372749e7fc0d71e56dee1f1e0",
     ),
 }
 
 
 @pytest.mark.parametrize("filename", RUNSPEC_PAIRINGS)
 def test_s06_v064a2_runspec_semantic_pairing_is_exact(filename):
-    entry_mode, trail_mode, variant, count, fingerprint, digest = RUNSPEC_PAIRINGS[filename]
+    entry_mode, trail_mode, variant, count, fingerprint, digest, generation_hash, prereg_hash = RUNSPEC_PAIRINGS[filename]
     spec = load_run_spec(RUNSPEC_PATH.parent / filename)
     assert spec.plan is not None
     assert (spec.strategy_id, spec.plan.strategy_version) == (
@@ -108,6 +120,8 @@ def test_s06_v064a2_runspec_semantic_pairing_is_exact(filename):
     assert spec.plan.deduped_candidate_count == count
     assert spec.plan.plan_fingerprint == fingerprint
     assert semantic_key_digest(spec.plan) == digest
+    assert spec.generation_sha256 == generation_hash
+    assert spec.pre_registration_sha256 == prereg_hash
     assert _matches_frozen_legacy_bracket_plan(spec, spec.plan) is False
 
 

@@ -20,6 +20,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from core.engine_v2.profile import ProfileValidationError, parse_execution_profile  # noqa: E402
+from core.engine_v2.parameter_ties import enabled_parameter_ties  # noqa: E402
 from core.engine_v2.runtime_contract import V2_RUNTIME_CONTRACT_VERSION  # noqa: E402
 from core.grid_v2 import (  # noqa: E402
     GRID_V2_ENGINE_VERSION,
@@ -243,9 +244,12 @@ def _object(value: Any, field: str) -> Mapping[str, Any]:
     return value
 
 
-def _keys(value: Mapping[str, Any], field: str, expected: set[str]) -> None:
+def _keys(
+    value: Mapping[str, Any], field: str, expected: set[str],
+    *, optional: frozenset[str] = frozenset(),
+) -> None:
     missing = sorted(expected - set(value))
-    unknown = sorted(set(value) - expected)
+    unknown = sorted(set(value) - (expected | optional))
     if missing:
         raise StrategyLabConfigError(f"{field}: missing required field(s): {', '.join(missing)}.")
     if unknown:
@@ -388,6 +392,7 @@ def _validate_strategy(strategy: Mapping[str, Any]) -> tuple[Mapping[str, Any], 
 def _validate_plan(
     config: Mapping[str, Any],
     generation: Mapping[str, Any],
+    profile: Any,
 ) -> GridV2Plan:
     planning = _object(generation["planning"], "generation.planning")
     _keys(
@@ -404,7 +409,13 @@ def _validate_plan(
             "expected_plan_fingerprint",
             "expected_semantic_key_digest",
         },
+        optional=frozenset({"enabled_tie_groups"}),
     )
+    ties = _string_list(planning.get("enabled_tie_groups", []), "generation.planning.enabled_tie_groups", allow_empty=True)
+    try:
+        enabled_parameter_ties(config, ties)
+    except ValueError as exc:
+        raise StrategyLabConfigError(f"generation.planning.enabled_tie_groups: {exc}") from None
     variants = _string_list(planning["enabled_variants"], "generation.planning.enabled_variants")
     axes = _string_list(planning["enabled_axes"], "generation.planning.enabled_axes", allow_empty=True)
     axis_values = _object(planning["axis_values"], "generation.planning.axis_values")
@@ -452,8 +463,10 @@ def _validate_plan(
         raise StrategyLabConfigError(
             "generation.economics.base_params: runtime/window fields are not base parameters."
         )
+    internal_selector = profile.variant_selector is not None and not profile.variant_selector.user_facing
     settings = GridV2Settings(
-        enabled_variants=variants,
+        enabled_variants=None if internal_selector else variants,
+        enabled_tie_groups=ties,
         enabled_axes=axes,
         prefer_compiled=planning["grid_v2_prefer_compiled"],
         slow_enrich_selected=False,
@@ -469,6 +482,11 @@ def _validate_plan(
         plan = build_grid_v2_plan(config, settings, base_params)
     except (ValueError, TypeError, KeyError) as exc:
         raise StrategyLabConfigError(f"generation.planning: V2 plan construction failed: {exc}") from None
+    if internal_selector and variants != plan.candidate_table.variant_names:
+        raise StrategyLabConfigError(
+            "generation.planning.enabled_variants: declared variants "
+            f"{variants!r} disagree with resolved internal variants {plan.candidate_table.variant_names!r}."
+        )
     effective = plan.metadata.get("planning", {}).get("effective_policy")
     if plan.deduped_candidate_count != expected_count:
         raise StrategyLabConfigError(
@@ -666,7 +684,7 @@ def load_run_spec(
     generation = _object(raw["generation"], "generation")
     prereg = _object(raw["preregistration"], "preregistration")
     _validate_common(generation, prereg)
-    config, _profile = _validate_strategy(_object(generation["strategy"], "generation.strategy"))
+    config, profile = _validate_strategy(_object(generation["strategy"], "generation.strategy"))
 
     inventory_contract = _object(generation["inventory"], "generation.inventory")
     _keys(inventory_contract, "generation.inventory", {"inventory_path", "inventory_sha256", "ticker_list_digest", "expected_ticker_count"})
@@ -747,7 +765,7 @@ def load_run_spec(
             )
 
     plan_started = time.perf_counter()
-    plan = _validate_plan(config, generation) if validate_plan else None
+    plan = _validate_plan(config, generation, profile) if validate_plan else None
     plan_build_seconds = time.perf_counter() - plan_started if validate_plan else 0.0
     return RunSpec(
         source_path=source_path,

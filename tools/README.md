@@ -54,6 +54,14 @@ for the measured environment, cold/warm distinction and process-memory scope.
 
 ## Isolated tests
 
+`python -B -m tools.strategy_lab.certify_s03_smoke --data-root <market-root>
+--work-dir <fresh-external-directory>` runs the explicit S03 CRV/windows-1..3
+gate. It writes the pre-execution subset recipe, three dataset directories,
+generation/analysis logs, partial development analysis and `evidence.json`.
+It reuses the portable run spec and existing generation, parity, resume and
+reader contracts; it never enters normal test discovery. See the
+[Strategy Lab guide](strategy_lab/README.md) for cache isolation and commands.
+
 `run_tests.py` is the canonical standard-library launcher. It uses the current
 interpreter in a child process, external per-run pytest/temp directories, and
 persistent Python/Numba caches. The default root is `../merlin-tests`;

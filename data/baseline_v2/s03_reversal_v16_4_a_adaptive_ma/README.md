@@ -97,5 +97,11 @@ quantities, PnL and exact price residuals are in
 is [V2 certification](../../../docs/engine_v2/CERTIFICATION.md#s03-v16-4-a-adaptive-ma-import).
 Reference D's additional final bar executes a Long Emergency SL at 1.42443,
 giving four production stop exits versus the export's three. Six non-final
-stop fills have bounded exported-price residuals; they are enumerated in the
-certification entry, including three omitted by the preparation specification.
+stop fills have accepted, individually pinned exported-price residuals:
+C8/C11/C47 and D9/D31/D45, each below one 0.0001 tick. Preparation listed
+C11/C47/D9; production validation correctly identified the additional
+C8/D31/D45. All six agree on these fixtures with outward rounding (floor Long /
+ceil Short); the additional three also agree with nearest four-decimal rounding.
+This does not establish universal TradingView behavior. Execution rounding,
+trade timing, frozen values and tolerances remain unchanged. See the current
+certification entry for the six exact price pairs.

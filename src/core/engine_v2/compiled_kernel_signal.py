@@ -226,6 +226,7 @@ def evaluate_compiled_signal_stacked_batch(
     compute_sharpe: bool = False,
     compute_sharpe_daily: bool = False,
     compute_sqn: bool = False,
+    compute_max_drawdown_mtm: bool = False,
 ) -> CompiledBatchOutput:
     """Evaluate one stacked signal-reversal compiled batch."""
 
@@ -251,6 +252,7 @@ def evaluate_compiled_signal_stacked_batch(
             return CompiledBatchOutput(
                 outputs=np.empty((0, OUTPUT_COLUMN_COUNT), dtype=np.float64),
                 execution_mode="stacked",
+                max_drawdown_mtm_pct=np.empty(0, dtype=np.float64) if compute_max_drawdown_mtm else None,
             )
         if len(params_batch) != stacked_data.candidate_count:
             raise ValueError("Signal stacked compiled params_batch length must match data_index length.")
@@ -268,9 +270,11 @@ def evaluate_compiled_signal_stacked_batch(
         return CompiledBatchOutput(
             outputs=np.empty((0, OUTPUT_COLUMN_COUNT), dtype=np.float64),
             execution_mode="stacked",
+            max_drawdown_mtm_pct=np.empty(0, dtype=np.float64) if compute_max_drawdown_mtm else None,
         )
 
     outputs = np.empty((candidate_count, OUTPUT_COLUMN_COUNT), dtype=np.float64)
+    mtm_sidecar = np.empty(candidate_count if compute_max_drawdown_mtm else 0, dtype=np.float64)
     worker_count = _base._validated_worker_count(n_workers)
     previous_threads = numba.get_num_threads()
     target_threads = max(1, min(worker_count, previous_threads))
@@ -308,12 +312,17 @@ def evaluate_compiled_signal_stacked_batch(
             bool(compute_sharpe),
             bool(compute_sharpe_daily),
             bool(compute_sqn),
+            bool(compute_max_drawdown_mtm),
             outputs,
+            mtm_sidecar,
         )
     finally:
         if numba.get_num_threads() != previous_threads:
             numba.set_num_threads(previous_threads)
-    return CompiledBatchOutput(outputs=outputs, backend_kind=COMPILED_BATCH_KIND, execution_mode="stacked")
+    return CompiledBatchOutput(
+        outputs=outputs, backend_kind=COMPILED_BATCH_KIND, execution_mode="stacked",
+        max_drawdown_mtm_pct=mtm_sidecar if compute_max_drawdown_mtm else None,
+    )
 
 
 def _empty_signal_config_arrays(count: int) -> dict[str, np.ndarray]:
@@ -436,7 +445,9 @@ def _signal_stacked_batch_loop_impl(
     compute_sharpe: bool,
     compute_sharpe_daily: bool,
     compute_sqn: bool,
+    compute_max_drawdown_mtm: bool,
     outputs: np.ndarray,
+    mtm_sidecar: np.ndarray,
 ) -> None:
     for index in numba.prange(outputs.shape[0]):
         row = data_index[index]
@@ -471,7 +482,9 @@ def _signal_stacked_batch_loop_impl(
             compute_sharpe,
             compute_sharpe_daily,
             compute_sqn,
+            compute_max_drawdown_mtm,
             outputs,
+            mtm_sidecar,
         )
 
 
@@ -506,12 +519,16 @@ def _compiled_signal_loop_one(
     compute_sharpe: bool,
     compute_sharpe_daily: bool,
     compute_sqn: bool,
+    compute_max_drawdown_mtm: bool,
     outputs: np.ndarray,
+    mtm_sidecar: np.ndarray,
 ) -> None:
     n = close_values.shape[0]
     initial_capital = initial_capital_values[candidate_index]
     if n == 0:
         _write_empty_result(outputs, candidate_index, initial_capital)
+        if compute_max_drawdown_mtm:
+            mtm_sidecar[candidate_index] = math.nan
         return
 
     commission_rate = commission_pct_values[candidate_index] / 100.0
@@ -532,6 +549,8 @@ def _compiled_signal_loop_one(
     running_peak = math.nan
     last_drawdown_balance = math.nan
     max_drawdown = 0.0
+    mtm_peak = initial_capital
+    max_drawdown_mtm = 0.0
 
     position = 0
     size = 0.0
@@ -778,7 +797,7 @@ def _compiled_signal_loop_one(
                 emergency_fill_index = -1
                 emergency_counter = 0
 
-        if (compute_sharpe or compute_sharpe_daily) and i >= trade_start_idx:
+        if (compute_sharpe or compute_sharpe_daily or compute_max_drawdown_mtm) and i >= trade_start_idx:
             unrealized = 0.0
             if position > 0:
                 unrealized = (close - entry_price) * size
@@ -786,6 +805,16 @@ def _compiled_signal_loop_one(
                 unrealized = (entry_price - close) * size
             equity_value = balance + unrealized
             last_equity = equity_value
+            if compute_max_drawdown_mtm:
+                if not math.isfinite(equity_value):
+                    max_drawdown_mtm = math.nan
+                elif not math.isnan(max_drawdown_mtm):
+                    if equity_value > mtm_peak:
+                        mtm_peak = equity_value
+                    elif mtm_peak > 0.0 and equity_value < mtm_peak:
+                        mtm_drawdown = (mtm_peak - equity_value) / mtm_peak * 100.0
+                        if mtm_drawdown > max_drawdown_mtm:
+                            max_drawdown_mtm = mtm_drawdown
             if compute_sharpe:
                 month_key = month_ids[i]
                 if current_month < 0:
@@ -937,6 +966,8 @@ def _compiled_signal_loop_one(
     outputs[candidate_index, OUTPUT_SHARPE_DAILY] = sharpe_daily
     outputs[candidate_index, OUTPUT_SHARPE_DAILY_OBSERVATIONS] = sharpe_daily_observations
     outputs[candidate_index, OUTPUT_SHARPE_DAILY_ACTIVE_DAYS] = sharpe_daily_active
+    if compute_max_drawdown_mtm:
+        mtm_sidecar[candidate_index] = math.nan if trade_start_idx >= n else max_drawdown_mtm
 
 
 if numba is not None:

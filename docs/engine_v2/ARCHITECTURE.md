@@ -207,6 +207,12 @@ sampled block-disjointness proof never treats a derived target seed as a fixed
 discriminator. Rebasing carries the same resolution metadata and clears lazy
 parameter caches through a new table instance.
 
+Tied axis ordering follows the authoritative parameter order and retains axes
+deliberately included by `include_inactive_axes_for_dedup`. Inactive axes still
+contribute raw enumeration before semantic deduplication. Automatic eligibility
+uses the same optimized, non-runtime, non-selector rule with or without ties;
+explicitly requesting an ineligible axis remains an error.
+
 Expanded candidate semantic and value-based signal/dataprep keys contain both
 members and exclude tie selection. Internal within-plan grouping signatures
 may encode independent axes and resolved values differently; cross-plan equality
@@ -229,8 +235,18 @@ Studies save the canonical selection and `grid_config.enabled_tie_groups`.
 Stored Preview can recover from the nested field alone; canonical `[]` wins
 over stale nested facts. WFA reuses the reduced plan and transports expanded
 IS/OOS parameters. Manual/Forward/OOS replay never reapplies study ties.
-Presets and Strategy Lab tie certification are outside this release. Discovery
-of the strategy does not certify tie-enabled Strategy Lab workflows.
+Strategy Lab accepts optional `generation.planning.enabled_tie_groups`, validates
+it through the shared declaration contract, and transports an immutable tuple
+to Grid. Missing and explicit empty lists resolve to the same no-tie plan;
+Lab preserves their original presence in normalized input and content hashes.
+Its required variant list declares the expected resolved variants for internal
+selectors; Grid receives `enabled_variants=None` and resolves the fixed selector.
+Lab checks exact agreement before fingerprints and retains execution-mode
+validation. Public selector behavior is unchanged. Candidate projection retains
+explicit target values and independent-axis geometry. Resume protects both
+plan and run identity, even when fixed candidate values coincide. The bounded
+S03 certification covers CRV windows 1..3; Presets integration remains outside
+this work. See the [Lab guide](../../tools/strategy_lab/README.md).
 
 ## Compiled execution and resources
 
@@ -240,6 +256,15 @@ cases use core mapping packing. Strategies do not add packing hooks.
 
 The compiled result ABI remains 26 columns. Optional sidecars, including the
 request-gated bar-close MTM drawdown sidecar, do not change that ABI.
+Both position and generic signal-reversal execution support it. The reference
+path scans existing equity; compiled signal execution keeps a peak and maximum
+drawdown per candidate, observing close equity after fills and final-boundary
+handling from `trade_start_idx`. MTM alone enables equity calculation without
+enabling other metrics. The optional float64 sidecar costs eight bytes per
+candidate, counted once in existing cache/chunk accounting. Requested empty
+batches return shape `(0,)`; zero bars or empty evaluation return NaN. Any
+non-finite observation is sticky NaN, and negative equity is not clamped.
+Default-off results and per-call thread restoration retain their prior contract.
 
 `grid_v2_max_cache_mb` is a finite positive signal/dataprep estimate limit,
 default 512 MB. The estimate includes planned stacks, outputs, and shared

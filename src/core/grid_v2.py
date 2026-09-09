@@ -1110,7 +1110,8 @@ def _grid_v2_plan_prelude(
     if pairs:
         enabled = set(settings.enabled_axes) if settings.enabled_axes is not None else {
             name for name, spec in params_spec.items()
-            if spec.get("optimize", {}).get("enabled", False) and _axis_enabled(name, spec.get("optimize", {}), settings)
+            if _axis_available(name, spec.get("optimize", {}), profile)
+            and _axis_enabled(name, spec.get("optimize", {}), settings)
         }
         unknown = enabled - set(params_spec)
         if unknown:
@@ -2275,10 +2276,6 @@ def execute_grid_v2_candidates(
     hooks = _coerce_hooks(hooks)
     selected_indices = _selected_candidate_indices(plan, candidate_indices)
     topology = _grid_v2_execution_topology(plan)
-    if compute_max_drawdown_mtm and topology == "signal_reversal":
-        raise ValueError(
-            "max_drawdown_mtm_pct requires a V2 position-family execution topology."
-        )
     context = _cache_key_context(df, trade_start_idx, hooks)
     cache_key_started = time.time()
     cache_keys = _candidate_cache_keys(plan, context, hooks, selected_indices)
@@ -2437,6 +2434,7 @@ def execute_grid_v2_candidates(
                         compute_sharpe=compute_sharpe,
                         compute_sharpe_daily=compute_sharpe_daily,
                         compute_sqn=compute_sqn,
+                        compute_max_drawdown_mtm=compute_max_drawdown_mtm,
                     )
                     compiled_batch_seconds += time.time() - compiled_started
                 else:
@@ -2750,7 +2748,6 @@ def _build_parameter_domains(
     profile: ExecutionProfile,
 ) -> dict[str, GridV2ParameterDomain]:
     params_spec = _parameters(config)
-    selector_name = profile.variant_selector.param if profile.variant_selector is not None else None
     enabled_axes = set(settings.enabled_axes) if settings.enabled_axes is not None else None
     if enabled_axes is not None:
         unknown = sorted(enabled_axes - {str(name) for name in params_spec})
@@ -2765,13 +2762,12 @@ def _build_parameter_domains(
         param_type = str(spec.get("type", "float")).strip().lower()
         optimize = spec.get("optimize", {}) if isinstance(spec.get("optimize", {}), Mapping) else {}
         is_runtime = role == "runtime"
-        is_selector = name == selector_name
         default = fixed_params.get(name, spec.get("default"))
         if is_runtime:
             if name in (enabled_axes or set()):
                 raise ValueError(f"Grid V2 axis '{name}' is a runtime parameter.")
             continue
-        axis_available = bool(optimize.get("enabled", False)) and not is_runtime and not is_selector
+        axis_available = _axis_available(name, optimize, profile)
         if name in (enabled_axes or set()) and not axis_available:
             raise ValueError(f"Grid V2 axis '{name}' is not an optimized non-runtime parameter.")
         is_axis = axis_available and _axis_enabled(name, optimize, settings)
@@ -2797,6 +2793,14 @@ def _build_parameter_domains(
             source=source,
         )
     return domains
+
+
+def _axis_available(name: str, optimize: Mapping[str, Any], profile: ExecutionProfile) -> bool:
+    return (
+        bool(optimize.get("enabled", False))
+        and profile.parameter_roles.get(name) != "runtime"
+        and (profile.variant_selector is None or name != profile.variant_selector.param)
+    )
 
 
 def _axis_enabled(name: str, optimize: Mapping[str, Any], settings: GridV2Settings) -> bool:
@@ -3431,7 +3435,7 @@ def _build_planning_blocks(
                 # Equality filtering visits a pair at its earliest original axis.
                 sources = {target: source for source, target in pairs}
                 variant_axis_names = tuple(dict.fromkeys(
-                    sources.get(name, name) for name in active_names
+                    sources.get(name, name) for name in profile.parameter_names
                     if sources.get(name, name) in variant_axis_names
                 ))
             blocks.append(

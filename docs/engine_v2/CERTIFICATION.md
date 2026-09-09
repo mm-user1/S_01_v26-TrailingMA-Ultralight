@@ -782,15 +782,18 @@ retain the common runtime behavior.
 | D / 31 | 2.72217 | 2.7222 | Oct 12 01:00 UTC Close 2.4747 multiplied by 1.1 |
 | D / 45 | 2.09286 | 2.0929 | Nov 4 20:00 UTC Close 1.9026 multiplied by 1.1 |
 
-The approved task's section 3.4 listed only C11/C47/D9 and required all other
-non-final prices to match. That evidence statement is contradicted by C8/D31/D45
-above. They were investigated against immutable market data and the generic
-16-bar ratchet schedule, then individually pinned. The tests independently
-reconstruct every stop from fill and scheduled closes. The three extra cases
-are ordinary four-decimal exported rounding, not KAMA or timing differences.
-No execution rounding, indicator changes or new general tolerance was added.
-Thus the literal three-residual statement does not pass; the production
-behavior and all four expected trade counts/net profits are reproduced.
+Preparation listed C11/C47/D9; production validation additionally identified
+C8/D31/D45 as full-float differences, correctly exposing the parent specification's
+incomplete three-case list. Investigation used immutable market data and the
+generic 16-bar ratchet schedule; tests independently reconstruct each stop.
+The follow-up accepts all six individually pinned cases above. Each difference
+is below one 0.0001 tick; on these fixtures all six agree with outward tick
+rounding (floor Long / ceil Short). The additional C8/D31/D45 also agree with
+nearest four-decimal rounding. This fixture agreement does not establish a
+universal TradingView rounding rule. Execution rounding, trade timing, frozen
+baseline values and tolerances remain unchanged; no indicator change or general
+tick tolerance was introduced. All four expected counts and net profits remain
+reproduced.
 
 A/B quantities match throughout. C trades 15,40,49,50,52,54,56,58,59 and D
 trades 17,30 are one 0.01 contract step larger in Merlin after the bounded
@@ -841,9 +844,82 @@ repeated Queue snapshot reload, config selection authority, API fallback,
 Preview invalidation/rescheduling, source range editability, stale same-ID
 async responses, empty loads and strategy switches.
 Existing JS readiness/Queue/Presets wrappers remain preservation gates;
-Presets and Strategy Lab tie integration were not extended.
+Presets integration was not extended. The parent did not extend Strategy Lab;
+the bounded follow-up certification below supersedes that exclusion.
 
 Before shared edits, 86 existing identity/S03 Regime-ER/S06 v06-4-A2 tests
 passed on Windows. Existing kernel behavior, KAMA, old configs and pinned
 candidate fingerprints remain preservation authorities; no old oracle values
 were refreshed. Final suite results are recorded in the implementation report.
+
+
+## S03 Adaptive MA follow-up: Grid ties and Strategy Lab
+
+TZ 20-1-1 v2 was validated on Windows 10 build 19042, Python 3.13.7, NumPy
+2.3.3 and Numba 0.65.1 against parent `c5d6fcea37fd3ede3310d8ae818d83b6afa1f570`.
+611 distinct focused cases passed across the final accepted outcomes, including
+496 Grid/S03/S06/Lab preservation cases. A separate fresh external compiler-cache
+run passed all 45 MTM cases in 132.20 seconds. Actual one/two-thread signal
+execution and success/failure restoration passed; the host exposed 16 threads.
+No old metric, identity or baseline pin was refreshed. All seven existing S06
+specs preserve file hashes, normalized content, generation/preregistration hashes,
+fingerprints, semantic digests and counts. The six additional content-hash pairs
+are permanent literal regression assertions.
+
+Grid now preserves the tied inactive-axis fixture's 14 raw / 7 unique rows and
+interleaved ordering. Automatic selector/runtime eligibility is consistent with
+untied planning. Lab accepts strict optional ties and checks internal selector
+variant declarations before fingerprint checks. The necessary adjacent generator
+guard permits null start/end defaults but rejects non-null window dates, leaving
+explicit candidate metadata and segment-boundary authority unchanged.
+
+The portable `s03_adaptive_ma_symmetric.json` plan has 2,800 candidates, 700 per
+MA, and fingerprint
+`abd173f523cf956862041c00ebd60ba1d36616cbe7b7b7c83dfeecb5ad6eec7f`;
+its semantic digest is
+`1a8aab968ff6165ae23c55a735642a587700a959b073374046a4591e0ceab17b`.
+The read-only 0801 30-minute pack passed all 118 inventory/source checks and
+all source SHA-256/size/mtime preservation checks. CRVUSDT (development) windows
+1..3 produced three float64 `(2800, 2, 21)` schema-v2 arrays, all rows effectively
+`compiled_numba`, with all 16,800 MTM observations finite. Each saved candidate
+retains equal explicit Long/Short counts and bands and four independent axes.
+
+A geometry-only recipe was saved before execution: every MA at minimum,
+maximum and interior length/count/band points, plus shared edges and evenly
+spaced fill. All 39 selected candidates matched reference across all six
+segments (234 comparisons): zero identity/count/availability/float mismatches,
+including exactly zero MTM differences. Independent small fixtures cover
+commissions, next-open exits, strict final close, Emergency SL, warmup/empty
+boundaries, sticky non-finite equity, >100% drawdown, packed/mapping input,
+repeated data indices, reordered selection and forced chunking. The older S03
+Regime-ER and existing position-family MTM remain preservation gates.
+
+Two fresh generator processes matched deterministic semantic artifacts; a third
+output interrupted after its first group resumed to the same result and its
+completed rerun was an immutable verified no-op. Small fixed-value fixtures
+reject changed tie/run identity without output mutation for partial and complete
+outputs. Schema-v2 analysis read the explicit projection using the existing
+`development --allow-partial-scope` override and emitted all five normal files.
+This certifies only partial development (one ticker, three windows), not full
+pack execution, holdout, allocation, policy nomination or strategy quality.
+
+The generation resource contract was one outer worker, one Numba thread and a
+32 MB signal cache limit. Clean generation took 20.419 seconds including first
+signal compilation and 5.825 seconds warm; resumed remaining work took 3.810
+seconds. A bounded 128-candidate / 3,928-bar warm comparison retained exactly the
+baseline 26-column output bytes: baseline/final MTM-off mapping medians were
+3.132/3.324 ms, and final MTM-on was 4.886 ms. A prepacked experiment localized
+the small off cost to the compiled path (2.294/2.443 ms); these timings are
+machine-specific, not a performance improvement claim. MTM adds exactly eight
+bytes per requested candidate and does not alter existing cache/thread policy.
+
+Commands, all old S06 hashes, first-run corrections, source/group hashes,
+precise boundaries, cold/warm details and limitations are in the
+[follow-up implementation report](../_work/TZ_20-1-1_Follow-up-Patch_v2-agent-answer.md).
+Evidence was retained under the external Windows Temp directory
+`merlin-tz20-1-1-v2/real-smoke-02`, with `evidence.json`, `selection.json`,
+three datasets, logs and partial analysis. The maintained
+[Lab command](../../tools/strategy_lab/README.md#certify-the-real-pack) recreates
+this bounded gate in a fresh directory. The parent full-suite reports were
+trusted; no new unfiltered/JS suite or Ubuntu/VPS verification was claimed.
+Changes remain uncommitted for the user's independent review and commit.

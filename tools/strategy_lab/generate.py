@@ -443,7 +443,7 @@ def _assert_plan_contract(spec: RunSpec) -> None:
         raise DatasetError("Phase 1-A requires outer_workers=1 for sequential orchestration.")
     for index in range(spec.plan.deduped_candidate_count):
         params = spec.plan.candidate_table.params_for_index(index)
-        if "start" in params or "end" in params:
+        if params.get("start") is not None or params.get("end") is not None:
             raise DatasetError("candidate params must not contain per-window start/end values.")
 
 

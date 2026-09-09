@@ -82,6 +82,44 @@ def _file_snapshot(root: Path) -> dict[str, tuple[str, int, int]]:
     }
 
 
+@pytest.mark.parametrize("partial", [False, True])
+def test_s03_changed_ties_reject_resume_without_mutating_equal_fixed_candidates(
+    synthetic_pack, tmp_path, monkeypatch, partial,
+):
+    from tests.strategy_lab.s03_helpers import small_raw, pin_small_plan, write_spec
+    root, original_path, _, _ = synthetic_pack
+    original = json.loads(original_path.read_text(encoding="utf-8"))
+    raw = small_raw()
+    raw["generation"]["inventory"] = original["generation"]["inventory"]
+    raw["generation"]["market_data"] = original["generation"]["market_data"]
+    raw["preregistration"]["split"] = original["preregistration"]["split"]
+    path = write_spec(tmp_path / "s03.json", raw)
+    on = load_run_spec(path, repo_root=root)
+    monkeypatch.setattr(generate_module, "execute_grid_v2_candidates", fake_execute)
+    output = tmp_path / "output"
+    kwargs = dict(data_root=root / "market", output_dir=output, repo_root=root,
+                  ticker_selectors=["AAAUSDT"], window_selectors=[1, 2])
+    def interrupt(*args):
+        raise InterruptedError("test partial publication")
+    if partial:
+        with pytest.raises(InterruptedError):
+            generate_dataset(path, **kwargs, _after_group=interrupt)
+    else:
+        generate_dataset(path, **kwargs)
+    before = _file_snapshot(output)
+    raw["generation"]["planning"]["enabled_tie_groups"] = []
+    pin_small_plan(raw)
+    changed_path = write_spec(tmp_path / "changed.json", raw)
+    off = load_run_spec(changed_path, repo_root=root)
+    assert on.plan.deduped_candidate_count == off.plan.deduped_candidate_count == 1
+    assert on.plan.candidate_table.params_for_index(0) == off.plan.candidate_table.params_for_index(0)
+    assert semantic_key_digest(on.plan) == semantic_key_digest(off.plan)
+    assert on.plan.plan_fingerprint != off.plan.plan_fingerprint
+    with pytest.raises(DatasetError, match="identity|incompatible"):
+        generate_dataset(changed_path, **kwargs, resume=True)
+    assert before == _file_snapshot(output)
+
+
 def test_synthetic_plan_preserves_frozen_480_candidate_identity_and_settings(synthetic_pack):
     root, run_spec, _, _ = synthetic_pack
     spec = load_run_spec(run_spec, repo_root=root)

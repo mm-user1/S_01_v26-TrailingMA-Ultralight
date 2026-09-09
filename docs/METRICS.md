@@ -131,7 +131,7 @@ the surface's explicit reporting path.
 | Total Trades, Max Consecutive Losses | Constraint/reporting; core direction exists | V2 Fast objective; V1 reporting/constraint | V2 Slow objective; V1 reporting/constraint | Yes | Yes |
 | Winning/losing trades, gross profit/loss | Reporting | Fast result facts | Slow result facts | Per-window where carried | Yes |
 | Guardrail diagnostics | No | V2 execution facts | V2 selected reference facts | Stored diagnostics where applicable | Yes |
-| Bar-close MTM Max DD | No | Internal request-gated V2 sidecar only | No | No | Position-family only |
+| Bar-close MTM Max DD | No | Internal request-gated V2 sidecar only | No | No | Position and signal-reversal families |
 
 Grid permits at most six Fast objectives. The common V1/V2 Fast set is Net
 Profit %, realized Max DD %, RoMaD, Profit Factor, Win Rate, Monthly Sharpe,
@@ -149,11 +149,12 @@ optimizer execution.
 ## Strategy Lab MTM drawdown
 
 `max_drawdown_mtm_pct` is a request-gated research column for the generic V2
-position family. It scans finite bar-close MTM equity from
+position and signal-reversal families. It scans finite bar-close MTM equity from
 `trade_start_idx` through the final bar and seeds the peak with positive
 initial capital. An empty interval or any non-finite observation returns NaN;
 a present flat interval returns `0.0`; negative equity can produce drawdown
-above 100%. Signal-reversal requests fail explicitly.
+above 100%. Both families support reference and compiled execution, including
+MTM-only requests with Sharpe, Daily Sharpe, and SQN disabled.
 
 This metric is not realized Max DD. As defined by the
 [V2 architecture ABI](engine_v2/ARCHITECTURE.md#compiled-execution-and-resources),

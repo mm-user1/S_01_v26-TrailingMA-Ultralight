@@ -188,10 +188,6 @@ def run_v2_strategy(
     modes = active_mode_values(profile, params)
     topology = modes.get("topology")
     if topology == "signal_reversal":
-        if compute_max_drawdown_mtm:
-            raise ValueError(
-                "max_drawdown_mtm_pct requires a V2 position-family execution topology."
-            )
         config = build_signal_kernel_config(profile=profile, params=params, trade_start_idx=trade_start_idx)
         kernel_result = run_signal_reversal_kernel(data, config)
         initial_balance = config.initial_capital

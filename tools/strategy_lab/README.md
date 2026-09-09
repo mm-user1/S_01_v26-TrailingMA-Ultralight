@@ -14,6 +14,43 @@ S06 v06-4-A2 run specs fix the entry family (reversal or trend) and trail family
 (`r_trail`, `chandelier`, or `fixed_af_sar`). Dataset generation for those six
 profiles is deliberately separate from preregistration.
 
+`runspecs/s03_adaptive_ma_symmetric.json` declares 2,800 candidates (700 per MA)
+for S03 Adaptive MA: KAMA, SuperSmoother, FRAMA, DSMA; lengths 25..250 by 25;
+common Close Count 1..7 and T Band 0.2..2.0% by 0.2%. Only the four source axes
+are independent. The plan stores explicit equal Long/Short values. This research
+run fixes initial capital 1,000, commission 0.05%, position size 100%, contract
+size 0.0001, both directions, and Emergency SL off. It uses the same inventory,
+24/94 split, eight windows, frozen policy and 1,000-bar warmup as S06, with one
+outer worker, one Numba thread and a 32 MB cache limit. These assumptions do not
+change the separate external S03 baseline.
+
+### Planning declarations
+
+`generation.planning.enabled_tie_groups` is optional and must be an ordered
+list of unique, declared group IDs. Missing and `[]` both disable ties; null,
+scalars, malformed members, duplicates and unknown groups fail before execution
+or output writes. `axis_values` keys must exactly equal `enabled_axes`, without
+derived targets. All other required and unknown-field checks remain strict.
+
+The required non-empty `enabled_variants` list remains an actual Grid selection
+for public selectors. For internal selectors it declares the expected resolved
+variant tuple: S03 fixes `base_params.useEmergencySL=false` and declares
+`["plain"]`. Grid resolves the selector without a public variant request; Lab
+requires exact declaration agreement before checking fingerprints and still
+checks execution modes. Changing the selector changes plan identity.
+
+Defaults are resolved without editing input dictionaries. Old specs retain
+their normalized content and hashes; explicit empty ties remain present and may
+hash differently from absence while sharing the no-tie Grid identity. Enabled
+ties use Grid's existing identity; semantic/value keys describe expanded values.
+Resume rejects changed plan/run identity even when fixed values coincide.
+Candidate `start`/`end` defaults may be null; non-null window dates are rejected.
+Window preparation remains the authority for segment boundaries.
+
+Schema-v2 MTM is supported for generic signal reversal as well as position
+execution, using the research-only optional sidecar and unchanged 26-column
+compiled ABI. See [metric semantics](../../docs/METRICS.md#strategy-lab-mtm-drawdown).
+
 ## Safety and identity
 
 - Source CSVs are read only. The tool never rewrites, sorts, or writes beside
@@ -82,6 +119,39 @@ identity-compatible partial output. Progress reports validation, group reuse or
 regeneration, completion, output path, and duration—never performance results.
 
 ### Certify the real pack
+
+For the bounded S03 gate, use a fresh external work directory and isolated
+bytecode/compiler caches. The command validates all 118 sources, then executes
+CRVUSDT windows 1, 2 and 3 with all 2,800 rows in both segments. It checks 39
+deterministic geometry-selected candidates against reference execution in all
+six segments, two fresh generation processes, partial/resume equivalence,
+verified no-op, finite MTM, saved candidate geometry and partial analysis.
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE = '1'
+$env:NUMBA_CACHE_DIR = '<external-task-cache>'
+& $py -B -m tools.strategy_lab.certify_s03_smoke `
+  --data-root '<read-only-data-root>' --work-dir '<fresh-external-work-dir>'
+```
+
+The directory contains `selection.json` written before execution, `clean-a`,
+`clean-b`, `resumed`, per-process logs, `analysis`, and `evidence.json`. To run
+the underlying generation and partial read-back explicitly:
+
+```powershell
+& $py -B -m tools.strategy_lab.generate `
+  tools\strategy_lab\runspecs\s03_adaptive_ma_symmetric.json `
+  --data-root '<read-only-data-root>' --output-dir '<fresh-external-dataset>' `
+  --ticker CRVUSDT --window 1 --window 2 --window 3
+& $py -B -m tools.strategy_lab.analysis.cli analyze `
+  --dataset '<fresh-external-dataset>' --scope development `
+  --allow-partial-scope --output '<fresh-external-analysis>'
+```
+
+This is partial development evidence only. The run spec still declares all
+eight windows; normal development requires windows 1..6. The explicit override
+does not certify full development, holdout, allocation, or strategy quality.
+The original S06 full-pack certifier and its frozen gates remain separate:
 
 ```powershell
 & $py -m tools.strategy_lab.certify `
